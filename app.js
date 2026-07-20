@@ -225,7 +225,7 @@
         '<option value="已到料"' + (orderPageState.status === "已到料" ? " selected" : "") + '>已到料</option>' +
         '<option value="未到料"' + (orderPageState.status === "未到料" ? " selected" : "") + '>未到料</option>' +
       '</select>' +
-      '<button class="btn" id="export-btn" type="button">' +
+      '<button class="btn btn-export" id="export-btn" type="button">' +
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>' +
         '下載為 Excel' +
       '</button>' +
@@ -277,14 +277,14 @@
           '</div>' +
           '<div class="material-grid">' +
             '<div><span class="k">材料型態:</span> <span class="v">' + esc(r.materialType) + '</span></div>' +
-            '<div><span class="k">需領用量:</span> <span class="v">' + fmtNum(r.needQty) + '</span></div>' +
-            '<div><span class="k">已入料量:</span> <span class="v">' + fmtNum(r.receivedQty) + '</span></div>' +
-            '<div><span class="k">已領用量:</span> <span class="v">' + fmtNum(r.issuedQty) + '</span></div>' +
-            '<div><span class="k">未領用量:</span> <span class="v">' + fmtNum(r.remainQty) + '</span></div>' +
-            '<div><span class="k">庫存數量:</span> <span class="v">' + fmtNum(r.stockQty) + '</span></div>' +
             (r.poNos.length ? '<div class="full"><span class="k">採購單號:</span> <span class="v">' + esc(joinLines(r.poNos)) + '</span></div>' : '') +
             (r.vendors.length ? '<div class="full"><span class="k">廠商:</span> <span class="v">' + esc(joinLines(r.vendors)) + '</span></div>' : '') +
+            '<div><span class="k">需領用量:</span> <span class="v">' + fmtNum(r.needQty) + '</span></div>' +
             (r.etas.length ? '<div class="full"><span class="k">預交日:</span> <span class="v">' + esc(joinLines(r.etas)) + '</span></div>' : '') +
+            '<div><span class="k">已入料量:</span> <span class="v">' + fmtNum(r.receivedQty) + '</span></div>' +
+            '<div><span class="k">已領用量:</span> <span class="v">' + fmtNum(r.issuedQty) + '</span></div>' +
+            '<div><span class="k">未領用量:</span> <span class="v material-remain">' + fmtNum(r.remainQty) + '</span></div>' +
+            '<div><span class="k">庫存數量:</span> <span class="v">' + fmtNum(r.stockQty) + '</span></div>' +
           '</div>' +
         '</div>'
       );
@@ -293,8 +293,8 @@
     // Desktop table view
     var tableHtml = '<div class="table-wrap"><table class="data-table"><thead><tr>' +
       '<th>項次</th><th>材料品號</th><th>品名</th><th>規格</th><th>材料型態</th>' +
-      '<th>採購單號</th><th>廠商</th><th>預交日</th>' +
-      '<th class="num">需領用量</th><th>到料狀態</th>' +
+      '<th>採購單號</th><th>廠商</th>' +
+      '<th class="num">需領用量</th><th>預交日</th><th>到料狀態</th>' +
       '<th class="num">已入料量</th><th class="num">已領用量</th><th class="num">未領用量</th><th class="num">庫存數量</th>' +
       '</tr></thead><tbody>' +
       rows.map(function (r) {
@@ -306,12 +306,12 @@
           '<td>' + esc(r.materialType) + '</td>' +
           '<td>' + esc(joinLines(r.poNos)) + '</td>' +
           '<td>' + esc(joinLines(r.vendors)) + '</td>' +
-          '<td>' + esc(joinLines(r.etas)) + '</td>' +
           '<td class="num">' + fmtNum(r.needQty) + '</td>' +
+          '<td>' + esc(joinLines(r.etas)) + '</td>' +
           '<td><span class="status-pill ' + statusPillClass(r.arrivalStatus) + '">' + esc(r.arrivalStatus || "-") + '</span></td>' +
           '<td class="num">' + fmtNum(r.receivedQty) + '</td>' +
           '<td class="num">' + fmtNum(r.issuedQty) + '</td>' +
-          '<td class="num">' + fmtNum(r.remainQty) + '</td>' +
+          '<td class="num material-remain">' + fmtNum(r.remainQty) + '</td>' +
           '<td class="num">' + fmtNum(r.stockQty) + '</td>' +
           '</tr>';
       }).join("") +
@@ -338,8 +338,8 @@
         "材料型態": r.materialType,
         "採購單號": joinLines(r.poNos),
         "廠商": joinLines(r.vendors),
-        "預交日": joinLines(r.etas),
         "需領用量": r.needQty,
+        "預交日": joinLines(r.etas),
         "到料狀態": r.arrivalStatus,
         "已入料量": r.receivedQty,
         "已領用量": r.issuedQty,

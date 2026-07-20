@@ -299,6 +299,18 @@ a:hover { text-decoration: underline; }
 .btn:active { transform: translateY(1px); }
 .btn svg { width: 16px; height: 16px; }
 
+.btn-export {
+  border-color: #9333ea;
+  background: #9333ea;
+}
+.btn-export:hover { background: #7e22ce; }
+
+.material-remain { color: #1d4ed8; font-weight: 700; }
+:root[data-theme="dark"] .material-remain { color: #60a5fa; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .material-remain { color: #60a5fa; }
+}
+
 .result-count {
   font-size: 12.5px;
   color: var(--text-muted);
