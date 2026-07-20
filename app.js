@@ -6,6 +6,9 @@
     orderIndex: null, // orderNo -> { project, order }
   };
 
+  // per-order search / status-filter state, keyed by orderNo
+  var materialFilterState = {};
+
   function esc(v) {
     if (v === null || v === undefined) return "";
     return String(v)
@@ -48,6 +51,23 @@
     var t = document.createElement("template");
     t.innerHTML = html.trim();
     return t.content.firstElementChild;
+  }
+
+  function getFilterState(orderNo) {
+    if (!materialFilterState[orderNo]) {
+      materialFilterState[orderNo] = { query: "", status: "" };
+    }
+    return materialFilterState[orderNo];
+  }
+
+  function sectionIds(orderNo) {
+    return {
+      search: "search-" + orderNo,
+      status: "status-" + orderNo,
+      exportBtn: "export-" + orderNo,
+      count: "count-" + orderNo,
+      container: "container-" + orderNo,
+    };
   }
 
   // ---------- Routing ----------
@@ -137,7 +157,69 @@
     });
   }
 
-  // ---------- Project detail ----------
+  // ---------- Shared: order info panel + material section markup ----------
+
+  function orderInfoPanelHtml(project, order, orderNo) {
+    var dashIdx = orderNo.indexOf("-");
+    var orderPrefix = dashIdx > -1 ? orderNo.slice(0, dashIdx) : orderNo;
+    var orderSuffix = dashIdx > -1 ? orderNo.slice(dashIdx + 1) : "";
+    return (
+      '<div class="info-panel">' +
+        '<div class="row"><span class="k">母製令號</span><span class="v">' + esc(orderNo) + '</span></div>' +
+        '<div class="row"><span class="k">製令單別</span><span class="v">' + esc(orderPrefix) + '</span></div>' +
+        (orderSuffix ? '<div class="row"><span class="k">製令單號</span><span class="v">' + esc(orderSuffix) + '</span></div>' : '') +
+        '<div class="row"><span class="k">產品品號</span><span class="v">' + esc(order.productCode) + '</span></div>' +
+        '<div class="row"><span class="k">產品品名</span><span class="v">' + esc(order.productName) + '</span></div>' +
+        '<div class="row"><span class="k">規格</span><span class="v">' + esc(order.spec) + '</span></div>' +
+        '<div class="row"><span class="k">製令狀態</span><span class="v">' + esc(order.status) + '</span></div>' +
+        (order.note ? '<div class="row"><span class="k">備註</span><span class="v">' + esc(order.note) + '</span></div>' : '') +
+      '</div>'
+    );
+  }
+
+  function materialSectionHtml(orderNo) {
+    var ids = sectionIds(orderNo);
+    var f = getFilterState(orderNo);
+    return (
+      '<div class="toolbar">' +
+        '<input type="search" id="' + ids.search + '" placeholder="搜尋 (品號 / 品名 / 規格 / 廠商 / 採購單號)" value="' + esc(f.query) + '" />' +
+        '<select id="' + ids.status + '">' +
+          '<option value="">到料狀態: 全部</option>' +
+          '<option value="已到料"' + (f.status === "已到料" ? " selected" : "") + '>已到料</option>' +
+          '<option value="未到料"' + (f.status === "未到料" ? " selected" : "") + '>未到料</option>' +
+        '</select>' +
+        '<button class="btn btn-export" id="' + ids.exportBtn + '" type="button">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>' +
+          '下載為 Excel' +
+        '</button>' +
+      '</div>' +
+      '<p class="result-count" id="' + ids.count + '"></p>' +
+      '<div id="' + ids.container + '"></div>'
+    );
+  }
+
+  function wireMaterialSection(orderNo, project, order) {
+    var ids = sectionIds(orderNo);
+    var searchEl = document.getElementById(ids.search);
+    var statusEl = document.getElementById(ids.status);
+    var exportEl = document.getElementById(ids.exportBtn);
+
+    searchEl.addEventListener("input", function (e) {
+      getFilterState(orderNo).query = e.target.value;
+      renderMaterialTable(orderNo, project, order);
+    });
+    statusEl.addEventListener("change", function (e) {
+      getFilterState(orderNo).status = e.target.value;
+      renderMaterialTable(orderNo, project, order);
+    });
+    exportEl.addEventListener("click", function () {
+      exportToExcel(orderNo, project, order);
+    });
+
+    renderMaterialTable(orderNo, project, order);
+  }
+
+  // ---------- Project detail (all orders + full material tables inline) ----------
 
   function renderProject(app, code) {
     var project = state.data.projects.find(function (p) { return p.code === code; });
@@ -145,41 +227,59 @@
       app.innerHTML = '<div class="breadcrumb"><a href="#/">首頁</a></div><div class="empty-state">找不到專案 ' + esc(code) + '</div>';
       return;
     }
+
     var html = '';
     html += '<div class="breadcrumb"><a href="#/">首頁</a> / ' + esc(project.code) + '</div>';
     html += '<h1 class="page-title">' + esc(project.code) + '<span class="sub">' + esc(project.name) + ' · 共 ' + project.orders.length + ' 筆製令</span></h1>';
-    html += '<div class="order-table-list">';
+
     project.orders.forEach(function (o) {
       html +=
-        '<div class="order-item">' +
-          '<div class="order-item-top">' +
-            '<a class="order-link" style="font-weight:700;font-size:15px" href="#/order/' + encodeURIComponent(o.orderNo) + '">' + esc(o.orderNo) + '</a>' +
+        '<section class="order-section" id="order-' + esc(o.orderNo) + '">' +
+          '<div class="order-section-head">' +
+            '<a class="order-link" href="#/order/' + encodeURIComponent(o.orderNo) + '">' + esc(o.orderNo) + '</a>' +
             '<span class="status-pill ' + statusPillClass(o.status) + '">' + esc(o.status || "-") + '</span>' +
           '</div>' +
-          '<div class="order-item-fields">' +
-            '<div>產品品號: <b>' + esc(o.productCode) + '</b></div>' +
-            '<div>產品品名: <b>' + esc(o.productName) + '</b></div>' +
-            '<div class="full">規格: <b>' + esc(o.spec) + '</b></div>' +
-            (o.note ? '<div class="full">備註: <b>' + esc(o.note) + '</b></div>' : '') +
-          '</div>' +
-        '</div>';
+          orderInfoPanelHtml(project, o, o.orderNo) +
+          materialSectionHtml(o.orderNo) +
+        '</section>';
     });
-    html += '</div>';
+
     app.innerHTML = html;
+
+    project.orders.forEach(function (o) {
+      wireMaterialSection(o.orderNo, project, o);
+    });
   }
 
-  // ---------- Order detail (material list) ----------
+  // ---------- Order detail (single material list, deep-link target) ----------
 
-  var orderPageState = {
-    orderNo: null,
-    query: "",
-    status: "",
-  };
+  function renderOrder(app, orderNo) {
+    var found = state.orderIndex[orderNo];
+    if (!found) {
+      app.innerHTML = '<div class="breadcrumb"><a href="#/">首頁</a></div><div class="empty-state">找不到製令 ' + esc(orderNo) + '</div>';
+      return;
+    }
+
+    var project = found.project;
+    var order = found.order;
+
+    var html = '';
+    html += '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/project/' + encodeURIComponent(project.code) + '">' + esc(project.code) + '</a> / ' + esc(orderNo) + '</div>';
+    html += '<h1 class="page-title">製令 ' + esc(orderNo) + '<span class="sub">物料明細</span></h1>';
+    html += orderInfoPanelHtml(project, order, orderNo);
+    html += materialSectionHtml(orderNo);
+
+    app.innerHTML = html;
+    wireMaterialSection(orderNo, project, order);
+  }
+
+  // ---------- Material table rendering (shared) ----------
 
   function getFilteredMaterials(orderNo) {
     var rows = state.data.materials[orderNo] || [];
-    var q = orderPageState.query.trim().toLowerCase();
-    var status = orderPageState.status;
+    var f = getFilterState(orderNo);
+    var q = f.query.trim().toLowerCase();
+    var status = f.status;
     return rows.filter(function (r) {
       if (status && r.arrivalStatus !== status) return false;
       if (!q) return true;
@@ -191,73 +291,14 @@
     });
   }
 
-  function renderOrder(app, orderNo) {
-    var found = state.orderIndex[orderNo];
-    if (!found) {
-      app.innerHTML = '<div class="breadcrumb"><a href="#/">首頁</a></div><div class="empty-state">找不到製令 ' + esc(orderNo) + '</div>';
-      return;
-    }
-    if (orderPageState.orderNo !== orderNo) {
-      orderPageState.orderNo = orderNo;
-      orderPageState.query = "";
-      orderPageState.status = "";
-    }
-
-    var project = found.project;
-    var order = found.order;
-
-    var html = '';
-    html += '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/project/' + encodeURIComponent(project.code) + '">' + esc(project.code) + '</a> / ' + esc(orderNo) + '</div>';
-    html += '<h1 class="page-title">製令 ' + esc(orderNo) + '<span class="sub">物料明細</span></h1>';
-
-    html += '<div class="info-panel">' +
-      '<div class="row"><span class="k">專案</span><span class="v">' + esc(project.code) + ' ' + esc(project.name) + '</span></div>' +
-      '<div class="row"><span class="k">產品品號</span><span class="v">' + esc(order.productCode) + '</span></div>' +
-      '<div class="row"><span class="k">產品品名</span><span class="v">' + esc(order.productName) + '</span></div>' +
-      '<div class="row"><span class="k">規格</span><span class="v">' + esc(order.spec) + '</span></div>' +
-      '<div class="row"><span class="k">製令狀態</span><span class="v">' + esc(order.status) + '</span></div>' +
-    '</div>';
-
-    html += '<div class="toolbar">' +
-      '<input type="search" id="search-input" placeholder="全文檢索 (品號 / 品名 / 規格 / 廠商 / 採購單號)" value="' + esc(orderPageState.query) + '" />' +
-      '<select id="status-select">' +
-        '<option value="">到料狀態: 全部</option>' +
-        '<option value="已到料"' + (orderPageState.status === "已到料" ? " selected" : "") + '>已到料</option>' +
-        '<option value="未到料"' + (orderPageState.status === "未到料" ? " selected" : "") + '>未到料</option>' +
-      '</select>' +
-      '<button class="btn btn-export" id="export-btn" type="button">' +
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>' +
-        '下載為 Excel' +
-      '</button>' +
-    '</div>';
-
-    html += '<p class="result-count" id="result-count"></p>';
-    html += '<div id="material-container"></div>';
-
-    app.innerHTML = html;
-
-    document.getElementById("search-input").addEventListener("input", function (e) {
-      orderPageState.query = e.target.value;
-      renderMaterialTable(orderNo, project, order);
-    });
-    document.getElementById("status-select").addEventListener("change", function (e) {
-      orderPageState.status = e.target.value;
-      renderMaterialTable(orderNo, project, order);
-    });
-    document.getElementById("export-btn").addEventListener("click", function () {
-      exportToExcel(orderNo, project, order);
-    });
-
-    renderMaterialTable(orderNo, project, order);
-  }
-
   function renderMaterialTable(orderNo, project, order) {
+    var ids = sectionIds(orderNo);
     var rows = getFilteredMaterials(orderNo);
     var total = (state.data.materials[orderNo] || []).length;
-    document.getElementById("result-count").textContent =
+    document.getElementById(ids.count).textContent =
       "顯示 " + rows.length + " / " + total + " 筆物料";
 
-    var container = document.getElementById("material-container");
+    var container = document.getElementById(ids.container);
 
     if (!rows.length) {
       container.innerHTML = '<div class="empty-state">沒有符合條件的物料資料</div>';
@@ -364,13 +405,26 @@
   // ---------- Init ----------
 
   function loadData() {
-    return fetch("data.json", { cache: "no-cache" })
+    return fetch("data.json?_=" + Date.now(), { cache: "no-store" })
       .then(function (res) { return res.json(); })
       .then(function (data) {
         state.data = data;
         state.orderIndex = buildOrderIndex(data);
         var t = document.getElementById("data-time");
-        if (t) t.textContent = "資料來源: WMS.xlsx";
+        if (t) t.textContent = "資料來源: WMS.xlsx · 上次讀取 " + new Date().toLocaleString("zh-Hant");
+      });
+  }
+
+  function refreshData() {
+    var btn = document.getElementById("refresh-btn");
+    if (btn) btn.classList.add("spinning");
+    loadData()
+      .then(render)
+      .catch(function (err) {
+        document.getElementById("app").innerHTML = '<div class="empty-state">資料載入失敗: ' + esc(err.message) + '</div>';
+      })
+      .then(function () {
+        if (btn) btn.classList.remove("spinning");
       });
   }
 
@@ -381,6 +435,11 @@
     loadData().then(render).catch(function (err) {
       document.getElementById("app").innerHTML = '<div class="empty-state">資料載入失敗: ' + esc(err.message) + '</div>';
     });
+
+    var refreshBtn = document.getElementById("refresh-btn");
+    if (refreshBtn) {
+      refreshBtn.addEventListener("click", refreshData);
+    }
 
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("service-worker.js").catch(function () {});
