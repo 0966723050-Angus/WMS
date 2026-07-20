@@ -6,8 +6,10 @@
     orderIndex: null, // orderNo -> { project, order }
   };
 
-  // per-order search / status-filter state, keyed by orderNo
+  // per-order search / status-filter state, keyed by orderNo (used by the standalone order page)
   var materialFilterState = {};
+  // per-project search / status-filter state, keyed by project code (used by the project page)
+  var projectFilterState = {};
 
   function esc(v) {
     if (v === null || v === undefined) return "";
@@ -60,14 +62,32 @@
     return materialFilterState[orderNo];
   }
 
+  function getProjectFilterState(code) {
+    if (!projectFilterState[code]) {
+      projectFilterState[code] = { query: "", status: "" };
+    }
+    return projectFilterState[code];
+  }
+
   function sectionIds(orderNo) {
     return {
-      search: "search-" + orderNo,
-      status: "status-" + orderNo,
-      exportBtn: "export-" + orderNo,
       count: "count-" + orderNo,
       container: "container-" + orderNo,
     };
+  }
+
+  function filterRows(rows, f) {
+    var q = f.query.trim().toLowerCase();
+    var status = f.status;
+    return rows.filter(function (r) {
+      if (status && r.arrivalStatus !== status) return false;
+      if (!q) return true;
+      var haystack = [
+        r.materialCode, r.materialName, r.spec, r.materialType,
+        joinLines(r.poNos), joinLines(r.vendors), joinLines(r.etas), r.arrivalStatus
+      ].join(" ").toLowerCase();
+      return haystack.indexOf(q) !== -1;
+    });
   }
 
   // ---------- Routing ----------
@@ -157,9 +177,9 @@
     });
   }
 
-  // ---------- Shared: order info panel + material section markup ----------
+  // ---------- Shared markup helpers ----------
 
-  function orderInfoPanelHtml(project, order, orderNo) {
+  function orderInfoPanelHtml(order, orderNo) {
     var dashIdx = orderNo.indexOf("-");
     var orderPrefix = dashIdx > -1 ? orderNo.slice(0, dashIdx) : orderNo;
     var orderSuffix = dashIdx > -1 ? orderNo.slice(dashIdx + 1) : "";
@@ -177,9 +197,7 @@
     );
   }
 
-  function materialSectionHtml(orderNo) {
-    var ids = sectionIds(orderNo);
-    var f = getFilterState(orderNo);
+  function toolbarHtml(ids, f, exportLabel) {
     return (
       '<div class="toolbar">' +
         '<input type="search" id="' + ids.search + '" placeholder="搜尋 (品號 / 品名 / 規格 / 廠商 / 採購單號)" value="' + esc(f.query) + '" />' +
@@ -190,36 +208,13 @@
         '</select>' +
         '<button class="btn btn-export" id="' + ids.exportBtn + '" type="button">' +
           '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>' +
-          '下載為 Excel' +
+          esc(exportLabel) +
         '</button>' +
-      '</div>' +
-      '<p class="result-count" id="' + ids.count + '"></p>' +
-      '<div id="' + ids.container + '"></div>'
+      '</div>'
     );
   }
 
-  function wireMaterialSection(orderNo, project, order) {
-    var ids = sectionIds(orderNo);
-    var searchEl = document.getElementById(ids.search);
-    var statusEl = document.getElementById(ids.status);
-    var exportEl = document.getElementById(ids.exportBtn);
-
-    searchEl.addEventListener("input", function (e) {
-      getFilterState(orderNo).query = e.target.value;
-      renderMaterialTable(orderNo, project, order);
-    });
-    statusEl.addEventListener("change", function (e) {
-      getFilterState(orderNo).status = e.target.value;
-      renderMaterialTable(orderNo, project, order);
-    });
-    exportEl.addEventListener("click", function () {
-      exportToExcel(orderNo, project, order);
-    });
-
-    renderMaterialTable(orderNo, project, order);
-  }
-
-  // ---------- Project detail (all orders + full material tables inline) ----------
+  // ---------- Project detail (shared toolbar + all orders' full material tables inline) ----------
 
   function renderProject(app, code) {
     var project = state.data.projects.find(function (p) { return p.code === code; });
@@ -228,9 +223,13 @@
       return;
     }
 
+    var f = getProjectFilterState(code);
+
     var html = '';
     html += '<div class="breadcrumb"><a href="#/">首頁</a> / ' + esc(project.code) + '</div>';
     html += '<h1 class="page-title">' + esc(project.code) + '<span class="sub">' + esc(project.name) + ' · 共 ' + project.orders.length + ' 筆製令</span></h1>';
+    html += toolbarHtml({ search: "project-search", status: "project-status", exportBtn: "project-export" }, f, "下載為 Excel (全部製令)");
+    html += '<p class="result-count" id="project-result-count"></p>';
 
     project.orders.forEach(function (o) {
       html +=
@@ -239,16 +238,55 @@
             '<a class="order-link" href="#/order/' + encodeURIComponent(o.orderNo) + '">' + esc(o.orderNo) + '</a>' +
             '<span class="status-pill ' + statusPillClass(o.status) + '">' + esc(o.status || "-") + '</span>' +
           '</div>' +
-          orderInfoPanelHtml(project, o, o.orderNo) +
-          materialSectionHtml(o.orderNo) +
+          orderInfoPanelHtml(o, o.orderNo) +
+          '<p class="result-count" id="' + sectionIds(o.orderNo).count + '"></p>' +
+          '<div id="' + sectionIds(o.orderNo).container + '"></div>' +
         '</section>';
     });
 
     app.innerHTML = html;
 
-    project.orders.forEach(function (o) {
-      wireMaterialSection(o.orderNo, project, o);
+    document.getElementById("project-search").addEventListener("input", function (e) {
+      getProjectFilterState(code).query = e.target.value;
+      renderProjectMaterials(project);
     });
+    document.getElementById("project-status").addEventListener("change", function (e) {
+      getProjectFilterState(code).status = e.target.value;
+      renderProjectMaterials(project);
+    });
+    document.getElementById("project-export").addEventListener("click", function () {
+      exportProjectToExcel(project);
+    });
+
+    renderProjectMaterials(project);
+  }
+
+  function renderProjectMaterials(project) {
+    var f = getProjectFilterState(project.code);
+    var filtering = !!(f.query.trim() || f.status);
+    var totalAll = 0, totalMatched = 0, sectionsWithResults = 0;
+
+    project.orders.forEach(function (o) {
+      var allRows = state.data.materials[o.orderNo] || [];
+      var rows = filterRows(allRows, f);
+      totalAll += allRows.length;
+      totalMatched += rows.length;
+
+      var sectionEl = document.getElementById("order-" + o.orderNo);
+      if (filtering && rows.length === 0) {
+        if (sectionEl) sectionEl.style.display = "none";
+        return;
+      }
+      if (sectionEl) sectionEl.style.display = "";
+      sectionsWithResults++;
+      renderRowsIntoIds(sectionIds(o.orderNo), rows, allRows.length);
+    });
+
+    var countEl = document.getElementById("project-result-count");
+    if (countEl) {
+      countEl.textContent = "顯示 " + totalMatched + " / " + totalAll + " 筆物料" +
+        (filtering ? "(符合條件的製令: " + sectionsWithResults + " / " + project.orders.length + ")" : "");
+    }
   }
 
   // ---------- Order detail (single material list, deep-link target) ----------
@@ -262,47 +300,53 @@
 
     var project = found.project;
     var order = found.order;
+    var f = getFilterState(orderNo);
 
     var html = '';
     html += '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/project/' + encodeURIComponent(project.code) + '">' + esc(project.code) + '</a> / ' + esc(orderNo) + '</div>';
     html += '<h1 class="page-title">製令 ' + esc(orderNo) + '<span class="sub">物料明細</span></h1>';
-    html += orderInfoPanelHtml(project, order, orderNo);
-    html += materialSectionHtml(orderNo);
+    html += orderInfoPanelHtml(order, orderNo);
+    html += toolbarHtml({ search: "search-input", status: "status-select", exportBtn: "export-btn" }, f, "下載為 Excel");
+    html += '<p class="result-count" id="' + sectionIds(orderNo).count + '"></p>';
+    html += '<div id="' + sectionIds(orderNo).container + '"></div>';
 
     app.innerHTML = html;
-    wireMaterialSection(orderNo, project, order);
+
+    document.getElementById("search-input").addEventListener("input", function (e) {
+      getFilterState(orderNo).query = e.target.value;
+      renderOrderMaterials(orderNo, project, order);
+    });
+    document.getElementById("status-select").addEventListener("change", function (e) {
+      getFilterState(orderNo).status = e.target.value;
+      renderOrderMaterials(orderNo, project, order);
+    });
+    document.getElementById("export-btn").addEventListener("click", function () {
+      exportOrderToExcel(orderNo, project, order);
+    });
+
+    renderOrderMaterials(orderNo, project, order);
+  }
+
+  function renderOrderMaterials(orderNo) {
+    var allRows = state.data.materials[orderNo] || [];
+    var rows = filterRows(allRows, getFilterState(orderNo));
+    renderRowsIntoIds(sectionIds(orderNo), rows, allRows.length);
   }
 
   // ---------- Material table rendering (shared) ----------
 
-  function getFilteredMaterials(orderNo) {
-    var rows = state.data.materials[orderNo] || [];
-    var f = getFilterState(orderNo);
-    var q = f.query.trim().toLowerCase();
-    var status = f.status;
-    return rows.filter(function (r) {
-      if (status && r.arrivalStatus !== status) return false;
-      if (!q) return true;
-      var haystack = [
-        r.materialCode, r.materialName, r.spec, r.materialType,
-        joinLines(r.poNos), joinLines(r.vendors), joinLines(r.etas), r.arrivalStatus
-      ].join(" ").toLowerCase();
-      return haystack.indexOf(q) !== -1;
-    });
-  }
-
-  function renderMaterialTable(orderNo, project, order) {
-    var ids = sectionIds(orderNo);
-    var rows = getFilteredMaterials(orderNo);
-    var total = (state.data.materials[orderNo] || []).length;
-    document.getElementById(ids.count).textContent =
-      "顯示 " + rows.length + " / " + total + " 筆物料";
+  function renderRowsIntoIds(ids, rows, total) {
+    var countEl = document.getElementById(ids.count);
+    if (countEl) countEl.textContent = "顯示 " + rows.length + " / " + total + " 筆物料";
 
     var container = document.getElementById(ids.container);
+    if (!container) return;
+    container.innerHTML = buildMaterialListHtml(rows);
+  }
 
+  function buildMaterialListHtml(rows) {
     if (!rows.length) {
-      container.innerHTML = '<div class="empty-state">沒有符合條件的物料資料</div>';
-      return;
+      return '<div class="empty-state">沒有符合條件的物料資料</div>';
     }
 
     // Mobile card view
@@ -358,37 +402,36 @@
       }).join("") +
       '</tbody></table></div>';
 
-    container.innerHTML = cardsHtml + tableHtml;
+    return cardsHtml + tableHtml;
   }
 
   // ---------- Excel export ----------
 
-  function exportToExcel(orderNo, project, order) {
-    var rows = getFilteredMaterials(orderNo);
-    var sheetRows = rows.map(function (r) {
-      return {
-        "專案代號": project.code,
-        "專案名稱": project.name,
-        "製令編號": orderNo,
-        "產品品號": order.productCode,
-        "產品品名": order.productName,
-        "項次": r.seq,
-        "材料品號": r.materialCode,
-        "品名": r.materialName,
-        "規格": r.spec,
-        "材料型態": r.materialType,
-        "採購單號": joinLines(r.poNos),
-        "廠商": joinLines(r.vendors),
-        "需領用量": r.needQty,
-        "預交日": joinLines(r.etas),
-        "到料狀態": r.arrivalStatus,
-        "已入料量": r.receivedQty,
-        "已領用量": r.issuedQty,
-        "未領用量": r.remainQty,
-        "庫存數量": r.stockQty,
-      };
-    });
+  function toSheetRow(r, project, orderNo, order) {
+    return {
+      "專案代號": project.code,
+      "專案名稱": project.name,
+      "製令編號": orderNo,
+      "產品品號": order.productCode,
+      "產品品名": order.productName,
+      "項次": r.seq,
+      "材料品號": r.materialCode,
+      "品名": r.materialName,
+      "規格": r.spec,
+      "材料型態": r.materialType,
+      "採購單號": joinLines(r.poNos),
+      "廠商": joinLines(r.vendors),
+      "需領用量": r.needQty,
+      "預交日": joinLines(r.etas),
+      "到料狀態": r.arrivalStatus,
+      "已入料量": r.receivedQty,
+      "已領用量": r.issuedQty,
+      "未領用量": r.remainQty,
+      "庫存數量": r.stockQty,
+    };
+  }
 
+  function exportRowsToExcel(sheetRows, filename) {
     var ws = XLSX.utils.json_to_sheet(sheetRows);
     ws["!cols"] = [
       { wch: 12 }, { wch: 20 }, { wch: 18 }, { wch: 12 }, { wch: 16 },
@@ -398,8 +441,25 @@
     ];
     var wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "物料明細");
+    XLSX.writeFile(wb, filename);
+  }
+
+  function exportOrderToExcel(orderNo, project, order) {
+    var rows = filterRows(state.data.materials[orderNo] || [], getFilterState(orderNo));
+    var sheetRows = rows.map(function (r) { return toSheetRow(r, project, orderNo, order); });
     var safeOrderNo = orderNo.replace(/[\\/:*?"<>|]/g, "-");
-    XLSX.writeFile(wb, "物料明細_" + safeOrderNo + ".xlsx");
+    exportRowsToExcel(sheetRows, "物料明細_" + safeOrderNo + ".xlsx");
+  }
+
+  function exportProjectToExcel(project) {
+    var f = getProjectFilterState(project.code);
+    var sheetRows = [];
+    project.orders.forEach(function (o) {
+      var rows = filterRows(state.data.materials[o.orderNo] || [], f);
+      rows.forEach(function (r) { sheetRows.push(toSheetRow(r, project, o.orderNo, o)); });
+    });
+    var safeCode = project.code.replace(/[\\/:*?"<>|]/g, "-");
+    exportRowsToExcel(sheetRows, "物料明細_" + safeCode + ".xlsx");
   }
 
   // ---------- Init ----------
