@@ -65,6 +65,13 @@ def main():
             materials[order_no] = []
             material_order.append(order_no)
 
+        need_qty = need_qty if need_qty is not None else 0
+        issued_qty = issued_qty if issued_qty is not None else 0
+        stock_qty = stock_qty if stock_qty is not None else 0
+
+        # 已到料 iff 需領用量 <= 庫存數量 + 已領用量(已入庫存或已實際領用的都算到料)
+        arrival_status = "已到料" if need_qty <= stock_qty + issued_qty else "未到料"
+
         materials[order_no].append({
             "seq": seq if seq is not None else "",
             "materialCode": norm(mat_code),
@@ -74,12 +81,12 @@ def main():
             "poNos": split_lines(po_no),
             "vendors": split_lines(vendor),
             "etas": split_lines(eta),
-            "needQty": need_qty if need_qty is not None else 0,
-            "arrivalStatus": norm(arrival_status),
+            "needQty": need_qty,
+            "arrivalStatus": arrival_status,
             "receivedQty": received_qty if received_qty is not None else 0,
-            "issuedQty": issued_qty if issued_qty is not None else 0,
+            "issuedQty": issued_qty,
             "remainQty": remain_qty if remain_qty is not None else 0,
-            "stockQty": stock_qty if stock_qty is not None else 0,
+            "stockQty": stock_qty,
         })
 
     data = {
