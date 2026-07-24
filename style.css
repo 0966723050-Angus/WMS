@@ -245,6 +245,7 @@ a:hover { text-decoration: underline; }
 .order-row .order-product {
   color: var(--text-muted);
   font-size: 12.5px;
+  font-weight: 700;
   display: block;
   margin-top: 1px;
 }
@@ -358,7 +359,8 @@ a:hover { text-decoration: underline; }
   align-items: flex-start;
 }
 .material-code { font-weight: 700; font-size: 14px; }
-.material-name { color: var(--text-muted); font-size: 12.5px; margin-top: 1px; }
+.material-name { color: var(--text); font-weight: 700; font-size: 12.5px; margin-top: 2px; }
+.material-spec { color: var(--text-muted); font-size: 12.5px; margin-top: 1px; }
 .material-grid {
   margin-top: 8px;
   display: grid;
@@ -400,6 +402,7 @@ table.data-table th {
   white-space: nowrap;
 }
 table.data-table tbody tr:hover { background: var(--surface-alt); }
+.material-name-cell { font-weight: 700; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 
 @media (min-width: 700px) {
@@ -426,6 +429,7 @@ table.data-table tbody tr:hover { background: var(--surface-alt); }
 .info-panel .row { display: flex; gap: 8px; margin-bottom: 3px; }
 .info-panel .k { color: var(--text-muted); min-width: 74px; flex-shrink: 0; }
 .info-panel .v { font-weight: 600; word-break: break-word; }
+.info-panel .v-strong { font-weight: 700; }
 
 .skeleton {
   color: var(--text-muted);

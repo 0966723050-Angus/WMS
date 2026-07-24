@@ -188,8 +188,8 @@
         '<div class="row"><span class="k">母製令號</span><span class="v">' + esc(orderNo) + '</span></div>' +
         '<div class="row"><span class="k">製令單別</span><span class="v">' + esc(orderPrefix) + '</span></div>' +
         (orderSuffix ? '<div class="row"><span class="k">製令單號</span><span class="v">' + esc(orderSuffix) + '</span></div>' : '') +
-        '<div class="row"><span class="k">產品品號</span><span class="v">' + esc(order.productCode) + '</span></div>' +
-        '<div class="row"><span class="k">產品品名</span><span class="v">' + esc(order.productName) + '</span></div>' +
+        '<div class="row"><span class="k">產品品號</span><span class="v v-strong">' + esc(order.productCode) + '</span></div>' +
+        '<div class="row"><span class="k">產品品名</span><span class="v v-strong">' + esc(order.productName) + '</span></div>' +
         '<div class="row"><span class="k">規格</span><span class="v">' + esc(order.spec) + '</span></div>' +
         '<div class="row"><span class="k">製令狀態</span><span class="v">' + esc(order.status) + '</span></div>' +
         (order.note ? '<div class="row"><span class="k">備註</span><span class="v">' + esc(order.note) + '</span></div>' : '') +
@@ -356,7 +356,8 @@
           '<div class="material-card-top">' +
             '<div>' +
               '<div class="material-code">#' + esc(r.seq) + ' ' + esc(r.materialCode) + '</div>' +
-              '<div class="material-name">' + esc(r.materialName) + (r.spec ? " · " + esc(r.spec) : "") + '</div>' +
+              '<div class="material-name">' + esc(r.materialName) + '</div>' +
+              (r.spec ? '<div class="material-spec">' + esc(r.spec) + '</div>' : '') +
             '</div>' +
             '<span class="status-pill ' + statusPillClass(r.arrivalStatus) + '">' + esc(r.arrivalStatus || "-") + '</span>' +
           '</div>' +
@@ -386,7 +387,7 @@
         return '<tr>' +
           '<td>' + esc(r.seq) + '</td>' +
           '<td>' + esc(r.materialCode) + '</td>' +
-          '<td>' + esc(r.materialName) + '</td>' +
+          '<td class="material-name-cell">' + esc(r.materialName) + '</td>' +
           '<td>' + esc(r.spec) + '</td>' +
           '<td>' + esc(r.materialType) + '</td>' +
           '<td>' + esc(joinLines(r.poNos)) + '</td>' +
@@ -471,7 +472,10 @@
         state.data = data;
         state.orderIndex = buildOrderIndex(data);
         var t = document.getElementById("data-time");
-        if (t) t.textContent = "資料來源: WMS.xlsx · 上次讀取 " + new Date().toLocaleString("zh-Hant");
+        if (t) {
+          var version = data.sourceUpdatedAt ? "(版本 " + data.sourceUpdatedAt + ")" : "";
+          t.textContent = "資料來源: WMS.xlsx " + version + " · 頁面載入 " + new Date().toLocaleString("zh-Hant");
+        }
       });
   }
 

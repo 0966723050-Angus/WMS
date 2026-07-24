@@ -1,4 +1,6 @@
 import json
+import os
+import datetime
 import openpyxl
 
 SRC = r"C:\Users\angus.ad\我的雲端硬碟\ATK\WMS.xlsx"
@@ -89,8 +91,11 @@ def main():
             "stockQty": stock_qty,
         })
 
+    source_mtime = datetime.datetime.fromtimestamp(os.path.getmtime(SRC))
+
     data = {
         "generatedFrom": "WMS.xlsx",
+        "sourceUpdatedAt": source_mtime.strftime("%Y-%m-%d %H:%M"),
         "projects": [projects[c] for c in project_order],
         "materials": materials,
     }
