@@ -221,23 +221,26 @@
   function renderStorageResults() {
     var rows = state.data.storageLocations || [];
     var q = storageQuery.trim().toLowerCase();
-    var results = !q ? rows : rows.filter(function (r) {
+
+    var countEl = document.getElementById("storage-result-count");
+    var container = document.getElementById("storage-container");
+    if (!container) return;
+
+    if (!q) {
+      if (countEl) countEl.textContent = "";
+      container.innerHTML = '<div class="empty-state">請輸入材料品號或類別關鍵字開始查詢</div>';
+      return;
+    }
+
+    var results = rows.filter(function (r) {
       var haystack = [r.codeFrom, r.codeTo, r.category, r.location, r.bin].join(" ").toLowerCase();
       return haystack.indexOf(q) !== -1 || codeInRange(storageQuery.trim(), r.codeFrom, r.codeTo);
     });
 
-    var countEl = document.getElementById("storage-result-count");
-    if (countEl) {
-      countEl.textContent = q
-        ? "顯示 " + results.length + " / " + rows.length + " 筆儲位資料"
-        : "共 " + rows.length + " 筆儲位資料";
-    }
-
-    var container = document.getElementById("storage-container");
-    if (!container) return;
+    if (countEl) countEl.textContent = "顯示 " + results.length + " / " + rows.length + " 筆儲位資料";
 
     if (!results.length) {
-      container.innerHTML = '<div class="empty-state">' + (q ? "沒有符合條件的儲位資料" : "尚無儲位資料") + '</div>';
+      container.innerHTML = '<div class="empty-state">查無此材料品號</div>';
       return;
     }
 
