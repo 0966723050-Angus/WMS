@@ -95,29 +95,34 @@ a:hover { text-decoration: underline; }
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
+  gap: 8px;
+  padding: 8px 10px 8px 16px;
   color: var(--brand-contrast);
   flex: 1;
   min-width: 0;
 }
 .brand:hover { text-decoration: none; }
 .brand-logo {
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   border-radius: 8px;
   background: rgba(255,255,255,0.15);
   flex-shrink: 0;
+  object-fit: contain;
 }
 .brand-text { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
 .brand-title {
   font-weight: 700;
-  font-size: 16px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: 15px;
+  white-space: normal;
+  word-break: break-word;
 }
 .brand-sub { font-size: 11px; opacity: 0.85; }
+
+@media (max-width: 400px) {
+  .brand-title { font-size: 13.5px; }
+  .brand-sub { font-size: 10px; }
+}
 
 .icon-btn-group {
   display: flex;
@@ -312,7 +317,7 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text);
-  font-size: 14px;
+  font-size: 16px;
 }
 .toolbar input[type="search"] { flex: 2 1 200px; }
 .btn {
