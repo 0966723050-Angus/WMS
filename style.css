@@ -103,12 +103,13 @@ a:hover { text-decoration: underline; }
 }
 .brand:hover { text-decoration: none; }
 .brand-logo {
-  width: 32px;
   height: 32px;
-  border-radius: 8px;
-  background: rgba(255,255,255,0.15);
+  width: auto;
   flex-shrink: 0;
   object-fit: contain;
+  background: #fff;
+  border-radius: 6px;
+  padding: 3px 6px;
 }
 .brand-text { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
 .brand-title {
@@ -298,7 +299,7 @@ a:hover { text-decoration: underline; }
 /* Toolbar (search / filter) */
 .toolbar {
   position: sticky;
-  top: 54px;
+  top: var(--header-height, 54px);
   z-index: 10;
   background: var(--bg);
   padding: 8px 0 10px;

@@ -119,6 +119,14 @@
       renderHome(app);
     }
     window.scrollTo(0, 0);
+    updateHeaderHeightVar();
+  }
+
+  function updateHeaderHeightVar() {
+    var header = document.querySelector(".topbar");
+    if (header) {
+      document.documentElement.style.setProperty("--header-height", header.offsetHeight + "px");
+    }
   }
 
   // ---------- Home ----------
@@ -578,6 +586,7 @@
   }
 
   window.addEventListener("hashchange", render);
+  window.addEventListener("resize", updateHeaderHeightVar);
 
   document.addEventListener("DOMContentLoaded", function () {
     render();

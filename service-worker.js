@@ -1,4 +1,4 @@
-var CACHE_NAME = "wms-cache-v6";
+var CACHE_NAME = "wms-cache-v7";
 var CORE_ASSETS = [
   "./",
   "./index.html",
@@ -9,6 +9,7 @@ var CORE_ASSETS = [
   "./vendor/xlsx.full.min.js",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
+  "./icons/atk-logo.png",
 ];
 
 self.addEventListener("install", function (event) {
