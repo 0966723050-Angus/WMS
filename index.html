@@ -20,9 +20,14 @@
       <span class="brand-sub">ATK 在線製令 &amp; 物料明細</span>
     </div>
   </a>
-  <button id="refresh-btn" class="refresh-btn" type="button" title="重新整理(重新抓取線上最新資料)" aria-label="重新整理">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 10-3 6.7M21 12v-5m0 5h-5"/></svg>
-  </button>
+  <div class="icon-btn-group">
+    <a id="storage-btn" class="icon-btn" href="#/storage" title="物料儲位查詢" aria-label="物料儲位查詢">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-6.5-7-11a7 7 0 1114 0c0 4.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>
+    </a>
+    <button id="refresh-btn" class="icon-btn refresh-btn" type="button" title="重新整理(重新抓取線上最新資料)" aria-label="重新整理">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 10-3 6.7M21 12v-5m0 5h-5"/></svg>
+    </button>
+  </div>
 </header>
 
 <main id="app" class="app"></main>

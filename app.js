@@ -98,6 +98,7 @@
     if (parts.length === 0) return { view: "home" };
     if (parts[0] === "project" && parts[1]) return { view: "project", code: parts[1] };
     if (parts[0] === "order" && parts[1]) return { view: "order", orderNo: parts[1] };
+    if (parts[0] === "storage") return { view: "storage" };
     return { view: "home" };
   }
 
@@ -112,6 +113,8 @@
       renderProject(app, route.code);
     } else if (route.view === "order") {
       renderOrder(app, route.orderNo);
+    } else if (route.view === "storage") {
+      renderStorage(app);
     } else {
       renderHome(app);
     }
@@ -175,6 +178,85 @@
 
       list.appendChild(card);
     });
+  }
+
+  // ---------- Storage location lookup ----------
+
+  var storageQuery = "";
+
+  function parseCodeParts(code) {
+    var m = /^(.*?)(\d+)$/.exec(String(code || "").trim());
+    if (!m) return null;
+    return { prefix: m[1].toLowerCase(), num: parseInt(m[2], 10) };
+  }
+
+  function codeInRange(query, from, to) {
+    var q = parseCodeParts(query);
+    var f = parseCodeParts(from);
+    var t = parseCodeParts(to);
+    if (!q || !f || !t) return false;
+    if (q.prefix !== f.prefix || q.prefix !== t.prefix) return false;
+    return q.num >= f.num && q.num <= t.num;
+  }
+
+  function renderStorage(app) {
+    var html = '';
+    html += '<div class="breadcrumb"><a href="#/">首頁</a> / 物料儲位查詢</div>';
+    html += '<h1 class="page-title">物料儲位查詢<span class="sub">輸入材料品號或類別關鍵字,查詢物料的儲放地點與儲位</span></h1>';
+    html += '<div class="toolbar">' +
+      '<input type="search" id="storage-search" placeholder="輸入材料品號(例如 ML-B010050)或類別關鍵字(例如 軸承)" value="' + esc(storageQuery) + '" />' +
+    '</div>';
+    html += '<p class="result-count" id="storage-result-count"></p>';
+    html += '<div id="storage-container"></div>';
+    app.innerHTML = html;
+
+    document.getElementById("storage-search").addEventListener("input", function (e) {
+      storageQuery = e.target.value;
+      renderStorageResults();
+    });
+
+    renderStorageResults();
+  }
+
+  function renderStorageResults() {
+    var rows = state.data.storageLocations || [];
+    var q = storageQuery.trim().toLowerCase();
+    var results = !q ? rows : rows.filter(function (r) {
+      var haystack = [r.codeFrom, r.codeTo, r.category, r.location, r.bin].join(" ").toLowerCase();
+      return haystack.indexOf(q) !== -1 || codeInRange(storageQuery.trim(), r.codeFrom, r.codeTo);
+    });
+
+    var countEl = document.getElementById("storage-result-count");
+    if (countEl) {
+      countEl.textContent = q
+        ? "顯示 " + results.length + " / " + rows.length + " 筆儲位資料"
+        : "共 " + rows.length + " 筆儲位資料";
+    }
+
+    var container = document.getElementById("storage-container");
+    if (!container) return;
+
+    if (!results.length) {
+      container.innerHTML = '<div class="empty-state">' + (q ? "沒有符合條件的儲位資料" : "尚無儲位資料") + '</div>';
+      return;
+    }
+
+    container.innerHTML = '<div class="material-list">' + results.map(function (r) {
+      return (
+        '<div class="material-card">' +
+          '<div class="material-card-top">' +
+            '<div>' +
+              '<div class="material-code">' + esc(r.codeFrom) + ' ~ ' + esc(r.codeTo) + '</div>' +
+              '<div class="material-name">' + esc(r.category) + '</div>' +
+            '</div>' +
+          '</div>' +
+          '<div class="material-grid">' +
+            '<div class="full"><span class="k">儲放地點:</span> <span class="v">' + esc(r.location) + '</span></div>' +
+            '<div class="full"><span class="k">儲位:</span> <span class="v">' + esc(r.bin) + '</span></div>' +
+          '</div>' +
+        '</div>'
+      );
+    }).join("") + '</div>';
   }
 
   // ---------- Shared markup helpers ----------

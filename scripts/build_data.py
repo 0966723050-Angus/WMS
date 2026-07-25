@@ -91,6 +91,21 @@ def main():
             "stockQty": stock_qty,
         })
 
+    storage_locations = []
+    if "物料儲放位置" in wb.sheetnames:
+        ws4 = wb["物料儲放位置"]
+        for row in ws4.iter_rows(min_row=2, values_only=True):
+            if not row or not row[0] or not row[1]:
+                continue
+            code_from, code_to, category, location, bin_no = row[:5]
+            storage_locations.append({
+                "codeFrom": norm(code_from),
+                "codeTo": norm(code_to),
+                "category": norm(category),
+                "location": norm(location),
+                "bin": norm(bin_no),
+            })
+
     source_mtime = datetime.datetime.fromtimestamp(os.path.getmtime(SRC))
 
     data = {
@@ -98,6 +113,7 @@ def main():
         "sourceUpdatedAt": source_mtime.strftime("%Y-%m-%d %H:%M"),
         "projects": [projects[c] for c in project_order],
         "materials": materials,
+        "storageLocations": storage_locations,
     }
 
     with open(OUT, "w", encoding="utf-8") as f:
@@ -105,7 +121,7 @@ def main():
 
     n_orders = sum(len(p["orders"]) for p in data["projects"])
     n_materials = sum(len(v) for v in materials.values())
-    print(f"projects={len(data['projects'])} orders={n_orders} material_rows={n_materials}")
+    print(f"projects={len(data['projects'])} orders={n_orders} material_rows={n_materials} storage_locations={len(storage_locations)}")
 
 
 if __name__ == "__main__":

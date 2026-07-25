@@ -119,9 +119,16 @@ a:hover { text-decoration: underline; }
 }
 .brand-sub { font-size: 11px; opacity: 0.85; }
 
-.refresh-btn {
+.icon-btn-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   flex-shrink: 0;
   margin-right: 12px;
+}
+
+.icon-btn {
+  flex-shrink: 0;
   width: 36px;
   height: 36px;
   border-radius: 50%;
@@ -132,9 +139,10 @@ a:hover { text-decoration: underline; }
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  text-decoration: none;
 }
-.refresh-btn:hover { background: rgba(255, 255, 255, 0.28); }
-.refresh-btn svg { width: 19px; height: 19px; }
+.icon-btn:hover { background: rgba(255, 255, 255, 0.28); text-decoration: none; }
+.icon-btn svg { width: 19px; height: 19px; }
 .refresh-btn.spinning svg { animation: spin 0.8s linear infinite; }
 @keyframes spin {
   from { transform: rotate(0deg); }
