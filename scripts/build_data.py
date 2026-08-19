@@ -91,16 +91,18 @@ def main():
             "stockQty": stock_qty,
         })
 
-    storage_locations = []
-    if "物料儲放位置" in wb.sheetnames:
-        ws4 = wb["物料儲放位置"]
+    storage_items = []
+    if "庫存物料" in wb.sheetnames:
+        ws4 = wb["庫存物料"]
         for row in ws4.iter_rows(min_row=2, values_only=True):
-            if not row or not row[0] or not row[1]:
+            if not row or not row[0]:
                 continue
-            code_from, code_to, category, location, bin_no = row[:5]
-            storage_locations.append({
-                "codeFrom": norm(code_from),
-                "codeTo": norm(code_to),
+            mat_code, mat_name, spec, stock_qty, category, location, bin_no = row[:7]
+            storage_items.append({
+                "code": norm(mat_code),
+                "name": norm(mat_name),
+                "spec": norm(spec),
+                "stockQty": stock_qty if stock_qty is not None else 0,
                 "category": norm(category),
                 "location": norm(location),
                 "bin": norm(bin_no),
@@ -113,7 +115,7 @@ def main():
         "sourceUpdatedAt": source_mtime.strftime("%Y-%m-%d %H:%M"),
         "projects": [projects[c] for c in project_order],
         "materials": materials,
-        "storageLocations": storage_locations,
+        "storageItems": storage_items,
     }
 
     with open(OUT, "w", encoding="utf-8") as f:
@@ -121,7 +123,7 @@ def main():
 
     n_orders = sum(len(p["orders"]) for p in data["projects"])
     n_materials = sum(len(v) for v in materials.values())
-    print(f"projects={len(data['projects'])} orders={n_orders} material_rows={n_materials} storage_locations={len(storage_locations)}")
+    print(f"projects={len(data['projects'])} orders={n_orders} material_rows={n_materials} storage_items={len(storage_items)}")
 
 
 if __name__ == "__main__":
