@@ -30,6 +30,7 @@ def main():
 
     projects = {}
     project_order = []
+    order_index = {}
 
     for row in ws1.iter_rows(min_row=2, values_only=True):
         if not row or not row[0]:
@@ -43,14 +44,16 @@ def main():
         if code not in projects:
             projects[code] = {"code": code, "name": norm(name), "orders": []}
             project_order.append(code)
-        projects[code]["orders"].append({
+        order = {
             "orderNo": norm(order_no),
             "productCode": norm(prod_code),
             "productName": norm(prod_name),
             "spec": norm(spec),
             "status": norm(status),
             "note": norm(note),
-        })
+        }
+        projects[code]["orders"].append(order)
+        order_index[order["orderNo"]] = order
 
     materials = {}
     material_order = []
@@ -90,6 +93,13 @@ def main():
             "remainQty": remain_qty if remain_qty is not None else 0,
             "stockQty": stock_qty,
         })
+
+    # 若某製令下所有物料的未領用量皆為 0,製令狀態一律改為「完全領料」
+    for order_no, rows in materials.items():
+        if rows and all(r["remainQty"] <= 0 for r in rows):
+            order = order_index.get(order_no)
+            if order:
+                order["status"] = "完全領料"
 
     storage_items = []
     if "庫存物料" in wb.sheetnames:
