@@ -57,14 +57,14 @@
 
   function getFilterState(orderNo) {
     if (!materialFilterState[orderNo]) {
-      materialFilterState[orderNo] = { query: "", status: "" };
+      materialFilterState[orderNo] = { query: "", status: "", issueStatus: "" };
     }
     return materialFilterState[orderNo];
   }
 
   function getProjectFilterState(code) {
     if (!projectFilterState[code]) {
-      projectFilterState[code] = { query: "", status: "" };
+      projectFilterState[code] = { query: "", status: "", issueStatus: "" };
     }
     return projectFilterState[code];
   }
@@ -79,8 +79,11 @@
   function filterRows(rows, f) {
     var q = f.query.trim().toLowerCase();
     var status = f.status;
+    var issueStatus = f.issueStatus;
     return rows.filter(function (r) {
       if (status && r.arrivalStatus !== status) return false;
+      if (issueStatus === "未領" && !(r.remainQty > 0)) return false;
+      if (issueStatus === "已領" && !(r.remainQty <= 0)) return false;
       if (!q) return true;
       var haystack = [
         r.materialCode, r.materialName, r.spec, r.materialType,
@@ -290,6 +293,11 @@
           '<option value="已到料"' + (f.status === "已到料" ? " selected" : "") + '>已到料</option>' +
           '<option value="未到料"' + (f.status === "未到料" ? " selected" : "") + '>未到料</option>' +
         '</select>' +
+        '<select id="' + ids.issueStatus + '">' +
+          '<option value=""' + (f.issueStatus === "" ? " selected" : "") + '>領料狀態: 空白</option>' +
+          '<option value="未領"' + (f.issueStatus === "未領" ? " selected" : "") + '>未領</option>' +
+          '<option value="已領"' + (f.issueStatus === "已領" ? " selected" : "") + '>已領</option>' +
+        '</select>' +
         '<button class="btn btn-export" id="' + ids.exportBtn + '" type="button">' +
           '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>' +
           esc(exportLabel) +
@@ -312,7 +320,7 @@
     var html = '';
     html += '<div class="breadcrumb"><a href="#/">首頁</a> / ' + esc(project.code) + '</div>';
     html += '<h1 class="page-title">' + esc(project.code) + '<span class="sub">' + esc(project.name) + ' · 共 ' + project.orders.length + ' 筆製令</span></h1>';
-    html += toolbarHtml({ search: "project-search", status: "project-status", exportBtn: "project-export" }, f, "下載為 Excel (全部製令)");
+    html += toolbarHtml({ search: "project-search", status: "project-status", issueStatus: "project-issue-status", exportBtn: "project-export" }, f, "下載為 Excel (全部製令)");
     html += '<p class="result-count" id="project-result-count"></p>';
 
     project.orders.forEach(function (o) {
@@ -338,6 +346,10 @@
       getProjectFilterState(code).status = e.target.value;
       renderProjectMaterials(project);
     });
+    document.getElementById("project-issue-status").addEventListener("change", function (e) {
+      getProjectFilterState(code).issueStatus = e.target.value;
+      renderProjectMaterials(project);
+    });
     document.getElementById("project-export").addEventListener("click", function () {
       exportProjectToExcel(project);
     });
@@ -347,7 +359,7 @@
 
   function renderProjectMaterials(project) {
     var f = getProjectFilterState(project.code);
-    var filtering = !!(f.query.trim() || f.status);
+    var filtering = !!(f.query.trim() || f.status || f.issueStatus);
     var totalAll = 0, totalMatched = 0, sectionsWithResults = 0;
 
     project.orders.forEach(function (o) {
@@ -390,7 +402,7 @@
     html += '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/project/' + encodeURIComponent(project.code) + '">' + esc(project.code) + '</a> / ' + esc(orderNo) + '</div>';
     html += '<h1 class="page-title">製令 ' + esc(orderNo) + '<span class="sub">物料明細</span></h1>';
     html += orderInfoPanelHtml(order, orderNo);
-    html += toolbarHtml({ search: "search-input", status: "status-select", exportBtn: "export-btn" }, f, "下載為 Excel");
+    html += toolbarHtml({ search: "search-input", status: "status-select", issueStatus: "issue-status-select", exportBtn: "export-btn" }, f, "下載為 Excel");
     html += '<p class="result-count" id="' + sectionIds(orderNo).count + '"></p>';
     html += '<div id="' + sectionIds(orderNo).container + '"></div>';
 
@@ -402,6 +414,10 @@
     });
     document.getElementById("status-select").addEventListener("change", function (e) {
       getFilterState(orderNo).status = e.target.value;
+      renderOrderMaterials(orderNo, project, order);
+    });
+    document.getElementById("issue-status-select").addEventListener("change", function (e) {
+      getFilterState(orderNo).issueStatus = e.target.value;
       renderOrderMaterials(orderNo, project, order);
     });
     document.getElementById("export-btn").addEventListener("click", function () {
