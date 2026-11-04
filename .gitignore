@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.DS_Store
+scripts/sync_and_publish.log
+scripts/edit_config.json
+scripts/apply_edits.log
+scripts/backup/
+data.json
+scripts/auth_config.json
