@@ -1,4 +1,4 @@
-﻿var CACHE_NAME = "wms-cache-v13";
+﻿var CACHE_NAME = "wms-cache-v14";
 var CORE_ASSETS = [
   "./",
   "./index.html",
@@ -40,7 +40,9 @@ self.addEventListener("fetch", function (event) {
   if (new URL(event.request.url).origin !== self.location.origin) return;
 
   event.respondWith(
-    fetch(event.request)
+    // cache:"no-cache" = 每次都向伺服器確認檔案有沒有更新(沒變時只回 304,很快),
+    // 避開 GitHub Pages 的 10 分鐘瀏覽器快取,發布後使用者馬上拿到新版
+    fetch(event.request.url, { cache: "no-cache", credentials: "same-origin" })
       .then(function (response) {
         var copy = response.clone();
         caches.open(CACHE_NAME).then(function (cache) { cache.put(event.request, copy); });

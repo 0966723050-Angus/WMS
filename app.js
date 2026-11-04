@@ -1086,7 +1086,26 @@
     if (session) startApp(); else showLogin("");
 
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("service-worker.js").catch(function () {});
+      // 新版 service worker 接手時,自動重新載入一次,馬上換成新版畫面
+      var hadController = !!navigator.serviceWorker.controller;
+      var reloaded = false;
+      navigator.serviceWorker.addEventListener("controllerchange", function () {
+        if (!hadController) { hadController = true; return; } // 第一次安裝不必重載
+        if (reloaded) return;
+        reloaded = true;
+        location.reload();
+      });
+      navigator.serviceWorker
+        .register("service-worker.js", { updateViaCache: "none" })
+        .then(function (reg) {
+          // 開啟時、以及從背景切回前景時,主動檢查是否有新版
+          var check = function () { reg.update().catch(function () {}); };
+          check();
+          document.addEventListener("visibilitychange", function () {
+            if (document.visibilityState === "visible") check();
+          });
+        })
+        .catch(function () {});
     }
   });
 })();
