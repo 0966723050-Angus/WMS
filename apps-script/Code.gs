@@ -206,6 +206,52 @@ function saveEdit_(body, user) {
   return { ok: true, id: id };
 }
 
+// ---------- 編輯畫面的下拉選單項目(類別 / 儲放地點) ----------
+// 存在指令碼屬性 OPTIONS(JSON:{category:[...], location:[...]}),所有登入者共用。
+// 某欄位尚未設定過時回傳 null,由前端用現有資料的值當初始選項。
+
+var OPTIONS_KEY = 'OPTIONS';
+var MAX_OPTIONS = 100;       // 每個欄位最多項目數
+var MAX_OPTION_LEN = 30;     // 單一項目最長字數
+
+function getOptions_() {
+  try { return JSON.parse(props_().getProperty(OPTIONS_KEY) || '{}') || {}; } catch (err) { return {}; }
+}
+
+function cleanList_(arr) {
+  var seen = {}, out = [];
+  (Array.isArray(arr) ? arr : []).forEach(function (x) {
+    var v = clip_(x, MAX_OPTION_LEN);
+    if (v && !seen[v]) { seen[v] = true; out.push(v); }
+  });
+  return out.slice(0, MAX_OPTIONS);
+}
+
+// op: 'add' | 'remove';seed 只在該欄位尚未設定過時當作起始清單
+function changeOption_(body) {
+  var field = body.field;
+  if (field !== 'category' && field !== 'location') return { ok: false, error: '欄位不正確' };
+  var value = clip_(body.value, MAX_OPTION_LEN);
+  if (!value) return { ok: false, error: '項目不可空白' };
+  var opts = getOptions_();
+  var list = Array.isArray(opts[field]) ? cleanList_(opts[field]) : cleanList_(body.seed);
+  if (body.op === 'add') {
+    if (list.indexOf(value) === -1) {
+      if (list.length >= MAX_OPTIONS) return { ok: false, error: '項目已達上限(' + MAX_OPTIONS + ')' };
+      list.push(value);
+    }
+  } else if (body.op === 'remove') {
+    list = list.filter(function (x) { return x !== value; });
+  } else {
+    return { ok: false, error: '不支援的動作' };
+  }
+  opts[field] = list;
+  var raw = JSON.stringify(opts);
+  if (raw.length > 8000) return { ok: false, error: '選單內容過長,請先刪除不用的項目' };
+  props_().setProperty(OPTIONS_KEY, raw);
+  return { ok: true, options: opts };
+}
+
 // ---------- 進入點 ----------
 
 function doPost(e) {
@@ -231,6 +277,8 @@ function doPost(e) {
 
     if (action === 'pending') return json_({ ok: true, pending: listPending_() });
     if (action === 'save') return json_(saveEdit_(body, me));
+    if (action === 'options_get') return json_({ ok: true, options: getOptions_() });
+    if (action === 'options_change') return json_(changeOption_(body));
     if (String(action).indexOf('admin_') === 0) {
       if (!me.isAdmin) return json_({ ok: false, error: '只有管理者可以使用' });
       return json_(adminAction_(body, me));

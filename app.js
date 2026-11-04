@@ -503,6 +503,7 @@
   // ---------- Storage / inventory lookup (with edit) ----------
 
   var storageQuery = "";
+  var STORAGE_MAX_SHOW = 100; // 關鍵字太短時結果可能上千筆,只顯示前 100 筆
   var PENDING_KEY = "wms_pending_edits";
   var PENDING_TTL_MS = 24 * 60 * 60 * 1000;
   var serverPending = {}; // row -> 尚未寫入 Excel 的修改(來自 Apps Script 中繼)
@@ -569,18 +570,33 @@
   function renderStorage(app) {
     var html = '';
     html += '<div class="breadcrumb"><a href="#/">首頁</a> / 物料儲位查詢</div>';
-    html += '<h1 class="page-title">物料儲位查詢<span class="sub">材料品號需完全符合;品名/規格/類別可用關鍵字查詢' +
+    html += '<h1 class="page-title">物料儲位查詢<span class="sub">材料品號/品名/規格/類別皆可用關鍵字查詢' +
       ';點擊卡片可編輯類別/儲放地點/儲位</span></h1>';
     html += '<div class="toolbar">' +
-      '<input type="search" id="storage-search" placeholder="輸入完整材料品號,或品名/規格/類別關鍵字" value="' + esc(storageQuery) + '" />' +
+      '<div class="search-wrap">' +
+        '<input type="search" id="storage-search" placeholder="輸入材料品號、品名、規格或類別關鍵字" autocomplete="off" value="' + esc(storageQuery) + '" />' +
+        '<button type="button" class="search-clear" id="storage-clear" aria-label="清除搜尋"' + (storageQuery ? '' : ' hidden') + '>' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>' +
+        '</button>' +
+      '</div>' +
     '</div>';
     html += '<p class="result-count" id="storage-result-count"></p>';
     html += '<div id="storage-container"></div>';
     app.innerHTML = html;
 
-    document.getElementById("storage-search").addEventListener("input", function (e) {
+    var searchInput = document.getElementById("storage-search");
+    var clearBtn = document.getElementById("storage-clear");
+    searchInput.addEventListener("input", function (e) {
       storageQuery = e.target.value;
+      clearBtn.hidden = !storageQuery;
       renderStorageResults();
+    });
+    clearBtn.addEventListener("click", function () {
+      storageQuery = "";
+      searchInput.value = "";
+      clearBtn.hidden = true;
+      renderStorageResults();
+      searchInput.focus();
     });
     document.getElementById("storage-container").addEventListener("click", function (e) {
       var card = e.target.closest ? e.target.closest(".material-card[data-row]") : null;
@@ -607,12 +623,12 @@
 
     if (!q) {
       if (countEl) countEl.textContent = "";
-      container.innerHTML = '<div class="empty-state">請輸入材料品號或關鍵字開始查詢</div>';
+      container.innerHTML = '<div class="empty-state">請輸入關鍵字開始查詢</div>';
       return;
     }
 
     var results = rows.map(effectiveItem).filter(function (r) {
-      return r.code.toLowerCase() === q ||
+      return r.code.toLowerCase().indexOf(q) !== -1 ||
         r.name.toLowerCase().indexOf(q) !== -1 ||
         r.spec.toLowerCase().indexOf(q) !== -1 ||
         r.category.toLowerCase().indexOf(q) !== -1;
@@ -621,10 +637,18 @@
       return a.code < b.code ? -1 : a.code > b.code ? 1 : (a.row || 0) - (b.row || 0);
     });
 
-    if (countEl) countEl.textContent = "顯示 " + results.length + " / " + rows.length + " 筆物料";
+    var total = results.length;
+    var truncated = total > STORAGE_MAX_SHOW;
+    if (truncated) results = results.slice(0, STORAGE_MAX_SHOW);
+
+    if (countEl) {
+      countEl.textContent = truncated
+        ? "符合 " + total + " 筆,僅顯示前 " + STORAGE_MAX_SHOW + " 筆,請輸入更完整的關鍵字縮小範圍"
+        : "顯示 " + total + " / " + rows.length + " 筆物料";
+    }
 
     if (!results.length) {
-      container.innerHTML = '<div class="empty-state">查無此材料品號</div>';
+      container.innerHTML = '<div class="empty-state">查無符合的物料</div>';
       return;
     }
 
@@ -664,8 +688,113 @@
     return out.sort();
   }
 
-  function optionsHtml(values) {
-    return values.map(function (v) { return '<option value="' + esc(v) + '"></option>'; }).join("");
+  // ---- 下拉選單項目(類別 / 儲放地點):存在雲端,所有登入者共用,可新增/刪除 ----
+  var optionsCache = null; // { category: [...], location: [...] };欄位沒有時用現有資料的值當初始選項
+
+  function loadOptions() {
+    return api("options_get")
+      .then(function (res) { if (res && res.ok) optionsCache = res.options || {}; })
+      .catch(function () { /* 讀不到就用現有資料的值 */ });
+  }
+
+  function optionList(field) {
+    return optionsCache && Array.isArray(optionsCache[field]) ? optionsCache[field] : distinctValues(field);
+  }
+
+  function changeOption(field, op, value) {
+    return api("options_change", { field: field, op: op, value: value, seed: distinctValues(field) })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.error || "更新選單失敗");
+        optionsCache = res.options || {};
+      });
+  }
+
+  // 可輸入也可下拉選擇的欄位;選單內每個項目可刪除,輸入的新文字可加入選單
+  function setupCombo(modal, field, msgEl) {
+    var combo = modal.querySelector('.combo[data-field="' + field + '"]');
+    var input = combo.querySelector("input");
+    var toggle = combo.querySelector(".combo-toggle");
+    var listEl = combo.querySelector(".combo-list");
+    var busy = false;
+
+    function isOpen() { return !listEl.hidden; }
+    function close() { listEl.hidden = true; combo.classList.remove("open"); }
+
+    function renderList(filtering) {
+      var typed = input.value.trim();
+      var q = typed.toLowerCase();
+      var all = optionList(field);
+      var shown = filtering && q ? all.filter(function (v) { return v.toLowerCase().indexOf(q) !== -1; }) : all;
+      var html = shown.map(function (v) {
+        return '<div class="combo-item" data-v="' + esc(v) + '">' +
+          '<span class="combo-text">' + esc(v) + '</span>' +
+          '<button type="button" class="combo-del" data-del="' + esc(v) + '" aria-label="從選單刪除 ' + esc(v) + '">✕</button>' +
+        '</div>';
+      }).join("");
+      if (typed && all.indexOf(typed) === -1) {
+        html += '<div class="combo-add" data-add="' + esc(typed) + '">＋ 新增「' + esc(typed) + '」到選單</div>';
+      }
+      if (!html) html = '<div class="combo-empty">選單目前是空的,輸入文字後可新增</div>';
+      listEl.innerHTML = html;
+      listEl.hidden = false;
+      combo.classList.add("open");
+    }
+
+    toggle.addEventListener("click", function () {
+      if (isOpen()) close(); else renderList(false);
+    });
+    input.addEventListener("input", function () {
+      if (isOpen()) renderList(true);
+    });
+
+    listEl.addEventListener("click", function (e) {
+      if (busy) return;
+      var t = e.target;
+      var del = t.closest ? t.closest("[data-del]") : null;
+      var add = t.closest ? t.closest("[data-add]") : null;
+      var item = t.closest ? t.closest(".combo-item") : null;
+
+      if (del) {
+        var v = del.getAttribute("data-del");
+        if (!window.confirm("確定要從選單刪除「" + v + "」嗎?\n(已設定此值的物料不受影響)")) return;
+        busy = true;
+        changeOption(field, "remove", v)
+          .then(function () { msgEl.textContent = ""; renderList(false); })
+          .catch(function (err) { msgEl.textContent = err.message; })
+          .then(function () { busy = false; });
+      } else if (add) {
+        busy = true;
+        changeOption(field, "add", add.getAttribute("data-add"))
+          .then(function () { msgEl.textContent = ""; renderList(false); })
+          .catch(function (err) { msgEl.textContent = err.message; })
+          .then(function () { busy = false; });
+      } else if (item) {
+        input.value = item.getAttribute("data-v");
+        close();
+      }
+    });
+
+    // 點選單以外的地方就收起來
+    modal.addEventListener("click", function (e) {
+      if (isOpen() && !(e.target.closest && e.target.closest('.combo[data-field="' + field + '"]'))) close();
+    });
+
+    return { refresh: function () { if (isOpen()) renderList(false); } };
+  }
+
+  function comboHtml(field, label, value) {
+    return (
+      '<div class="field">' +
+        '<span class="field-label">' + label + '</span>' +
+        '<div class="combo" data-field="' + field + '">' +
+          '<input type="text" id="edit-' + field + '" maxlength="100" autocomplete="off" value="' + esc(value) + '" />' +
+          '<button type="button" class="combo-toggle" aria-label="展開' + label + '選單">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>' +
+          '</button>' +
+          '<div class="combo-list" hidden></div>' +
+        '</div>' +
+      '</div>'
+    );
   }
 
   function openEditDialog(rawItem) {
@@ -680,16 +809,14 @@
             (item.spec ? '<div class="material-spec">' + esc(item.spec) + '</div>' : '') +
             '<div class="material-spec">庫存數量: ' + fmtNum(item.stockQty) + '</div>' +
           '</div>' +
-          '<label>類別<input type="text" id="edit-category" list="dl-category" maxlength="100" value="' + esc(item.category) + '" /></label>' +
-          '<label>儲放地點<input type="text" id="edit-location" list="dl-location" maxlength="100" value="' + esc(item.location) + '" /></label>' +
+          comboHtml("category", "類別", item.category) +
+          comboHtml("location", "儲放地點", item.location) +
           '<label>儲位<input type="text" id="edit-bin" maxlength="100" value="' + esc(item.bin) + '" /></label>' +
           '<p class="modal-msg" id="edit-msg"></p>' +
           '<div class="modal-actions">' +
             '<button type="button" class="btn btn-secondary" id="edit-cancel">取消</button>' +
             '<button type="button" class="btn" id="edit-save">儲存</button>' +
           '</div>' +
-          '<datalist id="dl-category">' + optionsHtml(distinctValues("category")) + '</datalist>' +
-          '<datalist id="dl-location">' + optionsHtml(distinctValues("location")) + '</datalist>' +
         '</div>' +
       '</div>'
     );
@@ -697,6 +824,9 @@
 
     var msg = modal.querySelector("#edit-msg");
     var saveBtn = modal.querySelector("#edit-save");
+
+    var combos = [setupCombo(modal, "category", msg), setupCombo(modal, "location", msg)];
+    loadOptions().then(function () { combos.forEach(function (c) { c.refresh(); }); });
 
     function close() {
       document.removeEventListener("keydown", onKey);

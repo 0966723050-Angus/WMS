@@ -469,6 +469,53 @@ a:hover { text-decoration: underline; }
   color: var(--text);
   font-size: 16px;
 }
+.modal .field { margin-top: 10px; }
+.field-label { display: block; font-size: 13px; color: var(--text-muted); margin-bottom: 4px; }
+
+/* 可輸入也可下拉的欄位 */
+.combo { position: relative; }
+.modal .combo input[type="text"] { margin-top: 0; padding-right: 46px; }
+.combo-toggle {
+  position: absolute; top: 0; right: 0; height: 100%; width: 44px;
+  border: none; background: transparent; color: var(--text-muted);
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.combo-toggle svg { width: 18px; height: 18px; transition: transform 0.15s ease; }
+.combo.open .combo-toggle svg { transform: rotate(180deg); }
+.combo-list {
+  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 5;
+  max-height: 230px; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+}
+.combo-list[hidden] { display: none; }
+.combo-item { display: flex; align-items: stretch; border-top: 1px solid var(--border); }
+.combo-item:first-child { border-top: none; }
+.combo-text { flex: 1; padding: 11px 12px; font-size: 15px; cursor: pointer; word-break: break-all; }
+.combo-text:hover { background: var(--surface-alt); }
+.combo-del {
+  flex-shrink: 0; width: 44px; border: none; border-left: 1px solid var(--border);
+  background: transparent; color: var(--warn-text); font-size: 15px; cursor: pointer;
+}
+.combo-del:hover { background: var(--warn-bg); }
+.combo-add { padding: 11px 12px; font-size: 14px; font-weight: 600; color: var(--brand); cursor: pointer; border-top: 1px solid var(--border); }
+.combo-add:first-child { border-top: none; }
+.combo-add:hover { background: var(--surface-alt); }
+.combo-empty { padding: 11px 12px; font-size: 13px; color: var(--text-muted); }
+
+/* 搜尋欄的清除鍵 */
+.search-wrap { position: relative; flex: 2 1 200px; min-width: 0; }
+.search-wrap input[type="search"] { width: 100%; padding-right: 42px; -webkit-appearance: none; appearance: none; }
+.search-wrap input[type="search"]::-webkit-search-cancel-button { display: none; -webkit-appearance: none; }
+.search-clear {
+  position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
+  width: 30px; height: 30px; border: none; border-radius: 50%;
+  background: var(--surface-alt); color: var(--text-muted);
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.search-clear[hidden] { display: none; }
+.search-clear svg { width: 14px; height: 14px; }
+
 .modal-msg { min-height: 1.4em; margin: 10px 0 0; font-size: 13px; color: var(--warn-text); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 .btn-secondary { background: transparent; color: var(--text); border-color: var(--border); }
