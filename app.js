@@ -432,7 +432,7 @@
   }
 
   function updateHeaderHeightVar() {
-    var header = document.querySelector(".topbar");
+    var header = document.querySelector(".sticky-head");
     if (header) {
       document.documentElement.style.setProperty("--header-height", header.offsetHeight + "px");
     }

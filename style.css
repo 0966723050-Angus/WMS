@@ -13,6 +13,7 @@
   --warn-bg: #fdecea;
   --warn-text: #b3261e;
   --link: #0f766e;
+  --blue: #1d4ed8;
   --shadow: 0 1px 3px rgba(16, 32, 29, 0.08), 0 1px 2px rgba(16, 32, 29, 0.06);
   --radius: 10px;
 }
@@ -32,6 +33,7 @@
   --warn-bg: #3a1a19;
   --warn-text: #f87171;
   --link: #5eead4;
+  --blue: #7db4ff;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
@@ -51,6 +53,7 @@
     --warn-bg: #3a1a19;
     --warn-text: #f87171;
     --link: #5eead4;
+    --blue: #7db4ff;
     --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
   }
 }
@@ -76,13 +79,16 @@ body {
 a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-.topbar {
+/* 標題列 + 功能按鈕列:一起固定在頁面最上方 */
+.sticky-head {
   position: sticky;
   top: 0;
   z-index: 20;
+  box-shadow: var(--shadow);
+}
+.topbar {
   background: var(--brand);
   color: var(--brand-contrast);
-  box-shadow: var(--shadow);
 }
 
 .topbar {
@@ -128,27 +134,34 @@ a:hover { text-decoration: underline; }
 .icon-btn-group {
   display: flex;
   align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-  margin-right: 12px;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
 }
 
 .icon-btn {
-  flex-shrink: 0;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
+  flex: 0 1 auto;
+  height: 34px;
+  padding: 0 14px;
+  gap: 6px;
+  border-radius: 999px;
   border: none;
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--brand);
   color: var(--brand-contrast);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   text-decoration: none;
 }
-.icon-btn:hover { background: rgba(255, 255, 255, 0.28); text-decoration: none; }
-.icon-btn svg { width: 19px; height: 19px; }
+.icon-btn:hover { background: var(--brand-dark); text-decoration: none; }
+.icon-btn svg { width: 17px; height: 17px; flex-shrink: 0; }
 .refresh-btn.spinning svg { animation: spin 0.8s linear infinite; }
 @keyframes spin {
   from { transform: rotate(0deg); }
@@ -219,9 +232,9 @@ a:hover { text-decoration: underline; }
 .project-name {
   display: block;
   font-size: 13px;
-  color: var(--text-muted);
+  color: var(--text);
   margin-top: 2px;
-  font-weight: 400;
+  font-weight: 700;
 }
 .project-meta { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .badge-count {
@@ -255,9 +268,9 @@ a:hover { text-decoration: underline; }
   font-size: 13.5px;
 }
 .order-row:first-child { border-top: none; }
-.order-row .order-link { font-weight: 600; }
+.order-row .order-link { font-weight: 700; color: var(--blue); }
 .order-row .order-product {
-  color: var(--text-muted);
+  color: var(--text);
   font-size: 12.5px;
   font-weight: 700;
   display: block;
@@ -298,6 +311,7 @@ a:hover { text-decoration: underline; }
 .order-section-head .order-link {
   font-size: 17px;
   font-weight: 700;
+  color: var(--blue);
 }
 
 /* Toolbar (search / filter) */
