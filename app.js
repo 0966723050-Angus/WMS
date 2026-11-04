@@ -39,6 +39,15 @@
     return "status-neutral";
   }
 
+  // 某製令下物料的到料狀況:已到料項數 / 未到料項數
+  function arrivalCounts(orderNo) {
+    var arrived = 0, pending = 0;
+    (state.data.materials[orderNo] || []).forEach(function (r) {
+      if (r.arrivalStatus === "已到料") arrived++; else pending++;
+    });
+    return { arrived: arrived, pending: pending };
+  }
+
   function buildOrderIndex(data) {
     var idx = {};
     data.projects.forEach(function (p) {
@@ -469,11 +478,14 @@
         var isOpen = card.classList.contains("open");
         if (!isOpen && !orderList.dataset.filled) {
           orderList.innerHTML = p.orders.map(function (o) {
+            var c = arrivalCounts(o.orderNo);
             return (
               '<div class="order-row">' +
                 '<div>' +
                   '<a class="order-link" href="#/order/' + encodeURIComponent(o.orderNo) + '">' + esc(o.orderNo) + '</a>' +
                   '<span class="order-product">' + esc(o.productCode) + (o.productName ? " · " + esc(o.productName) : "") + '</span>' +
+                  '<span class="order-counts"><span class="cnt-ok">已到料:' + c.arrived + '項</span>' +
+                    '<span class="cnt-pending">未到料:' + c.pending + '項</span></span>' +
                 '</div>' +
                 '<div class="order-right"><span class="status-pill ' + statusPillClass(o.status) + '">' + esc(o.status || "-") + '</span></div>' +
               '</div>'

@@ -264,6 +264,10 @@ a:hover { text-decoration: underline; }
   margin-top: 1px;
 }
 .order-row .order-right { text-align: right; flex-shrink: 0; }
+.order-counts { display: block; margin-top: 3px; font-size: 12.5px; }
+.order-counts span { font-weight: 600; margin-right: 12px; }
+.cnt-ok { color: var(--ok-text); }
+.cnt-pending { color: var(--warn-text); }
 
 .status-pill {
   display: inline-block;
