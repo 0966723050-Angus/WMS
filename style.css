@@ -176,6 +176,8 @@ a:hover { text-decoration: underline; }
   padding: 12px 12px 32px;
 }
 
+.app.app-wide { max-width: 1680px; }
+
 .footer {
   text-align: center;
   font-size: 11px;
@@ -610,6 +612,7 @@ table.data-table th, table.data-table td {
   white-space: pre-line;
   vertical-align: top;
 }
+table.data-table td:nth-child(2) { white-space: nowrap; } /* 材料品號不要被切成兩行 */
 table.data-table th {
   background: var(--surface-alt);
   position: sticky;
@@ -620,6 +623,12 @@ table.data-table th {
 table.data-table tbody tr:hover { background: var(--surface-alt); }
 .material-name-cell { font-weight: 700; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* 較窄的桌面/平板:表格略微緊湊,盡量不出現左右捲軸 */
+@media (min-width: 700px) and (max-width: 1279px) {
+  table.data-table { font-size: 12px; }
+  table.data-table th, table.data-table td { padding: 6px 5px; }
+}
 
 @media (min-width: 700px) {
   .material-list { display: none; }

@@ -416,6 +416,8 @@
       app.innerHTML = '<div class="skeleton">載入資料中…</div>';
       return;
     }
+    // 含物料表格的頁面(專案/製令)在寬螢幕上用較寬的版面,避免出現左右捲軸
+    app.classList.toggle("app-wide", route.view === "project" || route.view === "order");
     if (route.view === "project") {
       renderProject(app, route.code);
     } else if (route.view === "order") {
