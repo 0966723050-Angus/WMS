@@ -900,7 +900,7 @@
           '<option value="未到料"' + (f.status === "未到料" ? " selected" : "") + '>未到料</option>' +
         '</select>' +
         '<select id="' + ids.issueStatus + '">' +
-          '<option value=""' + (f.issueStatus === "" ? " selected" : "") + '>領料狀態: 空白</option>' +
+          '<option value=""' + (f.issueStatus === "" ? " selected" : "") + '>領料狀態: 全部</option>' +
           '<option value="未領"' + (f.issueStatus === "未領" ? " selected" : "") + '>未領</option>' +
           '<option value="已領"' + (f.issueStatus === "已領" ? " selected" : "") + '>已領</option>' +
         '</select>' +
