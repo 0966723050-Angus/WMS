@@ -617,8 +617,15 @@ table.data-table th {
   background: var(--surface-alt);
   position: sticky;
   top: 0;
+  z-index: 2;
   font-weight: 700;
   white-space: nowrap;
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+/* 表格放得下時:外框不當捲動容器,欄位標題固定在標題列+搜尋列下方,不會捲出畫面 */
+.table-wrap.fits { overflow: visible; overflow: clip; }
+.table-wrap.fits table.data-table th {
+  top: calc(var(--header-height, 0px) + var(--toolbar-height, 0px));
 }
 table.data-table tbody tr:hover { background: var(--surface-alt); }
 .material-name-cell { font-weight: 700; }

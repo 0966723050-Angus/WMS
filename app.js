@@ -438,6 +438,23 @@
     if (header) {
       document.documentElement.style.setProperty("--header-height", header.offsetHeight + "px");
     }
+    // 搜尋列固定在標題下方,表格欄位標題要再固定在搜尋列下方
+    var toolbar = document.querySelector(".toolbar");
+    document.documentElement.style.setProperty("--toolbar-height", (toolbar ? toolbar.offsetHeight : 0) + "px");
+
+    // 表格放得下(不需要左右捲動)時,取消表格外框的捲動容器,欄位標題才能跟著頁面上下捲動固定
+    var wraps = document.querySelectorAll(".table-wrap");
+    for (var i = 0; i < wraps.length; i++) {
+      wraps[i].classList.remove("fits");
+      if (wraps[i].scrollWidth <= wraps[i].clientWidth + 1) wraps[i].classList.add("fits");
+    }
+  }
+
+  // 篩選後表格內容會重新產生,內容變動時重新計算
+  var stickyTimer = null;
+  function scheduleStickyUpdate() {
+    if (stickyTimer) return;
+    stickyTimer = requestAnimationFrame(function () { stickyTimer = null; updateHeaderHeightVar(); });
   }
 
   // ---------- Home ----------
@@ -1212,6 +1229,11 @@
     var refreshBtn = document.getElementById("refresh-btn");
     if (refreshBtn) {
       refreshBtn.addEventListener("click", refreshData);
+    }
+
+    var appEl = document.getElementById("app");
+    if (appEl && window.MutationObserver) {
+      new MutationObserver(scheduleStickyUpdate).observe(appEl, { childList: true, subtree: true });
     }
 
     session = loadSession();
