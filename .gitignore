@@ -7,3 +7,4 @@ scripts/apply_edits.log
 scripts/backup/
 data.json
 scripts/auth_config.json
+scripts/receipts_done.json

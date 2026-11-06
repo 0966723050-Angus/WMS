@@ -416,6 +416,8 @@
       app.innerHTML = '<div class="skeleton">載入資料中…</div>';
       return;
     }
+    recvRows = [];      // 每次重畫重新編號收料鈕
+    recvOrderOf = null; // 資料可能重新載入,製令對照表重建
     // 含物料表格的頁面(專案/製令)在寬螢幕上用較寬的版面,避免出現左右捲軸
     app.classList.toggle("app-wide", route.view === "project" || route.view === "order");
     if (route.view === "project") {
@@ -889,6 +891,118 @@
     });
   }
 
+  // ---------- 收料:確認視窗 + 送出(本機排程寫入 WMS.xlsx 的「收料」工作表) ----------
+
+  var recvRows = [];       // 目前畫面上有收料鈕的物料列(按鈕用索引找回資料)
+  var recvOrderOf = null;  // 物料列 -> 製令編號
+
+  function recvIndex(r) {
+    var i = recvRows.indexOf(r);
+    if (i === -1) { recvRows.push(r); i = recvRows.length - 1; }
+    return i;
+  }
+
+  function receiveBtnHtml(r) {
+    if (!session) return "";
+    return '<button type="button" class="recv-btn" data-recv="' + recvIndex(r) + '">收料</button>';
+  }
+
+  function orderOfRow(r) {
+    if (!recvOrderOf) {
+      recvOrderOf = new Map();
+      var m = state.data.materials || {};
+      Object.keys(m).forEach(function (o) { m[o].forEach(function (row) { recvOrderOf.set(row, o); }); });
+    }
+    return recvOrderOf.get(r) || "";
+  }
+
+  function defaultReceiveQty(r) {
+    var d = (Number(r.needQty) || 0) - (Number(r.receivedQty) || 0); // 預設:還沒收的數量
+    if (!(d > 0)) d = Number(r.needQty) || 0;
+    return d > 0 ? d : 1;
+  }
+
+  function openReceiveDialog(r) {
+    var pos = r.poNos || [], vendors = r.vendors || [];
+    var pairs = pos.map(function (po, i) { return { po: po, vendor: vendors[i] || vendors[0] || "" }; });
+    if (!pairs.length) pairs = [{ po: "", vendor: vendors[0] || "" }];
+
+    var pickHtml;
+    if (pairs.length > 1) {
+      pickHtml =
+        '<div class="field"><span class="field-label">採購單號 / 廠商(此物料有多張採購單,請選擇)</span>' +
+        '<select id="recv-pair">' + pairs.map(function (p, i) {
+          return '<option value="' + i + '">' + esc(p.po) + ' — ' + esc(p.vendor) + '</option>';
+        }).join("") + '</select></div>';
+    } else {
+      pickHtml =
+        '<div class="recv-info-row"><span class="k">廠商</span><span class="v" id="recv-vendor"></span></div>' +
+        '<div class="recv-info-row"><span class="k">採購單號</span><span class="v" id="recv-po"></span></div>';
+    }
+
+    var modal = el(
+      '<div class="modal-backdrop">' +
+        '<div class="modal" role="dialog" aria-modal="true" aria-labelledby="recv-title">' +
+          '<h2 id="recv-title">確認收料</h2>' +
+          '<div class="modal-info recv-info">' +
+            pickHtml +
+            '<div class="recv-info-row"><span class="k">品號</span><span class="v" id="recv-code"></span></div>' +
+            '<div class="recv-info-row"><span class="k">品名</span><span class="v" id="recv-name"></span></div>' +
+          '</div>' +
+          '<div class="field"><span class="field-label">數量(可修改)</span>' +
+            '<input type="number" id="recv-qty" inputmode="decimal" min="0" step="any" /></div>' +
+          '<p class="modal-msg" id="recv-msg"></p>' +
+          '<div class="modal-actions">' +
+            '<button type="button" class="btn btn-secondary" id="recv-cancel">取消</button>' +
+            '<button type="button" class="btn" id="recv-ok">確認</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>'
+    );
+    document.body.appendChild(modal);
+
+    // 用 textContent 填入,避免任何特殊字元被當成 HTML
+    var vEl = modal.querySelector("#recv-vendor"), pEl = modal.querySelector("#recv-po");
+    if (vEl) vEl.textContent = pairs[0].vendor || "(無)";
+    if (pEl) pEl.textContent = pairs[0].po || "(無採購單)";
+    modal.querySelector("#recv-code").textContent = r.materialCode;
+    modal.querySelector("#recv-name").textContent = r.materialName;
+    var qtyEl = modal.querySelector("#recv-qty");
+    qtyEl.value = defaultReceiveQty(r);
+
+    var msg = modal.querySelector("#recv-msg"), okBtn = modal.querySelector("#recv-ok");
+    function close() {
+      document.removeEventListener("keydown", onKey);
+      if (modal.parentNode) modal.parentNode.removeChild(modal);
+    }
+    function onKey(e) { if (e.key === "Escape") close(); }
+    document.addEventListener("keydown", onKey);
+    modal.querySelector("#recv-cancel").addEventListener("click", close);
+
+    okBtn.addEventListener("click", function () {
+      var qty = Number(qtyEl.value);
+      if (!(qty > 0)) { msg.textContent = "數量必須大於 0"; return; }
+      var pairEl = modal.querySelector("#recv-pair");
+      var pair = pairs[pairEl ? parseInt(pairEl.value, 10) : 0];
+      msg.textContent = "送出中…";
+      okBtn.disabled = true;
+      api("receive", {
+        order: orderOfRow(r), vendor: pair.vendor, po: pair.po,
+        code: r.materialCode, name: r.materialName, qty: qty
+      })
+        .then(function (res) {
+          if (!res.ok) throw new Error(res.error || "送出失敗");
+          close();
+          showToast("已送出收料,稍後會寫入 Excel「收料」工作表");
+        })
+        .catch(function (err) {
+          if (!session) { close(); return; } // 登入已失效,已切換到登入畫面
+          msg.textContent = err.message;
+          okBtn.disabled = false;
+        });
+    });
+  }
+
   // ---------- Shared markup helpers ----------
 
   function orderInfoPanelHtml(order, orderNo) {
@@ -1097,6 +1211,7 @@
             '<div><span class="k">未領用量:</span> <span class="v material-remain">' + fmtNum(r.remainQty) + '</span></div>' +
             '<div><span class="k">庫存數量:</span> <span class="v">' + fmtNum(r.stockQty) + '</span></div>' +
           '</div>' +
+          '<div class="material-card-actions">' + receiveBtnHtml(r) + '</div>' +
         '</div>'
       );
     }).join("") + '</div>';
@@ -1107,6 +1222,7 @@
       '<th>採購單號</th><th>廠商</th>' +
       '<th class="num">需領用量</th><th>預交日</th><th>到料狀態</th>' +
       '<th class="num">已入料量</th><th class="num">已領用量</th><th class="num">未領用量</th><th class="num">庫存數量</th>' +
+      '<th>收料</th>' +
       '</tr></thead><tbody>' +
       rows.map(function (r) {
         return '<tr>' +
@@ -1124,6 +1240,7 @@
           '<td class="num">' + fmtNum(r.issuedQty) + '</td>' +
           '<td class="num material-remain">' + fmtNum(r.remainQty) + '</td>' +
           '<td class="num">' + fmtNum(r.stockQty) + '</td>' +
+          '<td>' + receiveBtnHtml(r) + '</td>' +
           '</tr>';
       }).join("") +
       '</tbody></table></div>';
@@ -1232,6 +1349,14 @@
     }
 
     var appEl = document.getElementById("app");
+    if (appEl) {
+      appEl.addEventListener("click", function (e) {
+        var b = e.target.closest ? e.target.closest(".recv-btn") : null;
+        if (!b) return;
+        var r = recvRows[parseInt(b.getAttribute("data-recv"), 10)];
+        if (r) openReceiveDialog(r);
+      });
+    }
     if (appEl && window.MutationObserver) {
       new MutationObserver(scheduleStickyUpdate).observe(appEl, { childList: true, subtree: true });
     }

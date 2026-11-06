@@ -1,4 +1,4 @@
-"""把網頁「物料儲位查詢」送出的編輯(類別/儲放地點/儲位)寫回 WMS.xlsx 的「庫存物料」工作表 E~G 欄。
+"""把網頁送出的資料寫回 WMS.xlsx:(1)「物料儲位查詢」的編輯(類別/儲放地點/儲位)-> 「庫存物料」工作表 E~G 欄;(2)物料卡片的「收料」-> 「收料」工作表,逐列接在既有資料後面。
 
 流程:向 Apps Script 中繼取回待處理修改 -> 備份 -> 寫入主檔 -> 複製到雲端硬碟 -> 回報已處理。
 有寫入時結束代碼為 10(讓排程接著重新產生 data.json 並發布),沒有事做為 0,失敗為 1。
@@ -90,6 +90,77 @@ def set_text(cell, v):
     cell.data_type = "s"  # 以 = + - @ 開頭的文字也要當一般文字,不能被當成公式
 
 
+RECEIPT_SHEET = "收料"
+RECEIPT_HEADERS = ["日期", "廠商", "採購單號", "品號", "品名", "數量"]
+
+
+def load_receipts_done(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return set(json.load(f))
+    except Exception:
+        return set()
+
+
+def remember_receipts(path, ids):
+    """記下已寫入主檔的收料 id,萬一回報中繼失敗,下次不會重複寫入同一筆。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            old = json.load(f)
+    except Exception:
+        old = []
+    merged = (old + [i for i in ids if i not in old])[-2000:]
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(merged, f)
+
+
+def apply_receipts(wb, receipts, state_path):
+    """把網頁送出的收料,逐列接在「收料」工作表既有資料後面(不覆蓋原有資料)。
+    欄位依第 1 列標題名稱對應:日期、廠商、採購單號、品號、品名、數量。
+    回傳 (已寫入, 未處理, 重複略過)。"""
+    if RECEIPT_SHEET not in wb.sheetnames:
+        ws = wb.create_sheet(RECEIPT_SHEET)
+        ws.append(RECEIPT_HEADERS)
+        log("主檔沒有工作表「%s」,已建立" % RECEIPT_SHEET)
+    ws = wb[RECEIPT_SHEET]
+
+    col_of = {}
+    for c in range(1, ws.max_column + 1):
+        h = str(ws.cell(1, c).value or "").strip()
+        if h:
+            col_of[h] = c
+    missing = [h for h in RECEIPT_HEADERS if h not in col_of]
+    if missing:
+        log("工作表「%s」標題列缺少欄位 %s,收料留待處理" % (RECEIPT_SHEET, "、".join(missing)))
+        return [], list(receipts), []
+
+    last = 1
+    for r in range(ws.max_row, 1, -1):
+        if any(ws.cell(r, c).value not in (None, "") for c in col_of.values()):
+            last = r
+            break
+
+    done_ids = load_receipts_done(state_path)
+    done, skipped = [], []
+    for rec in sorted(receipts, key=lambda x: x.get("ts", 0)):
+        if rec.get("id") in done_ids:
+            skipped.append(rec)
+            continue
+        last += 1
+        when = datetime.datetime.fromtimestamp(rec.get("ts", time.time() * 1000) / 1000)
+        c = ws.cell(last, col_of["日期"], when.date())
+        c.number_format = "yyyy-mm-dd"
+        set_text(ws.cell(last, col_of["廠商"]), rec.get("vendor"))
+        set_text(ws.cell(last, col_of["採購單號"]), rec.get("po"))
+        set_text(ws.cell(last, col_of["品號"]), rec.get("code"))
+        set_text(ws.cell(last, col_of["品名"]), rec.get("name"))
+        qty = float(rec.get("qty") or 0)
+        ws.cell(last, col_of["數量"], int(qty) if qty == int(qty) else qty)
+        done.append(rec)
+        log("收料已寫入第 %d 列: %s 採購單 %s 品號 %s 數量 %s" % (last, rec.get("vendor"), rec.get("po"), rec.get("code"), rec.get("qty")))
+    return done, [], skipped
+
+
 def backup(master, backup_dir):
     os.makedirs(backup_dir, exist_ok=True)
     name = "WMS_%s.xlsx" % datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -132,41 +203,51 @@ def main():
         log("中繼回應錯誤: %s" % res.get("error"))
         return 1
     edits = res.get("edits", [])
-    if not edits:
+    receipts = res.get("receipts", [])
+    if not edits and not receipts:
         return 0
 
     master_dir, master_name = os.path.split(args.master)
     if os.path.exists(os.path.join(master_dir, "~$" + master_name)):
-        log("主檔目前被 Excel 開啟,%d 筆修改留待下次處理" % len(edits))
+        log("主檔目前被 Excel 開啟,%d 筆修改、%d 筆收料留待下次處理" % (len(edits), len(receipts)))
         return 0
 
+    state_path = os.path.join(os.path.dirname(args.log) or HERE, "receipts_done.json")
+    done, failed = [], []
+    r_done, r_failed, r_skipped = [], [], []
     try:
         backup(args.master, args.backup_dir)
         wb = openpyxl.load_workbook(args.master)
-        if SHEET not in wb.sheetnames:
-            log("主檔沒有工作表「%s」,中止" % SHEET)
-            return 1
-        ws = wb[SHEET]
-        header = [str(ws.cell(1, c).value or "").strip() for c in range(1, 8)]
-        if header != HEADERS:
-            log("工作表「%s」標題列不符,中止: %s" % (SHEET, header))
-            return 1
 
-        done, failed = [], []
-        for e in sorted(edits, key=lambda x: x.get("ts", 0)):
-            r = locate(ws, e)
-            if r is None:
-                failed.append(e)
-                log("找不到對應列,略過: %s (%s) 原列號 %s" % (e.get("code"), norm(e.get("name")), e.get("row")))
-                continue
-            set_text(ws.cell(r, 5), e.get("category"))
-            set_text(ws.cell(r, 6), e.get("location"))
-            set_text(ws.cell(r, 7), e.get("bin"))
-            done.append(e)
-            log("已寫入第 %d 列 %s: 類別=%s 儲放地點=%s 儲位=%s" % (r, e["code"], e.get("category"), e.get("location"), e.get("bin")))
+        if edits:
+            if SHEET not in wb.sheetnames:
+                log("主檔沒有工作表「%s」,中止" % SHEET)
+                return 1
+            ws = wb[SHEET]
+            header = [str(ws.cell(1, c).value or "").strip() for c in range(1, 8)]
+            if header != HEADERS:
+                log("工作表「%s」標題列不符,中止: %s" % (SHEET, header))
+                return 1
 
-        if done:
+            for e in sorted(edits, key=lambda x: x.get("ts", 0)):
+                r = locate(ws, e)
+                if r is None:
+                    failed.append(e)
+                    log("找不到對應列,略過: %s (%s) 原列號 %s" % (e.get("code"), norm(e.get("name")), e.get("row")))
+                    continue
+                set_text(ws.cell(r, 5), e.get("category"))
+                set_text(ws.cell(r, 6), e.get("location"))
+                set_text(ws.cell(r, 7), e.get("bin"))
+                done.append(e)
+                log("已寫入第 %d 列 %s: 類別=%s 儲放地點=%s 儲位=%s" % (r, e["code"], e.get("category"), e.get("location"), e.get("bin")))
+
+        if receipts:
+            r_done, r_failed, r_skipped = apply_receipts(wb, receipts, state_path)
+
+        if done or r_done:
             wb.save(args.master)
+            if r_done:
+                remember_receipts(state_path, [x["id"] for x in r_done])
             try:
                 shutil.copy2(args.master, args.drive_copy)
             except Exception as ex:
@@ -178,13 +259,15 @@ def main():
         log("處理失敗: %s" % ex)
         return 1
 
-    ids = [e["id"] for e in done + failed if e.get("id")]
-    try:
-        call(endpoint, {"action": "ack", "key": sync_key, "ids": ",".join(ids)})
-    except Exception as ex:
-        log("警告: 回報已處理失敗,下次可能重複處理(寫入內容相同,不影響結果): %s" % ex)
+    ids = [e["id"] for e in done + failed + r_done + r_skipped if e.get("id")]
+    if ids:
+        try:
+            call(endpoint, {"action": "ack", "key": sync_key, "ids": ",".join(ids)})
+        except Exception as ex:
+            log("警告: 回報已處理失敗,下次可能重複處理(儲位修改內容相同不影響;收料已用 receipts_done.json 防重複): %s" % ex)
 
-    log("完成: 寫入 %d 筆,略過 %d 筆" % (len(done), len(failed)))
+    log("完成: 儲位修改 寫入 %d 筆,略過 %d 筆;收料 寫入 %d 筆,重複略過 %d 筆,未處理 %d 筆"
+        % (len(done), len(failed), len(r_done), len(r_skipped), len(r_failed)))
     return EXIT_APPLIED if done else 0
 
 

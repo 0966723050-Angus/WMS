@@ -206,6 +206,40 @@ function saveEdit_(body, user) {
   return { ok: true, id: id };
 }
 
+// ---------- 收料(網頁送出,本機排程寫入 WMS.xlsx 的「收料」工作表) ----------
+
+var RECEIPT_PREFIX = 'r_';
+var MAX_RECEIPTS = 500;
+
+function listReceipts_() {
+  var all = props_().getProperties();
+  var out = [];
+  Object.keys(all).forEach(function (k) {
+    if (k.indexOf(RECEIPT_PREFIX) !== 0) return;
+    try { out.push(JSON.parse(all[k])); } catch (err) { /* 略過壞資料 */ }
+  });
+  out.sort(function (a, b) { return a.ts - b.ts; });
+  return out;
+}
+
+function saveReceipt_(body, user) {
+  var code = clip_(body.code, 60);
+  var qty = Number(body.qty);
+  if (!code) return { ok: false, error: '缺少品號' };
+  if (!(qty > 0) || qty > 10000000) return { ok: false, error: '數量必須大於 0' };
+  qty = Math.round(qty * 1000) / 1000;
+  if (listReceipts_().length >= MAX_RECEIPTS) return { ok: false, error: '待處理的收料過多,請稍後再試' };
+  var ts = Date.now();
+  var id = ts + '_' + Math.random().toString(36).slice(2, 8);
+  var rec = {
+    id: id, ts: ts, by: user.email,
+    vendor: clip_(body.vendor, 100), po: clip_(body.po, 100),
+    code: code, name: clip_(body.name, 200), qty: qty, order: clip_(body.order, 60)
+  };
+  props_().setProperty(RECEIPT_PREFIX + id, JSON.stringify(rec));
+  return { ok: true, id: id };
+}
+
 // ---------- 編輯畫面的下拉選單項目(類別 / 儲放地點) ----------
 // 存在指令碼屬性 OPTIONS(JSON:{category:[...], location:[...]}),所有登入者共用。
 // 某欄位尚未設定過時回傳 null,由前端用現有資料的值當初始選項。
@@ -277,6 +311,7 @@ function doPost(e) {
 
     if (action === 'pending') return json_({ ok: true, pending: listPending_() });
     if (action === 'save') return json_(saveEdit_(body, me));
+    if (action === 'receive') return json_(saveReceipt_(body, me));
     if (action === 'options_get') return json_({ ok: true, options: getOptions_() });
     if (action === 'options_change') return json_(changeOption_(body));
     if (String(action).indexOf('admin_') === 0) {
@@ -300,7 +335,7 @@ function doGet(e) {
       var err = checkSyncKey_(p.key);
       if (err) return json_({ ok: false, error: err });
 
-      if (p.action === 'pull') return json_({ ok: true, edits: listPending_() });
+      if (p.action === 'pull') return json_({ ok: true, edits: listPending_(), receipts: listReceipts_() });
 
       if (p.action === 'set_data_key') {
         if (!/^[A-Za-z0-9+\/]{43}=$/.test(String(p.dataKey || ''))) return json_({ ok: false, error: '金鑰格式不正確' });
@@ -311,10 +346,13 @@ function doGet(e) {
       var removed = 0;
       String(p.ids || '').split(',').forEach(function (id) {
         id = id.trim();
-        if (id && props_().getProperty(PREFIX + id) !== null) {
-          props_().deleteProperty(PREFIX + id);
-          removed++;
-        }
+        if (!id) return;
+        [PREFIX, RECEIPT_PREFIX].forEach(function (pre) {
+          if (props_().getProperty(pre + id) !== null) {
+            props_().deleteProperty(pre + id);
+            removed++;
+          }
+        });
       });
       return json_({ ok: true, removed: removed });
     }

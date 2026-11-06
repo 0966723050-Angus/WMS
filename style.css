@@ -471,6 +471,35 @@ a:hover { text-decoration: underline; }
   color: var(--text);
   font-size: 16px;
 }
+/* 收料鈕與確認視窗 */
+.material-card-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+.recv-btn {
+  padding: 6px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--brand);
+  background: var(--brand);
+  color: var(--brand-contrast);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.recv-btn:hover { background: var(--brand-dark); border-color: var(--brand-dark); }
+.recv-info .field { margin-top: 0; }
+.recv-info-row { display: flex; gap: 10px; padding: 3px 0; font-size: 14px; }
+.recv-info-row .k { color: var(--text-muted); flex: 0 0 64px; }
+.recv-info-row .v { font-weight: 700; word-break: break-all; }
+.modal input[type="number"], .modal select {
+  display: block;
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 16px;
+}
 .modal .field { margin-top: 10px; }
 .field-label { display: block; font-size: 13px; color: var(--text-muted); margin-bottom: 4px; }
 
