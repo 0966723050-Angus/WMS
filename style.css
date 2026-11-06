@@ -131,8 +131,14 @@ a:hover { text-decoration: underline; }
   .brand-sub { font-size: 10px; }
 }
 
+@media (max-width: 440px) {
+  .icon-btn-group { gap: 5px !important; padding-left: 6px !important; padding-right: 6px !important; }
+  .icon-btn { padding: 0 9px !important; font-size: 12px !important; gap: 4px !important; }
+  .icon-btn svg { width: 15px !important; height: 15px !important; }
+}
 .icon-btn-group {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: center;
   gap: 8px;
@@ -471,6 +477,17 @@ a:hover { text-decoration: underline; }
   color: var(--text);
   font-size: 16px;
 }
+/* ERP 頁面 */
+.erp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 8px; }
+.erp-tile {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 96px; padding: 16px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); color: var(--text); text-decoration: none;
+}
+.erp-tile:hover { background: var(--surface-alt); border-color: var(--brand); text-decoration: none; }
+.erp-tile-title { font-size: 18px; font-weight: 700; }
+
 /* 收料鈕與確認視窗 */
 .material-card-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
 .recv-btn {

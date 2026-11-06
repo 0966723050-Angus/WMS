@@ -405,6 +405,7 @@
     if (parts[0] === "order" && parts[1]) return { view: "order", orderNo: parts[1] };
     if (parts[0] === "storage") return { view: "storage" };
     if (parts[0] === "admin") return { view: "admin" };
+    if (parts[0] === "erp") return { view: "erp", sub: parts[1] || "" };
     return { view: "home" };
   }
 
@@ -428,6 +429,8 @@
       renderStorage(app);
     } else if (route.view === "admin") {
       renderAdmin(app);
+    } else if (route.view === "erp") {
+      renderErp(app, route.sub);
     } else {
       renderHome(app);
     }
@@ -519,6 +522,34 @@
 
       list.appendChild(card);
     });
+  }
+
+  // ---------- ERP 頁面(進貨單 / 製令領料單;功能建置中) ----------
+
+  var ERP_PAGES = {
+    receipt: { title: "進貨單" },
+    issue: { title: "製令領料單" }
+  };
+
+  function renderErp(app, sub) {
+    var page = ERP_PAGES[sub];
+    if (sub && !page) { location.hash = "#/erp"; return; }
+
+    if (!page) {
+      app.innerHTML =
+        '<div class="breadcrumb"><a href="#/">首頁</a> / ERP</div>' +
+        '<h1 class="page-title">ERP</h1>' +
+        '<div class="erp-grid">' +
+          '<a class="erp-tile" href="#/erp/receipt"><span class="erp-tile-title">進貨單</span></a>' +
+          '<a class="erp-tile" href="#/erp/issue"><span class="erp-tile-title">製令領料單</span></a>' +
+        '</div>';
+      return;
+    }
+
+    app.innerHTML =
+      '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/erp">ERP</a> / ' + esc(page.title) + '</div>' +
+      '<h1 class="page-title">' + esc(page.title) + '</h1>' +
+      '<div class="empty-state">此功能建置中</div>';
   }
 
   // ---------- Storage / inventory lookup (with edit) ----------
