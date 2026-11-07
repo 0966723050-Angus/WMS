@@ -89,16 +89,46 @@ function makeSession_(email) {
   return { token: encodeURIComponent(body) + '.' + sign_(body), exp: exp };
 }
 
-// 目前仍在名單內(且啟用)的使用者;管理者永遠有效
-function userFor_(email) {
+// ---------- 權限 ----------
+// admin 名單管理 / edit 儲位編輯 / erp_receipt 進貨單 / erp_issue 製令領料單 / erp_wms WMS更新
+// 帳號記錄裡沒有 perms 的舊帳號 = 只有「儲位編輯」(維持原本能做的事)。主管理者(ADMIN_EMAIL)永遠全部權限。
+
+var PERM_KEYS = ['admin', 'edit', 'erp_receipt', 'erp_issue', 'erp_wms'];
+var PERM_DEFAULTS = { admin: false, edit: true, erp_receipt: false, erp_issue: false, erp_wms: false };
+
+function normPerms_(p) {
+  var out = {};
+  PERM_KEYS.forEach(function (k) {
+    out[k] = (p && typeof p[k] === 'boolean') ? p[k] : PERM_DEFAULTS[k];
+  });
+  return out;
+}
+
+function allPerms_() {
+  var out = {};
+  PERM_KEYS.forEach(function (k) { out[k] = true; });
+  return out;
+}
+
+function isPrimaryAdmin_(email) {
   var admin = normEmail_(props_().getProperty('ADMIN_EMAIL'));
+  return !!admin && normEmail_(email) === admin;
+}
+
+// 目前仍在名單內(且啟用)的使用者;主管理者永遠有效
+function userFor_(email) {
   var raw = props_().getProperty(USER_PREFIX + email);
   var u = null;
   try { u = raw ? JSON.parse(raw) : null; } catch (err) { u = null; }
-  if (admin && email === admin) return { email: email, name: (u && u.name) || '管理者', isAdmin: true };
-  if (u && u.enabled !== false) return { email: email, name: u.name || '', isAdmin: false };
+  if (isPrimaryAdmin_(email)) return { email: email, name: (u && u.name) || '管理者', isAdmin: true, perms: allPerms_() };
+  if (u && u.enabled !== false) {
+    var perms = normPerms_(u.perms);
+    return { email: email, name: u.name || '', isAdmin: perms.admin, perms: perms };
+  }
   return null;
 }
+
+function denied_(what) { return json_({ ok: false, error: '您沒有「' + what + '」的權限' }); }
 
 function checkSession_(token) {
   token = String(token || '');
@@ -122,15 +152,17 @@ function listUsers_() {
     if (k.indexOf(USER_PREFIX) !== 0) return;
     try {
       var u = JSON.parse(all[k]);
-      out.push({ email: k.slice(USER_PREFIX.length), name: u.name || '', enabled: u.enabled !== false, addedAt: u.addedAt || 0 });
+      out.push({ email: k.slice(USER_PREFIX.length), name: u.name || '', enabled: u.enabled !== false, addedAt: u.addedAt || 0, perms: normPerms_(u.perms) });
     } catch (err) { /* 略過壞資料 */ }
   });
   out.sort(function (a, b) { return a.email < b.email ? -1 : a.email > b.email ? 1 : 0; });
   return out;
 }
 
-function putUser_(email, name, enabled, addedAt) {
-  props_().setProperty(USER_PREFIX + email, JSON.stringify({ name: clip_(name, 80), enabled: enabled !== false, addedAt: addedAt || Date.now() }));
+function putUser_(email, name, enabled, addedAt, perms) {
+  props_().setProperty(USER_PREFIX + email, JSON.stringify({
+    name: clip_(name, 80), enabled: enabled !== false, addedAt: addedAt || Date.now(), perms: normPerms_(perms)
+  }));
 }
 
 function adminAction_(body, user) {
@@ -148,7 +180,8 @@ function adminAction_(body, user) {
       if (!isEmail_(email)) { skipped.push(String(it && it.email || '').slice(0, 60) + '(格式不正確)'); return; }
       if (have[email]) { skipped.push(email + '(已存在)'); return; }
       if (existing.length + added >= MAX_USERS) { skipped.push(email + '(名單已達上限)'); return; }
-      putUser_(email, it.name, true);
+      if (isPrimaryAdmin_(email) && !isPrimaryAdmin_(user.email)) { skipped.push(email + '(主管理者)'); return; }
+      putUser_(email, it.name, true, 0, body.perms);
       have[email] = true;
       added++;
     });
@@ -160,6 +193,9 @@ function adminAction_(body, user) {
   if (!raw) return { ok: false, error: '名單中找不到此帳號' };
   var old = JSON.parse(raw);
 
+  // 主管理者的記錄只有主管理者自己能改(避免被其他有「名單管理」權限的人刪除或改名)
+  if (isPrimaryAdmin_(email0) && !isPrimaryAdmin_(user.email)) return { ok: false, error: '只有主管理者可以修改主管理者' };
+
   if (body.action === 'admin_delete') {
     p.deleteProperty(USER_PREFIX + email0);
     return { ok: true, users: listUsers_() };
@@ -169,9 +205,11 @@ function adminAction_(body, user) {
     var newEmail = body.newEmail ? normEmail_(body.newEmail) : email0;
     if (!isEmail_(newEmail)) return { ok: false, error: 'Email 格式不正確' };
     if (newEmail !== email0 && p.getProperty(USER_PREFIX + newEmail)) return { ok: false, error: '新的 Email 已在名單中' };
+    if (newEmail !== email0 && isPrimaryAdmin_(newEmail) && !isPrimaryAdmin_(user.email)) return { ok: false, error: '不能改成主管理者的帳號' };
     var enabled = body.enabled === undefined ? old.enabled !== false : !!body.enabled;
     if (newEmail !== email0) p.deleteProperty(USER_PREFIX + email0);
-    putUser_(newEmail, body.name === undefined ? old.name : body.name, enabled, old.addedAt);
+    putUser_(newEmail, body.name === undefined ? old.name : body.name, enabled, old.addedAt,
+      body.perms === undefined ? old.perms : body.perms);
     return { ok: true, users: listUsers_() };
   }
   return { ok: false, error: '不支援的動作' };
@@ -372,17 +410,23 @@ function doPost(e) {
       var key = props_().getProperty('DATA_KEY');
       if (!key) return json_({ ok: false, error: '系統尚未完成設定(缺少資料金鑰),請聯絡管理者' });
       var s = makeSession_(user.email);
-      return json_({ ok: true, email: user.email, name: user.name || info.name, isAdmin: user.isAdmin, key: key, session: s.token, exp: s.exp });
+      return json_({ ok: true, email: user.email, name: user.name || info.name, isAdmin: user.isAdmin, perms: user.perms, key: key, session: s.token, exp: s.exp });
     }
 
     var me = checkSession_(body.session);
     if (!me) return json_({ ok: false, needLogin: true, error: '登入已失效,請重新登入' });
 
+    // 目前的權限(管理者可能在登入後才調整,前端開啟時會用這個更新)
+    if (action === 'me') return json_({ ok: true, email: me.email, name: me.name, isAdmin: me.isAdmin, perms: me.perms });
+
     if (action === 'pending') return json_({ ok: true, pending: listPending_() });
-    if (action === 'save') return json_(saveEdit_(body, me));
+    if (action === 'save') {
+      if (!me.perms.edit) return denied_('儲位編輯');
+      return json_(saveEdit_(body, me));
+    }
     if (action === 'receive') return json_(saveReceipt_(body, me));
     if (action === 'wms_status' || action === 'wms_update') {
-      if (!me.isAdmin) return json_({ ok: false, error: '只有管理者可以使用' });
+      if (!me.perms.erp_wms) return denied_('WMS更新');
       return json_(action === 'wms_update' ? requestWmsUpdate_(me) : wmsView_());
     }
     if (action === 'sched_get' || action === 'sched_set' || action === 'sched_delete') {
@@ -390,7 +434,10 @@ function doPost(e) {
       return json_(scheduleAction_(body, me));
     }
     if (action === 'options_get') return json_({ ok: true, options: getOptions_() });
-    if (action === 'options_change') return json_(changeOption_(body));
+    if (action === 'options_change') {
+      if (!me.perms.edit) return denied_('儲位編輯');
+      return json_(changeOption_(body));
+    }
     if (String(action).indexOf('admin_') === 0) {
       if (!me.isAdmin) return json_({ ok: false, error: '只有管理者可以使用' });
       return json_(adminAction_(body, me));

@@ -111,10 +111,35 @@
 
   function editEndpoint() { return cfg().editEndpoint || ""; }
 
+  // 權限項目(帳號設定的勾選項目;伺服器端也會逐項檢查)
+  var PERM_DEFS = [
+    { key: "admin", label: "名單管理" },
+    { key: "edit", label: "儲位編輯" },
+    { key: "erp_receipt", label: "ERP:進貨單" },
+    { key: "erp_issue", label: "ERP:製令領料單" },
+    { key: "erp_wms", label: "ERP:WMS更新" }
+  ];
+  var PERM_DEFAULT_NEW = { admin: false, edit: true, erp_receipt: false, erp_issue: false, erp_wms: false };
+
+  function can(perm) { return !!(session && session.perms && session.perms[perm]); }
+
+  function canSeeErp() {
+    return can("admin") || can("erp_receipt") || can("erp_issue") || can("erp_wms");
+  }
+
+  // 舊版登入資料沒有 perms:管理者視為全部權限,其他人視為只有儲位編輯
+  function withPerms(s) {
+    if (s && !s.perms) {
+      s.perms = {};
+      PERM_DEFS.forEach(function (d) { s.perms[d.key] = s.isAdmin ? true : !!PERM_DEFAULT_NEW[d.key]; });
+    }
+    return s;
+  }
+
   function loadSession() {
     try {
       var s = JSON.parse(lsGet(SESSION_KEY) || "null");
-      return s && s.exp > Date.now() + 60000 && s.key && s.session ? s : null;
+      return s && s.exp > Date.now() + 60000 && s.key && s.session ? withPerms(s) : null;
     } catch (e) { return null; }
   }
 
@@ -183,7 +208,9 @@
     var info = document.getElementById("user-info");
     var adminBtn = document.getElementById("admin-btn");
     document.body.classList.toggle("logged-out", !session);
-    if (adminBtn) adminBtn.hidden = !(session && session.isAdmin);
+    var erpBtn = document.getElementById("erp-btn");
+    if (adminBtn) adminBtn.hidden = !can("admin");
+    if (erpBtn) erpBtn.hidden = !canSeeErp();
     if (!info) return;
     if (!session) { info.innerHTML = ""; return; }
     info.innerHTML = '已登入:' + esc(session.name || session.email) + ' (' + esc(session.email) + ') · <a href="#" id="logout-link">登出</a>';
@@ -242,7 +269,7 @@
     api("auth", { idToken: resp.credential })
       .then(function (res) {
         if (!res.ok) throw new Error(res.error || "登入失敗");
-        setSession({ email: res.email, name: res.name, isAdmin: !!res.isAdmin, key: res.key, session: res.session, exp: res.exp });
+        setSession(withPerms({ email: res.email, name: res.name, isAdmin: !!res.isAdmin, perms: res.perms, key: res.key, session: res.session, exp: res.exp }));
         startApp();
       })
       .catch(function (err) { msgEl.textContent = err.message; });
@@ -252,6 +279,22 @@
     updateUserUi();
     render();
     loadData().then(render).catch(handleLoadError);
+    refreshMe();
+  }
+
+  // 管理者可能在登入後才調整權限:開啟時向伺服器取得最新權限,有變動就更新畫面
+  function refreshMe() {
+    if (!session) return;
+    api("me").then(function (res) {
+      if (!res || !res.ok || !res.perms || !session) return;
+      var changed = JSON.stringify(res.perms) !== JSON.stringify(session.perms);
+      session.perms = res.perms;
+      session.isAdmin = !!res.isAdmin;
+      if (res.name) session.name = res.name;
+      setSession(session);
+      updateUserUi();
+      if (changed && state.data) render();
+    }).catch(function () { /* 讀不到就沿用目前權限;伺服器端仍會逐項檢查 */ });
   }
 
   function handleLoadError(err) {
@@ -265,8 +308,31 @@
 
   // ---------- Admin: 登入名單管理 ----------
 
+  // 權限勾選方塊(新增帳號 / 編輯帳號共用)
+  function permBoxesHtml(prefix, perms) {
+    return '<div class="perm-grid">' + PERM_DEFS.map(function (d) {
+      return '<label class="check perm-item"><input type="checkbox" data-perm="' + d.key + '" id="' + prefix + d.key + '"' +
+        (perms && perms[d.key] ? ' checked' : '') + ' /> ' + esc(d.label) + '</label>';
+    }).join("") + '</div>';
+  }
+
+  function readPerms(root) {
+    var out = {};
+    PERM_DEFS.forEach(function (d) {
+      var box = root.querySelector('input[data-perm="' + d.key + '"]');
+      out[d.key] = !!(box && box.checked);
+    });
+    return out;
+  }
+
+  function permSummaryHtml(perms) {
+    var on = PERM_DEFS.filter(function (d) { return perms && perms[d.key]; });
+    if (!on.length) return '<span class="perm-none">沒有任何功能權限(只能查詢)</span>';
+    return on.map(function (d) { return '<span class="perm-chip">' + esc(d.label) + '</span>'; }).join("");
+  }
+
   function renderAdmin(app) {
-    if (!session || !session.isAdmin) {
+    if (!can("admin")) {
       location.hash = "#/";
       return;
     }
@@ -276,6 +342,8 @@
       '<div class="admin-card">' +
         '<h3>新增帳號</h3>' +
         '<textarea id="adm-new" rows="4" placeholder="每行一個帳號,姓名可省略\n例如:\nsomeone@atk.com.tw 王小明\nother@atk.com.tw"></textarea>' +
+        '<div class="perm-title">這些帳號的權限(可之後再個別修改)</div>' +
+        permBoxesHtml("new-", PERM_DEFAULT_NEW) +
         '<div class="admin-actions"><button type="button" class="btn" id="adm-add">新增</button></div>' +
         '<p class="modal-msg" id="adm-msg"></p>' +
       '</div>' +
@@ -292,7 +360,7 @@
       }).filter(Boolean);
       if (!users.length) { msg.textContent = "請輸入要新增的帳號"; return; }
       msg.textContent = "新增中…";
-      api("admin_add", { users: users }).then(function (res) {
+      api("admin_add", { users: users, perms: readPerms(app.querySelector(".admin-card")) }).then(function (res) {
         if (!res.ok) throw new Error(res.error || "新增失敗");
         document.getElementById("adm-new").value = "";
         msg.textContent = "已新增 " + res.added + " 個" + (res.skipped.length ? ";略過:" + res.skipped.join("、") : "");
@@ -350,6 +418,7 @@
             '<div class="material-spec">' + esc(u.name || "(未填姓名)") + '</div></div>' +
             '<span class="status-pill ' + (u.enabled ? 'status-arrived' : 'status-neutral') + '">' + (u.enabled ? '啟用' : '停用') + '</span>' +
           '</div>' +
+          '<div class="perm-summary">' + permSummaryHtml(u.perms) + '</div>' +
           '<div class="admin-actions">' +
             '<button type="button" class="btn btn-secondary btn-sm" data-act="edit" data-email="' + esc(u.email) + '">編輯</button>' +
             '<button type="button" class="btn btn-secondary btn-sm" data-act="toggle" data-email="' + esc(u.email) + '">' + (u.enabled ? '停用' : '啟用') + '</button>' +
@@ -368,6 +437,8 @@
           '<label>Google 帳號(Email)<input type="text" id="usr-email" maxlength="48" value="' + esc(user.email) + '" /></label>' +
           '<label>姓名/備註<input type="text" id="usr-name" maxlength="80" value="' + esc(user.name) + '" /></label>' +
           '<label class="check"><input type="checkbox" id="usr-enabled"' + (user.enabled ? ' checked' : '') + ' /> 啟用(取消勾選即停用)</label>' +
+          '<div class="perm-title">權限</div>' +
+          permBoxesHtml("usr-", user.perms) +
           '<p class="modal-msg" id="usr-msg"></p>' +
           '<div class="modal-actions">' +
             '<button type="button" class="btn btn-secondary" id="usr-cancel">取消</button>' +
@@ -387,7 +458,8 @@
         email: user.email,
         newEmail: newEmail,
         name: modal.querySelector("#usr-name").value.trim(),
-        enabled: modal.querySelector("#usr-enabled").checked
+        enabled: modal.querySelector("#usr-enabled").checked,
+        perms: readPerms(modal)
       }).then(close).catch(function (err) {
         modal.querySelector("#usr-msg").textContent = err.message;
         btn.disabled = false;
@@ -543,8 +615,8 @@
   };
 
   var ERP_PAGES = {
-    receipt: { title: "進貨單" },
-    issue: { title: "製令領料單" }
+    receipt: { title: "進貨單", perm: "erp_receipt" },
+    issue: { title: "製令領料單", perm: "erp_issue" }
   };
 
   // 「WMS更新」:僅管理者。送出請求後由電腦端約每 5 分鐘檢查一次並啟動排程「WMS 自動更新」,
@@ -741,31 +813,37 @@
   }
 
   function renderErp(app, sub) {
+    if (!canSeeErp()) { location.hash = "#/"; return; } // 沒有任何 ERP 權限
     if (sub === "settings") { renderErpSettings(app); return; }
     var page = ERP_PAGES[sub];
     if (sub && !page) { location.hash = "#/erp"; return; }
+    if (page && !can(page.perm)) { location.hash = "#/erp"; return; } // 沒有這個按鍵的權限
 
     if (!page) {
-      var isAdmin = !!(session && session.isAdmin);
+      var isAdmin = can("admin");
       app.innerHTML =
         '<div class="breadcrumb"><a href="#/">首頁</a> / ERP</div>' +
         '<h1 class="page-title page-title-row"><span>ERP</span>' +
           (isAdmin ? '<a class="btn btn-sm btn-secondary" href="#/erp/settings">⚙ 設定</a>' : '') +
         '</h1>' +
         '<div class="erp-grid">' +
-          '<a class="erp-tile" href="#/erp/receipt"><span class="erp-tile-tag">建置中</span>' +
-            '<span class="erp-tile-icon">' + ERP_ICONS.receipt + '</span><span class="erp-tile-title">進貨單</span></a>' +
-          '<a class="erp-tile" href="#/erp/issue"><span class="erp-tile-tag">建置中</span>' +
-            '<span class="erp-tile-icon">' + ERP_ICONS.issue + '</span><span class="erp-tile-title">製令領料單</span></a>' +
-          (isAdmin
+          (can("erp_receipt")
+            ? '<a class="erp-tile" href="#/erp/receipt"><span class="erp-tile-tag">建置中</span>' +
+              '<span class="erp-tile-icon">' + ERP_ICONS.receipt + '</span><span class="erp-tile-title">進貨單</span></a>'
+            : '') +
+          (can("erp_issue")
+            ? '<a class="erp-tile" href="#/erp/issue"><span class="erp-tile-tag">建置中</span>' +
+              '<span class="erp-tile-icon">' + ERP_ICONS.issue + '</span><span class="erp-tile-title">製令領料單</span></a>'
+            : '') +
+          (can("erp_wms")
             ? '<button type="button" class="erp-tile erp-tile-wms" id="wms-update-btn">' +
               '<span class="erp-tile-icon">' + ERP_ICONS.wms + '</span><span class="erp-tile-title">WMS更新</span>' +
               '<span class="erp-tile-note" id="wms-update-note"></span>' +
               '<span class="erp-tile-note" id="wms-sched-note"></span></button>'
             : '') +
         '</div>';
-      if (isAdmin) {
-        setupWmsUpdate();
+      if (can("erp_wms")) setupWmsUpdate();
+      if (isAdmin && can("erp_wms")) {
         api("sched_get").then(function (res) {
           var n = document.getElementById("wms-sched-note");
           if (n && res.ok) n.textContent = scheduleSummary((res.schedules || {}).wms);
@@ -849,9 +927,9 @@
 
   function renderStorage(app) {
     var html = '';
-    html += '<div class="breadcrumb"><a href="#/">首頁</a> / 物料儲位查詢</div>';
-    html += '<h1 class="page-title">物料儲位查詢<span class="sub">材料品號/品名/規格/類別皆可用關鍵字查詢' +
-      ';點擊卡片可編輯類別/儲放地點/儲位</span></h1>';
+    html += '<div class="breadcrumb"><a href="#/">首頁</a> / 庫存查詢</div>';
+    html += '<h1 class="page-title">庫存查詢<span class="sub">材料品號/品名/規格/類別皆可用關鍵字查詢' +
+      (can("edit") ? ';點擊卡片可編輯類別/儲放地點/儲位' : '') + '</span></h1>';
     html += '<div class="toolbar">' +
       '<div class="search-wrap">' +
         '<input type="search" id="storage-search" placeholder="輸入材料品號、品名、規格或類別關鍵字" autocomplete="off" value="' + esc(storageQuery) + '" />' +
@@ -932,7 +1010,7 @@
       return;
     }
 
-    var canEdit = !!session;
+    var canEdit = can("edit");
     container.innerHTML = '<div class="storage-list">' + results.map(function (r) {
       var editable = canEdit && r.row;
       return (
