@@ -693,7 +693,8 @@ button.erp-tile:disabled:hover { border-color: var(--border); box-shadow: var(--
     align-items: center; justify-items: start; text-align: left;
     min-height: 0; padding: 16px;
   }
-  .erp-tile-icon { width: 48px; height: 48px; grid-row: 1 / span 3; align-self: start; }
+  .erp-tile-icon { width: 48px; height: 48px; }
+  .erp-tile-wms .erp-tile-icon { grid-row: 1 / span 3; align-self: start; }
   .erp-tile-title { font-size: 17px; }
   .erp-tile-note { text-align: left; }
   .erp-tile-tag { top: 50%; transform: translateY(-50%); }
