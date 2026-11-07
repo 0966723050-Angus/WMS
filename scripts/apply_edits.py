@@ -114,7 +114,7 @@ def start_wms_update(endpoint, sync_key, req):
 
 
 # ---------- 自動執行排程(網頁 ERP 頁「設定」) ----------
-# 設定存在 Apps Script,每次 pull 一併取回:{job: {enabled, start, end, interval, updatedAt}}
+# 設定存在 Apps Script,每次 pull 一併取回:{job: {enabled, start, end, interval, skipSat, skipSun, updatedAt}}
 # 每天 start 起每 interval 分鐘一個時段,到 end 為止;本程式每 5 分鐘執行一次,
 # 遇到「目前所在時段」還沒執行過就啟動。已執行的時段記在 schedule_state.json。
 
@@ -166,6 +166,8 @@ def run_due_schedules(endpoint, sync_key, schedules):
         spec = SCHED_JOBS.get(job)
         if not spec or not isinstance(cfg, dict) or not cfg.get("enabled"):
             continue
+        if (now.weekday() == 5 and cfg.get("skipSat")) or (now.weekday() == 6 and cfg.get("skipSun")):
+            continue  # 設定為週六 / 週日不執行
         slot = current_slot(cfg, now)
         if slot is None:
             continue

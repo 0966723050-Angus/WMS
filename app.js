@@ -597,11 +597,16 @@
 
   function pad2(n) { return (n < 10 ? "0" : "") + n; }
 
-  // 下一次執行時間(與電腦端判斷方式相同:每天 start 起每 interval 分鐘,到 end 為止)
+  function skipsDay(cfg, date) {
+    return (date.getDay() === 6 && cfg.skipSat) || (date.getDay() === 0 && cfg.skipSun);
+  }
+
+  // 下一次執行時間(與電腦端判斷方式相同:每天 start 起每 interval 分鐘,到 end 為止;略過勾選不執行的週六/週日)
   function nextScheduledRun(cfg, now) {
     var start = hmToMin(cfg.start), end = hmToMin(cfg.end), step = cfg.interval;
-    for (var d = 0; d < 2; d++) {
+    for (var d = 0; d < 8; d++) {
       var day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + d);
+      if (skipsDay(cfg, day)) continue;
       for (var m = start; m <= end; m += step) {
         var t = new Date(day.getTime() + m * 60000);
         if (t > now && t.getTime() >= (cfg.updatedAt || 0)) return t;
@@ -610,13 +615,20 @@
     return null;
   }
 
+  var WEEKDAY_NAMES = ["週日", "週一", "週二", "週三", "週四", "週五", "週六"];
+
   function scheduleSummary(cfg) {
     if (!cfg) return "自動執行:未設定";
-    var s = "自動執行:每天 " + cfg.start + "–" + cfg.end + ",每 " + intervalLabel(cfg.interval);
+    var skip = [cfg.skipSat ? "週六" : "", cfg.skipSun ? "週日" : ""].filter(Boolean);
+    var s = "自動執行:每天" + (skip.length ? "(" + skip.join("、") + "除外)" : "") + " " +
+      cfg.start + "–" + cfg.end + ",每 " + intervalLabel(cfg.interval);
     if (!cfg.enabled) return s + "(已暫停)";
-    var next = nextScheduledRun(cfg, new Date());
-    return s + (next ? ";下次 " + (next.getDate() !== new Date().getDate() ? "明天 " : "") +
-      pad2(next.getHours()) + ":" + pad2(next.getMinutes()) : "");
+    var now = new Date(), next = nextScheduledRun(cfg, now);
+    if (!next) return s;
+    var days = Math.round((new Date(next.getFullYear(), next.getMonth(), next.getDate()) -
+      new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 86400000);
+    var dayLabel = days === 0 ? "" : days === 1 ? "明天 " : WEEKDAY_NAMES[next.getDay()] + " ";
+    return s + ";下次 " + dayLabel + pad2(next.getHours()) + ":" + pad2(next.getMinutes());
   }
 
   function renderErpSettings(app) {
@@ -647,6 +659,10 @@
               '<label>間隔<select class="s-interval">' + SCHED_INTERVALS.map(function (m) {
                 return '<option value="' + m + '"' + (m === cur.interval ? " selected" : "") + '>每 ' + intervalLabel(m) + '</option>';
               }).join("") + '</select></label>' +
+              '<div class="sched-days">' +
+                '<label class="sched-check"><input type="checkbox" class="s-skip-sun"' + (cur.skipSun ? " checked" : "") + ' /> 週日不執行</label>' +
+                '<label class="sched-check"><input type="checkbox" class="s-skip-sat"' + (cur.skipSat ? " checked" : "") + ' /> 週六不執行</label>' +
+              '</div>' +
             '</div>' +
             '<div class="admin-actions">' +
               '<button type="button" class="btn s-save">儲存</button>' +
@@ -680,7 +696,9 @@
           send("sched_set", {
             enabled: card.querySelector(".s-enabled").checked,
             start: start, end: end,
-            interval: parseInt(card.querySelector(".s-interval").value, 10)
+            interval: parseInt(card.querySelector(".s-interval").value, 10),
+            skipSun: card.querySelector(".s-skip-sun").checked,
+            skipSat: card.querySelector(".s-skip-sat").checked
           }, "已儲存「" + job.title + "」的自動執行設定");
         });
 

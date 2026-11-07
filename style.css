@@ -500,6 +500,8 @@ button.erp-tile:disabled { opacity: 0.65; cursor: default; }
 .sched-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end; }
 .sched-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-muted); }
 .sched-form label.sched-check { flex-direction: row; align-items: center; gap: 6px; grid-column: 1 / -1; color: var(--text); font-size: 14px; }
+.sched-days { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px 20px; }
+.sched-form .sched-days label.sched-check { grid-column: auto; }
 .sched-form input[type="time"], .sched-form select {
   padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
   background: var(--bg); color: var(--text); font-size: 16px; font-family: inherit;

@@ -268,8 +268,8 @@ function requestWmsUpdate_(user) {
 }
 
 // ---------- 自動執行排程(ERP 頁「設定」;由本機排程每 5 分鐘取回並依時間啟動) ----------
-// SCHEDULES:{ <job>: { enabled, start: 'HH:MM', end: 'HH:MM', interval: 分鐘, updatedAt, by } }
-// 每天 start 起每 interval 分鐘執行一次,到 end 為止。
+// SCHEDULES:{ <job>: { enabled, start: 'HH:MM', end: 'HH:MM', interval: 分鐘, skipSat, skipSun, updatedAt, by } }
+// 每天 start 起每 interval 分鐘執行一次,到 end 為止;skipSat / skipSun 為 true 時該天不執行。
 
 var SCHEDULES_KEY = 'SCHEDULES';
 var SCHED_JOBS = { wms: 'WMS更新' };   // 可設定自動執行的執行鍵
@@ -297,7 +297,11 @@ function scheduleAction_(body, user) {
     if (!(interval >= SCHED_MIN_INTERVAL && interval <= SCHED_MAX_INTERVAL)) {
       return { ok: false, error: '間隔必須介於 30 分鐘到 24 小時之間' };
     }
-    all[job] = { enabled: body.enabled !== false, start: start, end: end, interval: interval, updatedAt: Date.now(), by: user.email };
+    all[job] = {
+      enabled: body.enabled !== false, start: start, end: end, interval: interval,
+      skipSat: body.skipSat === true, skipSun: body.skipSun === true,   // 勾選的日子不自動執行
+      updatedAt: Date.now(), by: user.email
+    };
   } else {
     return { ok: false, error: '不支援的動作' };
   }
