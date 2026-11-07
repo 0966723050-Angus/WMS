@@ -73,6 +73,15 @@ def wms_task_running():
     return out.returncode == 0 and ('"Running"' in out.stdout or '"執行中"' in out.stdout)
 
 
+def wms_task_last_run():
+    """排程「WMS 自動更新」的上次執行時間(字串,只用來比較前後是否改變)。"""
+    out = subprocess.run(
+        ["powershell", "-NoProfile", "-Command",
+         "(Get-ScheduledTaskInfo -TaskName '%s').LastRunTime.Ticks" % WMS_TASK],
+        capture_output=True, text=True, encoding="mbcs", errors="replace")
+    return out.stdout.strip()
+
+
 def start_wms_update(endpoint, sync_key, req):
     """網頁管理者按了「WMS更新」:啟動排程「WMS 自動更新」(schedule_wms.ps1),並回報狀態。
     schedule_wms.ps1 自己會回報 running / done / error;這裡只負責啟動,啟動失敗才回報 error。"""
@@ -82,9 +91,18 @@ def start_wms_update(endpoint, sync_key, req):
             log("WMS 自動更新已在執行中,請求視為已處理")
             call(endpoint, {"action": "wms_report", "key": sync_key, "state": "running", "msg": "已在執行中"})
             return
+        before = wms_task_last_run()
         out = subprocess.run(["schtasks", "/run", "/tn", WMS_TASK], capture_output=True, text=True, encoding="mbcs", errors="replace")
         if out.returncode != 0:
             raise RuntimeError((out.stderr or out.stdout).strip())
+        # schtasks /run 只代表「已送出」;排程可能因帳號未登入等原因被工作排程器拒絕,
+        # 所以等幾秒確認上次執行時間有更新,才算真的啟動
+        for _ in range(6):
+            time.sleep(5)
+            if wms_task_last_run() != before:
+                break
+        else:
+            raise RuntimeError("工作排程器未啟動排程(請檢查排程的執行帳號是否為目前登入的使用者)")
         log("已啟動排程「%s」" % WMS_TASK)
         call(endpoint, {"action": "wms_report", "key": sync_key, "state": "running", "msg": "已啟動"})
     except Exception as ex:
