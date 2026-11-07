@@ -546,7 +546,7 @@
     var btn = document.getElementById("wms-update-btn");
     var note = document.getElementById("wms-update-note");
     if (!btn || !note) return;
-    var timer = null;
+    var timer = null, wasBusy = false;
 
     function refresh() {
       api("wms_status").then(function (res) {
@@ -554,6 +554,9 @@
         if (!res.ok) { note.textContent = res.error || ""; return; }
         var s = wmsStatusText(res);
         note.textContent = s.text;
+        // 剛跑完:加快檢查網站上的新資料,發布後自動重新整理
+        if (wasBusy && !s.busy && res.status && res.status.state === "done") boostDataCheck();
+        wasBusy = s.busy;
         btn.disabled = s.busy;
         clearTimeout(timer);
         if (s.busy) timer = setTimeout(refresh, 20000); // 進行中才持續更新狀態
@@ -1547,10 +1550,16 @@
     return fetch("data.enc?_=" + Date.now(), { cache: "no-store" })
       .then(function (res) {
         if (!res.ok) throw new Error("HTTP " + res.status);
-        return res.arrayBuffer();
+        var tag = dataTagOf(res);
+        return res.arrayBuffer().then(function (buf) { return { buf: buf, tag: tag }; });
       })
-      .then(function (buf) { return decryptData(buf, session.key); })
-      .then(function (data) {
+      .then(function (r) {
+        return decryptData(r.buf, session.key).then(function (data) { return { data: data, tag: r.tag }; });
+      })
+      .then(function (r) {
+        var data = r.data;
+        dataTag = r.tag;
+        scheduleDataCheck();
         state.data = data;
         state.orderIndex = buildOrderIndex(data);
         var t = document.getElementById("data-time");
@@ -1560,6 +1569,65 @@
         }
       });
   }
+
+  // ---------- 自動重新整理:WMS 更新把新的 data.enc 發布到網站後,自動載入 ----------
+  // 平時每 60 秒用 HEAD 比對 data.enc 的 ETag(很輕量);WMS 更新剛完成時改為每 20 秒,持續 15 分鐘
+  // (GitHub Pages 發布約需 1~2 分鐘)。使用者正在編輯(對話框開著/游標在輸入框)時延後,不打斷操作。
+  var DATA_CHECK_MS = 60000, DATA_CHECK_FAST_MS = 20000, DATA_FAST_WINDOW_MS = 15 * 60000;
+  var dataTag = null, dataCheckTimer = null, dataFastUntil = 0, dataChecking = false, dataPending = false;
+
+  function dataTagOf(res) {
+    // 壓縮傳輸時 GitHub Pages 回的是弱 ETag(W/"..."),去掉前綴才能和 HEAD 的結果比對
+    var etag = (res.headers.get("ETag") || "").replace(/^W\//, "");
+    return etag || res.headers.get("Last-Modified") || null;
+  }
+
+  function userIsEditing() {
+    if (document.querySelector(".modal-backdrop")) return true;
+    var a = document.activeElement;
+    return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
+  }
+
+  function scheduleDataCheck() {
+    clearTimeout(dataCheckTimer);
+    if (!session) return;
+    dataCheckTimer = setTimeout(checkDataUpdate, Date.now() < dataFastUntil ? DATA_CHECK_FAST_MS : DATA_CHECK_MS);
+  }
+
+  function boostDataCheck() {
+    dataFastUntil = Date.now() + DATA_FAST_WINDOW_MS;
+    checkDataUpdate();
+  }
+
+  function checkDataUpdate() {
+    if (!session || !state.data || dataChecking) return;
+    if (document.visibilityState === "hidden") { scheduleDataCheck(); return; } // 切回前景時會立刻檢查
+    dataChecking = true;
+    var changed = dataPending ? Promise.resolve(true) :
+      fetch("data.enc?_=" + Date.now(), { method: "HEAD", cache: "no-store" }).then(function (res) {
+        var t = res.ok ? dataTagOf(res) : null;
+        return !!(t && dataTag && t !== dataTag);
+      });
+    changed.then(function (isNew) {
+      if (!isNew) return;
+      if (userIsEditing()) { dataPending = true; return; }
+      dataPending = false;
+      var y = window.scrollY;
+      return loadData().then(function () {
+        render();
+        window.scrollTo(0, y); // 自動更新不把畫面捲回頂端
+        dataFastUntil = 0;
+        showToast("已自動載入最新 WMS 資料" + (state.data.sourceUpdatedAt ? "(版本 " + state.data.sourceUpdatedAt + ")" : ""));
+      });
+    }).catch(function () { /* 網路暫時失敗,下次再試 */ }).then(function () {
+      dataChecking = false;
+      scheduleDataCheck();
+    });
+  }
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible") checkDataUpdate();
+  });
 
   function refreshData() {
     if (!session) return;
