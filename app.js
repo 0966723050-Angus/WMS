@@ -421,6 +421,13 @@
     recvOrderOf = null; // 資料可能重新載入,製令對照表重建
     // 含物料表格的頁面(專案/製令)在寬螢幕上用較寬的版面,避免出現左右捲軸
     app.classList.toggle("app-wide", route.view === "project" || route.view === "order");
+    // 功能列:目前所在頁面的按鍵反白
+    var navOf = { storage: "storage-btn", erp: "erp-btn", admin: "admin-btn" };
+    var activeNav = navOf[route.view] || "home-btn";
+    ["home-btn", "storage-btn", "erp-btn", "admin-btn"].forEach(function (id) {
+      var b = document.getElementById(id);
+      if (b) b.classList.toggle("active", id === activeNav);
+    });
     if (route.view === "project") {
       renderProject(app, route.code);
     } else if (route.view === "order") {
@@ -526,6 +533,15 @@
 
   // ---------- ERP 頁面(進貨單 / 製令領料單;功能建置中) ----------
 
+  var ERP_ICONS = {
+    // 進貨:箱子 + 向下箭頭
+    receipt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg>',
+    // 領料:清單
+    issue: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3v2h6V3M9 10h6M9 14h6M9 18h3"/></svg>',
+    // 更新:循環箭頭
+    wms: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 01-14.3 4.9M4 12a8 8 0 0114.3-4.9"/><path d="M18.5 3v4.2h-4.2M5.5 21v-4.2h4.2"/></svg>'
+  };
+
   var ERP_PAGES = {
     receipt: { title: "進貨單" },
     issue: { title: "製令領料單" }
@@ -558,6 +574,7 @@
         if (wasBusy && !s.busy && res.status && res.status.state === "done") boostDataCheck();
         wasBusy = s.busy;
         btn.disabled = s.busy;
+        btn.classList.toggle("is-busy", s.busy);
         clearTimeout(timer);
         if (s.busy) timer = setTimeout(refresh, 20000); // 進行中才持續更新狀態
       }).catch(function () { /* 讀不到狀態不影響使用 */ });
@@ -736,10 +753,13 @@
           (isAdmin ? '<a class="btn btn-sm btn-secondary" href="#/erp/settings">⚙ 設定</a>' : '') +
         '</h1>' +
         '<div class="erp-grid">' +
-          '<a class="erp-tile" href="#/erp/receipt"><span class="erp-tile-title">進貨單</span></a>' +
-          '<a class="erp-tile" href="#/erp/issue"><span class="erp-tile-title">製令領料單</span></a>' +
+          '<a class="erp-tile" href="#/erp/receipt"><span class="erp-tile-tag">建置中</span>' +
+            '<span class="erp-tile-icon">' + ERP_ICONS.receipt + '</span><span class="erp-tile-title">進貨單</span></a>' +
+          '<a class="erp-tile" href="#/erp/issue"><span class="erp-tile-tag">建置中</span>' +
+            '<span class="erp-tile-icon">' + ERP_ICONS.issue + '</span><span class="erp-tile-title">製令領料單</span></a>' +
           (isAdmin
-            ? '<button type="button" class="erp-tile" id="wms-update-btn"><span class="erp-tile-title">WMS更新</span>' +
+            ? '<button type="button" class="erp-tile erp-tile-wms" id="wms-update-btn">' +
+              '<span class="erp-tile-icon">' + ERP_ICONS.wms + '</span><span class="erp-tile-title">WMS更新</span>' +
               '<span class="erp-tile-note" id="wms-update-note"></span>' +
               '<span class="erp-tile-note" id="wms-sched-note"></span></button>'
             : '') +

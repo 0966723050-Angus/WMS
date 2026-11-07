@@ -1,4 +1,4 @@
-﻿var CACHE_NAME = "wms-cache-v25";
+﻿var CACHE_NAME = "wms-cache-v26";
 var CORE_ASSETS = [
   "./",
   "./index.html",
