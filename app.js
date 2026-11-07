@@ -531,6 +531,52 @@
     issue: { title: "製令領料單" }
   };
 
+  // 「WMS更新」:僅管理者。送出請求後由電腦端約每 5 分鐘檢查一次並啟動排程「WMS 自動更新」,
+  // 狀態(排隊中 / 執行中 / 完成 / 失敗)由電腦端回報,這裡顯示在按鈕下方。
+  function wmsStatusText(res) {
+    var st = res.status, when = st && st.ts ? new Date(st.ts).toLocaleString("zh-TW", { hour12: false }) : "";
+    if (res.queued) return { text: "已送出,等待電腦啟動(約 5 分鐘內)", busy: true };
+    if (!st) return { text: "", busy: false };
+    if (st.state === "running") return { text: "執行中(" + when + " 起),完成約需 5~15 分鐘", busy: true };
+    if (st.state === "done") return { text: "上次完成:" + when, busy: false };
+    return { text: "上次失敗(" + when + "):" + (st.msg || ""), busy: false };
+  }
+
+  function setupWmsUpdate() {
+    var btn = document.getElementById("wms-update-btn");
+    var note = document.getElementById("wms-update-note");
+    if (!btn || !note) return;
+    var timer = null;
+
+    function refresh() {
+      api("wms_status").then(function (res) {
+        if (!document.body.contains(btn)) return; // 已離開此頁
+        if (!res.ok) { note.textContent = res.error || ""; return; }
+        var s = wmsStatusText(res);
+        note.textContent = s.text;
+        btn.disabled = s.busy;
+        clearTimeout(timer);
+        if (s.busy) timer = setTimeout(refresh, 20000); // 進行中才持續更新狀態
+      }).catch(function () { /* 讀不到狀態不影響使用 */ });
+    }
+
+    btn.addEventListener("click", function () {
+      if (!window.confirm("確定要執行 WMS 更新嗎?\n\n電腦會清空 C:\\My Documents、重新從 ERP 匯出報表並更新 WMS 資料,約需 5~15 分鐘。")) return;
+      btn.disabled = true;
+      note.textContent = "送出中…";
+      api("wms_update").then(function (res) {
+        if (!res.ok) throw new Error(res.error || "送出失敗");
+        showToast("已送出 WMS 更新請求");
+        refresh();
+      }).catch(function (err) {
+        note.textContent = err.message;
+        if (session) btn.disabled = false;
+      });
+    });
+
+    refresh();
+  }
+
   function renderErp(app, sub) {
     var page = ERP_PAGES[sub];
     if (sub && !page) { location.hash = "#/erp"; return; }
@@ -542,7 +588,12 @@
         '<div class="erp-grid">' +
           '<a class="erp-tile" href="#/erp/receipt"><span class="erp-tile-title">進貨單</span></a>' +
           '<a class="erp-tile" href="#/erp/issue"><span class="erp-tile-title">製令領料單</span></a>' +
+          (session && session.isAdmin
+            ? '<button type="button" class="erp-tile" id="wms-update-btn"><span class="erp-tile-title">WMS更新</span>' +
+              '<span class="erp-tile-note" id="wms-update-note"></span></button>'
+            : '') +
         '</div>';
+      if (session && session.isAdmin) setupWmsUpdate();
       return;
     }
 

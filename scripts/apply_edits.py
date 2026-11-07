@@ -9,6 +9,7 @@ import datetime
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 import urllib.parse
@@ -60,6 +61,38 @@ def call(endpoint, params):
             last = ex
             time.sleep(2)
     raise last
+
+
+WMS_TASK = "WMS 自動更新"
+
+
+def wms_task_running():
+    """排程「WMS 自動更新」目前是否在執行中。"""
+    out = subprocess.run(["schtasks", "/query", "/tn", WMS_TASK, "/fo", "csv", "/nh"],
+                         capture_output=True, text=True, encoding="mbcs", errors="replace")
+    return out.returncode == 0 and ('"Running"' in out.stdout or '"執行中"' in out.stdout)
+
+
+def start_wms_update(endpoint, sync_key, req):
+    """網頁管理者按了「WMS更新」:啟動排程「WMS 自動更新」(schedule_wms.ps1),並回報狀態。
+    schedule_wms.ps1 自己會回報 running / done / error;這裡只負責啟動,啟動失敗才回報 error。"""
+    log("收到網頁的 WMS 更新請求(%s)" % req.get("by"))
+    try:
+        if wms_task_running():
+            log("WMS 自動更新已在執行中,請求視為已處理")
+            call(endpoint, {"action": "wms_report", "key": sync_key, "state": "running", "msg": "已在執行中"})
+            return
+        out = subprocess.run(["schtasks", "/run", "/tn", WMS_TASK], capture_output=True, text=True, encoding="mbcs", errors="replace")
+        if out.returncode != 0:
+            raise RuntimeError((out.stderr or out.stdout).strip())
+        log("已啟動排程「%s」" % WMS_TASK)
+        call(endpoint, {"action": "wms_report", "key": sync_key, "state": "running", "msg": "已啟動"})
+    except Exception as ex:
+        log("啟動 WMS 更新失敗: %s" % ex)
+        try:
+            call(endpoint, {"action": "wms_report", "key": sync_key, "state": "error", "msg": "啟動失敗: %s" % str(ex)[:150]})
+        except Exception:
+            pass
 
 
 def row_matches(ws, r, e):
@@ -204,6 +237,8 @@ def main():
         return 1
     edits = res.get("edits", [])
     receipts = res.get("receipts", [])
+    if res.get("wms"):
+        start_wms_update(endpoint, sync_key, res["wms"])
     if not edits and not receipts:
         return 0
 

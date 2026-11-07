@@ -240,6 +240,33 @@ function saveReceipt_(body, user) {
   return { ok: true, id: id };
 }
 
+// ---------- WMS 更新(管理者在 ERP 頁按「WMS更新」,本機排程取回後啟動「WMS 自動更新」) ----------
+// WMS_REQ    :尚未被本機取走的更新請求 {ts, by}
+// WMS_STATUS :本機回報的狀態 {state: running|done|error, msg, ts}
+
+var WMS_REQ_KEY = 'WMS_REQ';
+var WMS_STATUS_KEY = 'WMS_STATUS';
+var WMS_STALE_MS = 2 * 60 * 60 * 1000;   // 執行中狀態超過 2 小時視為已失效(避免本機當掉後按鈕永遠鎖住)
+
+function readJson_(key) {
+  try { return JSON.parse(props_().getProperty(key) || 'null'); } catch (err) { return null; }
+}
+
+function wmsView_() {
+  var req = readJson_(WMS_REQ_KEY);
+  var st = readJson_(WMS_STATUS_KEY);
+  if (st && st.state === 'running' && Date.now() - st.ts > WMS_STALE_MS) st = { state: 'error', msg: '執行逾時未回報', ts: st.ts };
+  return { ok: true, queued: req, status: st };
+}
+
+function requestWmsUpdate_(user) {
+  var v = wmsView_();
+  if (v.queued) return { ok: false, error: '已有更新請求排隊中,請稍候(電腦約每 5 分鐘檢查一次)' };
+  if (v.status && v.status.state === 'running') return { ok: false, error: 'WMS 更新正在執行中' };
+  props_().setProperty(WMS_REQ_KEY, JSON.stringify({ ts: Date.now(), by: user.email }));
+  return { ok: true };
+}
+
 // ---------- 編輯畫面的下拉選單項目(類別 / 儲放地點) ----------
 // 存在指令碼屬性 OPTIONS(JSON:{category:[...], location:[...]}),所有登入者共用。
 // 某欄位尚未設定過時回傳 null,由前端用現有資料的值當初始選項。
@@ -312,6 +339,10 @@ function doPost(e) {
     if (action === 'pending') return json_({ ok: true, pending: listPending_() });
     if (action === 'save') return json_(saveEdit_(body, me));
     if (action === 'receive') return json_(saveReceipt_(body, me));
+    if (action === 'wms_status' || action === 'wms_update') {
+      if (!me.isAdmin) return json_({ ok: false, error: '只有管理者可以使用' });
+      return json_(action === 'wms_update' ? requestWmsUpdate_(me) : wmsView_());
+    }
     if (action === 'options_get') return json_({ ok: true, options: getOptions_() });
     if (action === 'options_change') return json_(changeOption_(body));
     if (String(action).indexOf('admin_') === 0) {
@@ -331,11 +362,20 @@ function doGet(e) {
   var lock = LockService.getScriptLock();
   lock.waitLock(15000);
   try {
-    if (p.action === 'pull' || p.action === 'ack' || p.action === 'set_data_key') {
+    if (p.action === 'pull' || p.action === 'ack' || p.action === 'set_data_key' || p.action === 'wms_report') {
       var err = checkSyncKey_(p.key);
       if (err) return json_({ ok: false, error: err });
 
-      if (p.action === 'pull') return json_({ ok: true, edits: listPending_(), receipts: listReceipts_() });
+      if (p.action === 'pull') return json_({ ok: true, edits: listPending_(), receipts: listReceipts_(), wms: readJson_(WMS_REQ_KEY) });
+
+      // 本機回報 WMS 更新狀態;回報 running 代表請求已被取走,一併清除排隊中的請求
+      if (p.action === 'wms_report') {
+        var st = String(p.state || '');
+        if (['running', 'done', 'error'].indexOf(st) === -1) return json_({ ok: false, error: '狀態不正確' });
+        props_().setProperty(WMS_STATUS_KEY, JSON.stringify({ state: st, msg: clip_(p.msg, 200), ts: Date.now() }));
+        if (st === 'running') props_().deleteProperty(WMS_REQ_KEY);
+        return json_({ ok: true });
+      }
 
       if (p.action === 'set_data_key') {
         if (!/^[A-Za-z0-9+\/]{43}=$/.test(String(p.dataKey || ''))) return json_({ ok: false, error: '金鑰格式不正確' });

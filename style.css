@@ -487,6 +487,9 @@ a:hover { text-decoration: underline; }
 }
 .erp-tile:hover { background: var(--surface-alt); border-color: var(--brand); text-decoration: none; }
 .erp-tile-title { font-size: 18px; font-weight: 700; }
+button.erp-tile { flex-direction: column; gap: 6px; font: inherit; cursor: pointer; width: 100%; }
+button.erp-tile:disabled { opacity: 0.65; cursor: default; }
+.erp-tile-note { font-size: 13px; color: var(--text-muted); text-align: center; min-height: 1.2em; }
 
 /* 收料鈕與確認視窗 */
 .material-card-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
