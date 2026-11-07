@@ -577,23 +577,159 @@
     refresh();
   }
 
+  // ---------- ERP「設定」:各執行鍵的自動執行時間區間 / 間隔(僅管理者) ----------
+  // 設定存在 Apps Script;電腦端每 5 分鐘檢查一次,到了時段就啟動對應的流程。
+
+  var SCHED_JOBS = [
+    { key: "wms", title: "WMS更新", desc: "清空 C:\\My Documents、從 ERP 匯出報表並更新 WMS 資料(每次約 5~15 分鐘)" }
+  ];
+  var SCHED_INTERVALS = [30, 60, 90, 120, 180, 240, 360, 480, 720, 1440];
+
+  function intervalLabel(min) {
+    if (min < 60) return min + " 分鐘";
+    return (min % 60 ? (min / 60).toFixed(1) : min / 60) + " 小時";
+  }
+
+  function hmToMin(hm) {
+    var p = String(hm || "").split(":");
+    return parseInt(p[0], 10) * 60 + parseInt(p[1], 10);
+  }
+
+  function pad2(n) { return (n < 10 ? "0" : "") + n; }
+
+  // 下一次執行時間(與電腦端判斷方式相同:每天 start 起每 interval 分鐘,到 end 為止)
+  function nextScheduledRun(cfg, now) {
+    var start = hmToMin(cfg.start), end = hmToMin(cfg.end), step = cfg.interval;
+    for (var d = 0; d < 2; d++) {
+      var day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + d);
+      for (var m = start; m <= end; m += step) {
+        var t = new Date(day.getTime() + m * 60000);
+        if (t > now && t.getTime() >= (cfg.updatedAt || 0)) return t;
+      }
+    }
+    return null;
+  }
+
+  function scheduleSummary(cfg) {
+    if (!cfg) return "自動執行:未設定";
+    var s = "自動執行:每天 " + cfg.start + "–" + cfg.end + ",每 " + intervalLabel(cfg.interval);
+    if (!cfg.enabled) return s + "(已暫停)";
+    var next = nextScheduledRun(cfg, new Date());
+    return s + (next ? ";下次 " + (next.getDate() !== new Date().getDate() ? "明天 " : "") +
+      pad2(next.getHours()) + ":" + pad2(next.getMinutes()) : "");
+  }
+
+  function renderErpSettings(app) {
+    if (!session || !session.isAdmin) { location.hash = "#/erp"; return; }
+    app.innerHTML =
+      '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/erp">ERP</a> / 設定</div>' +
+      '<h1 class="page-title">自動執行設定<span class="sub">設定 ERP 頁各執行鍵每天自動執行的時間區間與間隔</span></h1>' +
+      '<div id="sched-list"><div class="skeleton">載入中…</div></div>' +
+      '<p class="admin-note">電腦約每 5 分鐘檢查一次,實際啟動時間可能比設定晚幾分鐘;電腦需開機並保持登入。' +
+      '儲存後,已經過去的時段不會補跑,從下一個時段開始生效。</p>';
+
+    var list = document.getElementById("sched-list");
+
+    function draw(schedules) {
+      list.innerHTML = "";
+      SCHED_JOBS.forEach(function (job) {
+        var cfg = schedules[job.key];
+        var cur = cfg || { enabled: true, start: "08:00", end: "18:00", interval: 240 };
+        var card = el(
+          '<div class="admin-card sched-card">' +
+            '<h3>' + esc(job.title) + '</h3>' +
+            '<p class="sched-desc">' + esc(job.desc) + '</p>' +
+            '<p class="sched-current">' + esc(scheduleSummary(cfg)) + '</p>' +
+            '<div class="sched-form">' +
+              '<label class="sched-check"><input type="checkbox" class="s-enabled"' + (cur.enabled ? " checked" : "") + ' /> 啟用自動執行</label>' +
+              '<label>開始時間<input type="time" class="s-start" value="' + esc(cur.start) + '" /></label>' +
+              '<label>結束時間<input type="time" class="s-end" value="' + esc(cur.end) + '" /></label>' +
+              '<label>間隔<select class="s-interval">' + SCHED_INTERVALS.map(function (m) {
+                return '<option value="' + m + '"' + (m === cur.interval ? " selected" : "") + '>每 ' + intervalLabel(m) + '</option>';
+              }).join("") + '</select></label>' +
+            '</div>' +
+            '<div class="admin-actions">' +
+              '<button type="button" class="btn s-save">儲存</button>' +
+              (cfg ? '<button type="button" class="btn btn-secondary btn-danger s-cancel">取消自動執行</button>' : '') +
+            '</div>' +
+            '<p class="modal-msg s-msg"></p>' +
+          '</div>'
+        );
+        list.appendChild(card);
+
+        var msg = card.querySelector(".s-msg");
+        function send(action, payload, okText) {
+          card.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
+          msg.textContent = "儲存中…";
+          api(action, Object.assign({ job: job.key }, payload || {}))
+            .then(function (res) {
+              if (!res.ok) throw new Error(res.error || "儲存失敗");
+              showToast(okText);
+              draw(res.schedules || {});
+            })
+            .catch(function (err) {
+              msg.textContent = err.message;
+              card.querySelectorAll("button").forEach(function (b) { b.disabled = false; });
+            });
+        }
+
+        card.querySelector(".s-save").addEventListener("click", function () {
+          var start = card.querySelector(".s-start").value, end = card.querySelector(".s-end").value;
+          if (!start || !end) { msg.textContent = "請輸入開始與結束時間"; return; }
+          if (start >= end) { msg.textContent = "結束時間必須晚於開始時間"; return; }
+          send("sched_set", {
+            enabled: card.querySelector(".s-enabled").checked,
+            start: start, end: end,
+            interval: parseInt(card.querySelector(".s-interval").value, 10)
+          }, "已儲存「" + job.title + "」的自動執行設定");
+        });
+
+        var cancelBtn = card.querySelector(".s-cancel");
+        if (cancelBtn) cancelBtn.addEventListener("click", function () {
+          if (!window.confirm("確定要取消「" + job.title + "」的自動執行嗎?\n(手動按鈕仍可使用)")) return;
+          send("sched_delete", null, "已取消「" + job.title + "」的自動執行");
+        });
+      });
+    }
+
+    api("sched_get")
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.error || "讀取失敗");
+        draw(res.schedules || {});
+      })
+      .catch(function (err) {
+        list.innerHTML = '<div class="empty-state">讀取設定失敗:' + esc(err.message) + '</div>';
+      });
+  }
+
   function renderErp(app, sub) {
+    if (sub === "settings") { renderErpSettings(app); return; }
     var page = ERP_PAGES[sub];
     if (sub && !page) { location.hash = "#/erp"; return; }
 
     if (!page) {
+      var isAdmin = !!(session && session.isAdmin);
       app.innerHTML =
         '<div class="breadcrumb"><a href="#/">首頁</a> / ERP</div>' +
-        '<h1 class="page-title">ERP</h1>' +
+        '<h1 class="page-title page-title-row"><span>ERP</span>' +
+          (isAdmin ? '<a class="btn btn-sm btn-secondary" href="#/erp/settings">⚙ 設定</a>' : '') +
+        '</h1>' +
         '<div class="erp-grid">' +
           '<a class="erp-tile" href="#/erp/receipt"><span class="erp-tile-title">進貨單</span></a>' +
           '<a class="erp-tile" href="#/erp/issue"><span class="erp-tile-title">製令領料單</span></a>' +
-          (session && session.isAdmin
+          (isAdmin
             ? '<button type="button" class="erp-tile" id="wms-update-btn"><span class="erp-tile-title">WMS更新</span>' +
-              '<span class="erp-tile-note" id="wms-update-note"></span></button>'
+              '<span class="erp-tile-note" id="wms-update-note"></span>' +
+              '<span class="erp-tile-note" id="wms-sched-note"></span></button>'
             : '') +
         '</div>';
-      if (session && session.isAdmin) setupWmsUpdate();
+      if (isAdmin) {
+        setupWmsUpdate();
+        api("sched_get").then(function (res) {
+          var n = document.getElementById("wms-sched-note");
+          if (n && res.ok) n.textContent = scheduleSummary((res.schedules || {}).wms);
+        }).catch(function () { /* 讀不到排程不影響使用 */ });
+      }
       return;
     }
 

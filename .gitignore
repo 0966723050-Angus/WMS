@@ -8,3 +8,4 @@ scripts/backup/
 data.json
 scripts/auth_config.json
 scripts/receipts_done.json
+scripts/schedule_state.json

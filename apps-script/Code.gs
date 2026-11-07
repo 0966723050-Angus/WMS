@@ -267,6 +267,44 @@ function requestWmsUpdate_(user) {
   return { ok: true };
 }
 
+// ---------- 自動執行排程(ERP 頁「設定」;由本機排程每 5 分鐘取回並依時間啟動) ----------
+// SCHEDULES:{ <job>: { enabled, start: 'HH:MM', end: 'HH:MM', interval: 分鐘, updatedAt, by } }
+// 每天 start 起每 interval 分鐘執行一次,到 end 為止。
+
+var SCHEDULES_KEY = 'SCHEDULES';
+var SCHED_JOBS = { wms: 'WMS更新' };   // 可設定自動執行的執行鍵
+var SCHED_MIN_INTERVAL = 30;
+var SCHED_MAX_INTERVAL = 1440;
+
+function getSchedules_() { return readJson_(SCHEDULES_KEY) || {}; }
+
+function isHm_(v) { return /^([01]\d|2[0-3]):[0-5]\d$/.test(String(v || '')); }
+
+function scheduleAction_(body, user) {
+  var all = getSchedules_();
+  if (body.action === 'sched_get') return { ok: true, schedules: all, jobs: SCHED_JOBS };
+
+  var job = String(body.job || '');
+  if (!SCHED_JOBS.hasOwnProperty(job)) return { ok: false, error: '不支援的執行鍵' };
+
+  if (body.action === 'sched_delete') {
+    delete all[job];
+  } else if (body.action === 'sched_set') {
+    var start = String(body.start || ''), end = String(body.end || '');
+    var interval = parseInt(body.interval, 10);
+    if (!isHm_(start) || !isHm_(end)) return { ok: false, error: '時間格式不正確' };
+    if (start >= end) return { ok: false, error: '結束時間必須晚於開始時間' };
+    if (!(interval >= SCHED_MIN_INTERVAL && interval <= SCHED_MAX_INTERVAL)) {
+      return { ok: false, error: '間隔必須介於 30 分鐘到 24 小時之間' };
+    }
+    all[job] = { enabled: body.enabled !== false, start: start, end: end, interval: interval, updatedAt: Date.now(), by: user.email };
+  } else {
+    return { ok: false, error: '不支援的動作' };
+  }
+  props_().setProperty(SCHEDULES_KEY, JSON.stringify(all));
+  return { ok: true, schedules: all, jobs: SCHED_JOBS };
+}
+
 // ---------- 編輯畫面的下拉選單項目(類別 / 儲放地點) ----------
 // 存在指令碼屬性 OPTIONS(JSON:{category:[...], location:[...]}),所有登入者共用。
 // 某欄位尚未設定過時回傳 null,由前端用現有資料的值當初始選項。
@@ -343,6 +381,10 @@ function doPost(e) {
       if (!me.isAdmin) return json_({ ok: false, error: '只有管理者可以使用' });
       return json_(action === 'wms_update' ? requestWmsUpdate_(me) : wmsView_());
     }
+    if (action === 'sched_get' || action === 'sched_set' || action === 'sched_delete') {
+      if (!me.isAdmin) return json_({ ok: false, error: '只有管理者可以使用' });
+      return json_(scheduleAction_(body, me));
+    }
     if (action === 'options_get') return json_({ ok: true, options: getOptions_() });
     if (action === 'options_change') return json_(changeOption_(body));
     if (String(action).indexOf('admin_') === 0) {
@@ -366,7 +408,7 @@ function doGet(e) {
       var err = checkSyncKey_(p.key);
       if (err) return json_({ ok: false, error: err });
 
-      if (p.action === 'pull') return json_({ ok: true, edits: listPending_(), receipts: listReceipts_(), wms: readJson_(WMS_REQ_KEY) });
+      if (p.action === 'pull') return json_({ ok: true, edits: listPending_(), receipts: listReceipts_(), wms: readJson_(WMS_REQ_KEY), schedules: getSchedules_() });
 
       // 本機回報 WMS 更新狀態;回報 running 代表請求已被取走,一併清除排隊中的請求
       if (p.action === 'wms_report') {

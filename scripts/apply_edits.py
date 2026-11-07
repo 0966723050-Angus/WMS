@@ -85,7 +85,7 @@ def wms_task_last_run():
 def start_wms_update(endpoint, sync_key, req):
     """網頁管理者按了「WMS更新」:啟動排程「WMS 自動更新」(schedule_wms.ps1),並回報狀態。
     schedule_wms.ps1 自己會回報 running / done / error;這裡只負責啟動,啟動失敗才回報 error。"""
-    log("收到網頁的 WMS 更新請求(%s)" % req.get("by"))
+    log("收到 WMS 更新請求(%s)" % req.get("by"))
     try:
         if wms_task_running():
             log("WMS 自動更新已在執行中,請求視為已處理")
@@ -111,6 +111,81 @@ def start_wms_update(endpoint, sync_key, req):
             call(endpoint, {"action": "wms_report", "key": sync_key, "state": "error", "msg": "啟動失敗: %s" % str(ex)[:150]})
         except Exception:
             pass
+
+
+# ---------- 自動執行排程(網頁 ERP 頁「設定」) ----------
+# 設定存在 Apps Script,每次 pull 一併取回:{job: {enabled, start, end, interval, updatedAt}}
+# 每天 start 起每 interval 分鐘一個時段,到 end 為止;本程式每 5 分鐘執行一次,
+# 遇到「目前所在時段」還沒執行過就啟動。已執行的時段記在 schedule_state.json。
+
+SCHED_STATE = os.path.join(HERE, "schedule_state.json")
+SCHED_GRACE_MIN = 10  # 結束時間後仍可補跑最後一個時段的寬限分鐘數
+
+
+def ticks_to_datetime(ticks):
+    try:
+        return datetime.datetime(1, 1, 1) + datetime.timedelta(microseconds=int(ticks) // 10)
+    except (TypeError, ValueError):
+        return None
+
+
+# 每個可排程的執行鍵:啟動函式,以及取得「上次實際執行時間」的函式(用來避免剛跑完又重跑)
+SCHED_JOBS = {
+    "wms": {"start": lambda ep, key, by: start_wms_update(ep, key, {"by": by}),
+            "last_run": lambda: ticks_to_datetime(wms_task_last_run())},
+}
+
+
+def current_slot(cfg, now):
+    """回傳 now 所在的時段起點(datetime);不在今天的時間區間內則回傳 None。"""
+    try:
+        sh, sm = [int(x) for x in cfg["start"].split(":")]
+        eh, em = [int(x) for x in cfg["end"].split(":")]
+        interval = int(cfg["interval"])
+    except (KeyError, ValueError, AttributeError):
+        return None
+    if interval < 30:
+        return None
+    start = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
+    end = now.replace(hour=eh, minute=em, second=0, microsecond=0)
+    if now < start or end <= start or now > end + datetime.timedelta(minutes=SCHED_GRACE_MIN):
+        return None
+    k = int((min(now, end) - start).total_seconds() // (interval * 60))
+    return start + datetime.timedelta(minutes=k * interval)
+
+
+def run_due_schedules(endpoint, sync_key, schedules):
+    try:
+        with open(SCHED_STATE, encoding="utf-8") as f:
+            state = json.load(f)
+    except Exception:
+        state = {}
+    now = datetime.datetime.now()
+    changed = False
+    for job, cfg in schedules.items():
+        spec = SCHED_JOBS.get(job)
+        if not spec or not isinstance(cfg, dict) or not cfg.get("enabled"):
+            continue
+        slot = current_slot(cfg, now)
+        if slot is None:
+            continue
+        slot_key = slot.strftime("%Y-%m-%d %H:%M")
+        if state.get(job) == slot_key:
+            continue
+        state[job] = slot_key
+        changed = True
+        # 設定是在這個時段開始之後才儲存的:不補跑,等下一個時段
+        if slot.timestamp() * 1000 < float(cfg.get("updatedAt") or 0):
+            continue
+        last = spec["last_run"]()
+        if last and last >= slot:
+            log("排程 %s %s:此時段已執行過(%s),略過" % (job, slot_key, last.strftime("%H:%M")))
+            continue
+        log("排程 %s 到了執行時段 %s" % (job, slot_key))
+        spec["start"](endpoint, sync_key, "自動排程 %s" % slot.strftime("%H:%M"))
+    if changed:
+        with open(SCHED_STATE, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False)
 
 
 def row_matches(ws, r, e):
@@ -257,6 +332,8 @@ def main():
     receipts = res.get("receipts", [])
     if res.get("wms"):
         start_wms_update(endpoint, sync_key, res["wms"])
+    if res.get("schedules"):
+        run_due_schedules(endpoint, sync_key, res["schedules"])
     if not edits and not receipts:
         return 0
 

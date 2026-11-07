@@ -490,6 +490,20 @@ a:hover { text-decoration: underline; }
 button.erp-tile { flex-direction: column; gap: 6px; font: inherit; cursor: pointer; width: 100%; }
 button.erp-tile:disabled { opacity: 0.65; cursor: default; }
 .erp-tile-note { font-size: 13px; color: var(--text-muted); text-align: center; min-height: 1.2em; }
+.erp-tile-note:empty { display: none; }
+.page-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.page-title-row .btn { text-decoration: none; font-weight: 600; }
+
+/* ERP 自動執行設定 */
+.sched-desc { margin: 0 0 6px; font-size: 13px; color: var(--text-muted); }
+.sched-current { margin: 0 0 10px; font-size: 14px; font-weight: 600; }
+.sched-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end; }
+.sched-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-muted); }
+.sched-form label.sched-check { flex-direction: row; align-items: center; gap: 6px; grid-column: 1 / -1; color: var(--text); font-size: 14px; }
+.sched-form input[type="time"], .sched-form select {
+  padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font-size: 16px; font-family: inherit;
+}
 
 /* 收料鈕與確認視窗 */
 .material-card-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
