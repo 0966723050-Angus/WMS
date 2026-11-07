@@ -1612,12 +1612,17 @@
       if (!isNew) return;
       if (userIsEditing()) { dataPending = true; return; }
       dataPending = false;
-      var y = window.scrollY;
+      // 網站每次發布(含只改程式)ETag 都會變,所以載入後再比對內容:沒變就不動畫面
+      var old = state.data, oldJson = JSON.stringify(old);
       return loadData().then(function () {
+        if (JSON.stringify(state.data) === oldJson) return;
+        var y = window.scrollY;
         render();
         window.scrollTo(0, y); // 自動更新不把畫面捲回頂端
-        dataFastUntil = 0;
-        showToast("已自動載入最新 WMS 資料" + (state.data.sourceUpdatedAt ? "(版本 " + state.data.sourceUpdatedAt + ")" : ""));
+        if (state.data.sourceUpdatedAt !== old.sourceUpdatedAt) {
+          dataFastUntil = 0;
+          showToast("已自動載入最新 WMS 資料(版本 " + state.data.sourceUpdatedAt + ")");
+        }
       });
     }).catch(function () { /* 網路暫時失敗,下次再試 */ }).then(function () {
       dataChecking = false;
