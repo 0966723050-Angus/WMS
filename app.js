@@ -115,11 +115,12 @@
   var PERM_DEFS = [
     { key: "admin", label: "名單管理" },
     { key: "edit", label: "儲位編輯" },
+    { key: "receive", label: "收料" },
     { key: "erp_receipt", label: "ERP:進貨單" },
     { key: "erp_issue", label: "ERP:製令領料單" },
     { key: "erp_wms", label: "ERP:WMS更新" }
   ];
-  var PERM_DEFAULT_NEW = { admin: false, edit: true, erp_receipt: false, erp_issue: false, erp_wms: false };
+  var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, erp_receipt: false, erp_issue: false, erp_wms: false };
 
   function can(perm) { return !!(session && session.perms && session.perms[perm]); }
 
@@ -1240,7 +1241,7 @@
   }
 
   function receiveBtnHtml(r) {
-    if (!session) return "";
+    if (!can("receive")) return "";
     return '<button type="button" class="recv-btn" data-recv="' + recvIndex(r) + '">收料</button>';
   }
 
@@ -1548,7 +1549,7 @@
             '<div><span class="k">未領用量:</span> <span class="v material-remain">' + fmtNum(r.remainQty) + '</span></div>' +
             '<div><span class="k">庫存數量:</span> <span class="v">' + fmtNum(r.stockQty) + '</span></div>' +
           '</div>' +
-          '<div class="material-card-actions">' + receiveBtnHtml(r) + '</div>' +
+          (can("receive") ? '<div class="material-card-actions">' + receiveBtnHtml(r) + '</div>' : '') +
         '</div>'
       );
     }).join("") + '</div>';
@@ -1559,7 +1560,7 @@
       '<th>採購單號</th><th>廠商</th>' +
       '<th class="num">需領用量</th><th>預交日</th><th>到料狀態</th>' +
       '<th class="num">已入料量</th><th class="num">已領用量</th><th class="num">未領用量</th><th class="num">庫存數量</th>' +
-      '<th>收料</th>' +
+      (can("receive") ? '<th>收料</th>' : '') +
       '</tr></thead><tbody>' +
       rows.map(function (r) {
         return '<tr>' +
@@ -1577,7 +1578,7 @@
           '<td class="num">' + fmtNum(r.issuedQty) + '</td>' +
           '<td class="num material-remain">' + fmtNum(r.remainQty) + '</td>' +
           '<td class="num">' + fmtNum(r.stockQty) + '</td>' +
-          '<td>' + receiveBtnHtml(r) + '</td>' +
+          (can("receive") ? '<td>' + receiveBtnHtml(r) + '</td>' : '') +
           '</tr>';
       }).join("") +
       '</tbody></table></div>';

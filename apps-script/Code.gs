@@ -90,11 +90,12 @@ function makeSession_(email) {
 }
 
 // ---------- 權限 ----------
-// admin 名單管理 / edit 儲位編輯 / erp_receipt 進貨單 / erp_issue 製令領料單 / erp_wms WMS更新
+// admin 名單管理 / edit 儲位編輯 / receive 收料 / erp_receipt 進貨單 / erp_issue 製令領料單 / erp_wms WMS更新
 // 帳號記錄裡沒有 perms 的舊帳號 = 只有「儲位編輯」(維持原本能做的事)。主管理者(ADMIN_EMAIL)永遠全部權限。
 
-var PERM_KEYS = ['admin', 'edit', 'erp_receipt', 'erp_issue', 'erp_wms'];
-var PERM_DEFAULTS = { admin: false, edit: true, erp_receipt: false, erp_issue: false, erp_wms: false };
+var PERM_KEYS = ['admin', 'edit', 'receive', 'erp_receipt', 'erp_issue', 'erp_wms'];
+// 沒設定過的項目用預設值:儲位編輯、收料原本所有人都能用,所以舊帳號維持有這兩項
+var PERM_DEFAULTS = { admin: false, edit: true, receive: true, erp_receipt: false, erp_issue: false, erp_wms: false };
 
 function normPerms_(p) {
   var out = {};
@@ -424,7 +425,10 @@ function doPost(e) {
       if (!me.perms.edit) return denied_('儲位編輯');
       return json_(saveEdit_(body, me));
     }
-    if (action === 'receive') return json_(saveReceipt_(body, me));
+    if (action === 'receive') {
+      if (!me.perms.receive) return denied_('收料');
+      return json_(saveReceipt_(body, me));
+    }
     if (action === 'wms_status' || action === 'wms_update') {
       if (!me.perms.erp_wms) return denied_('WMS更新');
       return json_(action === 'wms_update' ? requestWmsUpdate_(me) : wmsView_());
