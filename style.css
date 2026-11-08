@@ -720,6 +720,12 @@ button.erp-tile:disabled:hover { border-color: var(--border); box-shadow: var(--
   background: var(--surface); color: var(--text); font-size: 16px; font-family: inherit;
 }
 
+/* ---------- 首頁物料搜尋結果 ---------- */
+.project-list[hidden] { display: none; }
+#home-results .order-section-head { align-items: flex-start; }
+.hit-sub { font-size: 12.5px; color: var(--text-muted); margin-top: 2px; }
+.hit-sub.hit-product { color: var(--text); font-weight: 700; }
+
 /* ---------- 權限勾選 ---------- */
 .perm-title { margin-top: 10px; font-size: 13px; color: var(--text-muted); }
 .perm-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 2px 12px; margin-top: 4px; }

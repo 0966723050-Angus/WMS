@@ -544,14 +544,96 @@
 
   // ---------- Home ----------
 
+  var homeQuery = "";            // 首頁「物料搜尋」的關鍵字(離開再回來仍保留)
+  var HOME_MAX_ROWS = 300;       // 關鍵字太短時結果可能上千筆,最多顯示 300 筆
+
+  // 首頁搜尋結果:跨所有製令找出符合的物料,依製令分組,格式與「物料明細」相同(含收料鍵)
+  function renderHomeResults() {
+    var app = document.getElementById("app");
+    var list = document.getElementById("project-list");
+    var box = document.getElementById("home-results");
+    var countEl = document.getElementById("home-result-count");
+    if (!app || !list || !box) return;
+
+    var q = homeQuery.trim();
+    app.classList.toggle("app-wide", !!q); // 物料表格需要較寬的版面
+    if (!q) {
+      list.hidden = false;
+      box.innerHTML = "";
+      countEl.textContent = "";
+      return;
+    }
+    list.hidden = true;
+
+    var f = { query: q, status: "", issueStatus: "" };
+    var total = 0, shown = 0, orders = 0, html = "";
+    state.data.projects.forEach(function (p) {
+      p.orders.forEach(function (o) {
+        var rows = filterRows(state.data.materials[o.orderNo] || [], f);
+        if (!rows.length) return;
+        total += rows.length;
+        orders++;
+        if (shown >= HOME_MAX_ROWS) return;
+        var take = rows.slice(0, HOME_MAX_ROWS - shown);
+        shown += take.length;
+        html +=
+          '<section class="order-section">' +
+            '<div class="order-section-head">' +
+              '<div>' +
+                '<a class="order-link" href="#/order/' + encodeURIComponent(o.orderNo) + '">' + esc(o.orderNo) + '</a>' +
+                '<div class="hit-sub">' + esc(p.code) + ' · ' + esc(p.name) + '</div>' +
+                '<div class="hit-sub hit-product">' + esc(o.productCode) + (o.productName ? ' · ' + esc(o.productName) : '') + '</div>' +
+              '</div>' +
+              '<span class="status-pill ' + statusPillClass(o.status) + '">' + esc(o.status || "-") + '</span>' +
+            '</div>' +
+            buildMaterialListHtml(take) +
+          '</section>';
+      });
+    });
+
+    if (!total) {
+      countEl.textContent = "";
+      box.innerHTML = '<div class="empty-state">查無符合的物料</div>';
+      return;
+    }
+    countEl.textContent = "共 " + total + " 筆物料,分布在 " + orders + " 筆製令" +
+      (total > shown ? ",僅顯示前 " + shown + " 筆,請輸入更完整的關鍵字縮小範圍" : "");
+    box.innerHTML = html;
+  }
+
   function renderHome(app) {
     var projects = state.data.projects;
     var totalOrders = projects.reduce(function (s, p) { return s + p.orders.length; }, 0);
 
     var html = '';
     html += '<h1 class="page-title">在線專案一覽表<span class="sub">共 ' + projects.length + ' 個專案 / ' + totalOrders + ' 筆製令</span></h1>';
+    html += '<div class="toolbar">' +
+      '<div class="search-wrap">' +
+        '<input type="search" id="home-search" placeholder="搜尋所有製令的物料 (品號 / 規格 / 採購單號 / 廠商)" autocomplete="off" value="' + esc(homeQuery) + '" />' +
+        '<button type="button" class="search-clear" id="home-clear" aria-label="清除搜尋"' + (homeQuery ? '' : ' hidden') + '>' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>' +
+        '</button>' +
+      '</div>' +
+    '</div>';
+    html += '<p class="result-count" id="home-result-count"></p>';
+    html += '<div id="home-results"></div>';
     html += '<div class="project-list" id="project-list"></div>';
     app.innerHTML = html;
+
+    var homeInput = document.getElementById("home-search");
+    var homeClear = document.getElementById("home-clear");
+    homeInput.addEventListener("input", function (e) {
+      homeQuery = e.target.value;
+      homeClear.hidden = !homeQuery;
+      renderHomeResults();
+    });
+    homeClear.addEventListener("click", function () {
+      homeQuery = "";
+      homeInput.value = "";
+      homeClear.hidden = true;
+      renderHomeResults();
+      homeInput.focus();
+    });
 
     var list = document.getElementById("project-list");
     projects.forEach(function (p) {
@@ -602,6 +684,8 @@
 
       list.appendChild(card);
     });
+
+    renderHomeResults(); // 回到首頁時若還有搜尋關鍵字,直接顯示結果
   }
 
   // ---------- ERP 頁面(進貨單 / 製令領料單;功能建置中) ----------
