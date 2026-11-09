@@ -220,6 +220,15 @@ def set_text(cell, v):
 
 RECEIPT_SHEET = "收料"
 RECEIPT_HEADERS = ["日期", "廠商", "採購單號", "品號", "品名", "數量"]
+# 標題列可接受的別名(第一個是新建工作表時使用的名稱)
+RECEIPT_ALIASES = {
+    "日期": ["日期"],
+    "廠商": ["廠商", "廠商簡稱"],
+    "採購單號": ["採購單號", "採購單別-單號-序號", "採購單別單號序號", "採購單"],
+    "品號": ["品號", "材料品號"],
+    "品名": ["品名"],
+    "數量": ["數量", "收料數量", "進貨數量"],
+}
 
 
 def load_receipts_done(path):
@@ -252,11 +261,18 @@ def apply_receipts(wb, receipts, state_path):
         log("主檔沒有工作表「%s」,已建立" % RECEIPT_SHEET)
     ws = wb[RECEIPT_SHEET]
 
-    col_of = {}
+    # 第 1 列標題 -> 欄號;「收料」表的標題可能被使用者改名,所以每個欄位接受幾種寫法(例如 ERP 進貨用的「採購單別-單號-序號」)
+    by_header = {}
     for c in range(1, ws.max_column + 1):
         h = str(ws.cell(1, c).value or "").strip()
         if h:
-            col_of[h] = c
+            by_header[h] = c
+    col_of = {}
+    for name in RECEIPT_HEADERS:
+        for alias in RECEIPT_ALIASES.get(name, [name]):
+            if alias in by_header:
+                col_of[name] = by_header[alias]
+                break
     missing = [h for h in RECEIPT_HEADERS if h not in col_of]
     if missing:
         log("工作表「%s」標題列缺少欄位 %s,收料留待處理" % (RECEIPT_SHEET, "、".join(missing)))
