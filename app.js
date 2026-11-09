@@ -1484,6 +1484,12 @@
 
   function receiveBtnHtml(r) {
     if (!can("receive")) return "";
+    // 沒有採購單號、且庫存已經夠用(庫存數量 ≥ 需求數量):不需要收料,收料鍵反白(停用)
+    var hasPo = (r.poNos || []).some(function (p) { return String(p || "").trim() !== ""; });
+    var noNeed = !hasPo && (Number(r.stockQty) || 0) >= (Number(r.needQty) || 0);
+    if (noNeed) {
+      return '<button type="button" class="recv-btn" disabled title="無採購單且庫存已足夠,不需收料">收料</button>';
+    }
     return '<button type="button" class="recv-btn" data-recv="' + recvIndex(r) + '">收料</button>';
   }
 

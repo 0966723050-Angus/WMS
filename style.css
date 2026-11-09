@@ -783,6 +783,17 @@ button.erp-tile:disabled:hover { border-color: var(--border); box-shadow: var(--
 }
 .recv-btn:hover { background: var(--brand-dark); border-color: var(--brand-dark); box-shadow: 0 4px 12px rgba(15, 118, 110, 0.3); }
 .recv-btn:active { transform: translateY(1px); }
+/* 反白(停用):無採購單且庫存已足夠,不需收料 */
+.recv-btn:disabled,
+.recv-btn:disabled:hover {
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  border-color: var(--border);
+  box-shadow: none;
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
 table.data-table .recv-btn { min-height: 28px; padding: 0 12px; font-size: 12px; }
 .recv-info .field { margin-top: 0; }
 .recv-info-row { display: flex; gap: 10px; padding: 3px 0; font-size: 14px; }
