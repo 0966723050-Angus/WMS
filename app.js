@@ -767,38 +767,81 @@
     document.addEventListener("keydown", onKey);
     modal.querySelector("#rcv-cancel").addEventListener("click", close);
 
-    function itemHtml(r, pending) {
-      return '<div class="rcv-item' + (pending ? ' pending' : '') + '">' +
+    var curRows = [], curPend = [];
+
+    // kind: "sheet"(已寫入 Excel)/ "pending"(排隊中)/ "deleting"(已送出刪除,等電腦同步)
+    function itemHtml(r, kind, idx) {
+      var del = kind === "deleting";
+      return '<div class="rcv-item' + (kind === "pending" ? ' pending' : '') + (del ? ' deleting' : '') + '">' +
         '<div class="rcv-top"><span class="rcv-code">' + esc(r.c) + '</span>' +
           '<span class="rcv-qty">數量 ' + esc(fmtNum(r.q)) + '</span></div>' +
         (r.n ? '<div class="rcv-name">' + esc(r.n) + '</div>' : '') +
         '<div class="rcv-sub">' + esc(r.v) + ' · ' + esc(r.p) +
-          (pending ? ' <span class="pending-chip">待寫入 Excel</span>' : '') + '</div>' +
+          (kind === "pending" ? ' <span class="pending-chip">待寫入 Excel</span>' : '') +
+          (del ? ' <span class="pending-chip">刪除中,約 5 分鐘內同步到 Excel</span>' : '') + '</div>' +
+        (del ? '' : '<button type="button" class="rcv-del" data-kind="' + kind + '" data-i="' + idx + '" aria-label="刪除這一筆">刪除</button>') +
       '</div>';
     }
 
-    api("receipt_list").then(function (res) {
-      if (!res.ok) throw new Error(res.error || "讀取清單失敗");
-      var snap = res.snapshot, rows = (snap && snap.rows) || [], pend = res.pending || [];
-      var html = "";
-      if (!snap) {
-        html = '<div class="empty-state">尚無清單資料,電腦約每 5 分鐘同步一次,請稍後再試</div>';
-      } else {
-        var when = new Date(snap.ts).toLocaleString("zh-TW", { hour12: false });
-        html += '<div class="rcv-count">共 ' + (snap.total || rows.length) + ' 筆已收料(清單更新:' + esc(when) + ')' +
-          (snap.total > rows.length ? ',僅列出前 ' + rows.length + ' 筆' : '') + '</div>';
-        html += rows.length ? rows.map(function (r) { return itemHtml(r, false); }).join("")
-          : '<div class="empty-state">「收料」工作表目前沒有資料</div>';
-      }
-      if (pend.length) {
-        html += '<div class="rcv-count rcv-warn">另有 ' + pend.length + ' 筆剛送出、尚未寫入 Excel(約 5 分鐘內寫入),不會包含在這次進貨單:</div>' +
-          pend.map(function (r) { return itemHtml(r, true); }).join("");
-      }
-      box.innerHTML = html;
-      okBtn.disabled = !rows.length;
-    }).catch(function (err) {
-      if (!session) { close(); return; }
-      box.innerHTML = '<div class="empty-state">' + esc(err.message) + '</div>';
+    function load() {
+      return api("receipt_list").then(function (res) {
+        if (!res.ok) throw new Error(res.error || "讀取清單失敗");
+        var snap = res.snapshot;
+        curRows = (snap && snap.rows) || [];
+        curPend = res.pending || [];
+        var html = "";
+        if (!snap) {
+          html = '<div class="empty-state">尚無清單資料,電腦約每 5 分鐘同步一次,請稍後再試</div>';
+        } else {
+          var when = new Date(snap.ts).toLocaleString("zh-TW", { hour12: false });
+          html += '<div class="rcv-count">共 ' + (snap.total || curRows.length) + ' 筆已收料(清單更新:' + esc(when) + ')' +
+            (snap.total > curRows.length ? ',僅列出前 ' + curRows.length + ' 筆' : '') + '</div>';
+          html += curRows.length ? curRows.map(function (r, i) { return itemHtml(r, r.del ? "deleting" : "sheet", i); }).join("")
+            : '<div class="empty-state">「收料」工作表目前沒有資料</div>';
+        }
+        if (curPend.length) {
+          html += '<div class="rcv-count rcv-warn">另有 ' + curPend.length + ' 筆剛送出、尚未寫入 Excel(約 5 分鐘內寫入),不會包含在這次進貨單:</div>' +
+            curPend.map(function (r, i) { return itemHtml(r, "pending", i); }).join("");
+        }
+        box.innerHTML = html;
+        var deleting = curRows.filter(function (r) { return r.del; }).length;
+        var usable = curRows.length - deleting;
+        okBtn.disabled = usable < 1 || deleting > 0;   // 有刪除還沒同步到 Excel 時,先不能確認(否則會把已刪除的列也建成進貨單)
+        if (deleting) msg.textContent = "有 " + deleting + " 筆刪除正在同步到 Excel,同步完成後才能按「確認」(約 5 分鐘內,可重新開啟清單查看)";
+        else if (msg.textContent.indexOf("正在同步") !== -1) msg.textContent = "";
+      }).catch(function (err) {
+        if (!session) { close(); return; }
+        box.innerHTML = '<div class="empty-state">' + esc(err.message) + '</div>';
+      });
+    }
+    load();
+
+    // 刪除清單中的一筆:已寫入 Excel 的由電腦端同步刪除 WMS.xlsx 對應列;排隊中的直接移除
+    box.addEventListener("click", function (e) {
+      var b = e.target.closest ? e.target.closest(".rcv-del") : null;
+      if (!b || b.disabled) return;
+      var kind = b.getAttribute("data-kind"), r = (kind === "pending" ? curPend : curRows)[parseInt(b.getAttribute("data-i"), 10)];
+      if (!r) return;
+      var what = r.c + (r.n ? " " + r.n : "") + "\n數量 " + fmtNum(r.q) + " · " + r.v + " · " + r.p;
+      if (!window.confirm("確定要刪除這一筆收料嗎?\n\n" + what + "\n\n" + (kind === "pending"
+        ? "這筆還沒寫入 Excel,刪除後就不會寫入。"
+        : "將從 WMS.xlsx「收料」工作表移除(電腦約 5 分鐘內同步,同時更新雲端硬碟),此動作無法復原。"))) return;
+      b.disabled = true;
+      msg.textContent = "刪除中…";
+      var payload = kind === "pending"
+        ? { kind: "pending", id: r.id }
+        : { kind: "sheet", vendor: r.v, po: r.p, code: r.c, qty: r.q };
+      api("receipt_delete", payload).then(function (res) {
+        if (!res.ok) throw new Error(res.error || "刪除失敗");
+        msg.textContent = "";
+        showToast(kind === "pending" ? "已刪除" : "已送出刪除,稍後同步到 Excel");
+        return load();
+      }).catch(function (err) {
+        if (!session) { close(); return; }
+        msg.textContent = err.message;
+        b.disabled = false;
+        load();
+      });
     });
 
     okBtn.addEventListener("click", function () {

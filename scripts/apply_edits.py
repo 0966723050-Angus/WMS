@@ -307,6 +307,43 @@ def apply_receipts(wb, receipts, state_path):
     return done, [], skipped
 
 
+def clip_to(v, n):
+    return norm(v)[:n]
+
+
+def apply_receipt_deletes(wb, deletes):
+    """網頁「進貨單簽核」清單按了刪除:從「收料」工作表移除對應的列(以 廠商|採購單|品號|數量 比對,同樣內容只刪一列)。
+    找不到對應列(已被刪掉)視為已完成。回傳 (已處理的刪除請求, 實際刪除的列數);標題對不上時回傳 ([], 0) 讓請求留待處理。"""
+    import puri09_cleanup as pc  # 共用「收料」表標題別名與讀取邏輯
+
+    if pc.SHEET not in wb.sheetnames:
+        log("主檔沒有工作表「%s」,刪除請求視為已完成" % pc.SHEET)
+        return list(deletes), 0
+    ws = wb[pc.SHEET]
+    cols, missing = pc.columns(ws)
+    if missing:
+        log("工作表「%s」標題列缺少欄位 %s,刪除請求留待處理" % (pc.SHEET, "、".join(missing)))
+        return [], 0
+
+    cur = pc.read_rows(ws, cols)
+    used, del_rows = set(), []
+    for d in sorted(deletes, key=lambda x: x.get("ts", 0)):
+        key = (clip_to(d.get("vendor"), 20), clip_to(d.get("po"), 32), clip_to(d.get("code"), 32), float(d.get("qty") or 0))
+        for r in cur:
+            if r["row"] in used:
+                continue
+            if (r["vendor"][:20], r["po"][:32], r["code"][:32], r["qty"]) == key:
+                used.add(r["row"])
+                del_rows.append(r["row"])
+                log("收料已刪除第 %d 列: %s 採購單 %s 品號 %s 數量 %s(%s 在網頁清單刪除)" % (r["row"], r["vendor"], r["po"], r["code"], r["qty"], d.get("by")))
+                break
+        else:
+            log("刪除請求找不到對應列(可能已被刪除),視為完成: %s %s" % (d.get("po"), d.get("code")))
+    for r in sorted(del_rows, reverse=True):
+        ws.delete_rows(r)
+    return list(deletes), len(del_rows)
+
+
 def backup(master, backup_dir):
     os.makedirs(backup_dir, exist_ok=True)
     name = "WMS_%s.xlsx" % datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -350,6 +387,7 @@ def main():
         return 1
     edits = res.get("edits", [])
     receipts = res.get("receipts", [])
+    deletes = res.get("deletes", [])
     if res.get("wms"):
         start_wms_update(endpoint, sync_key, res["wms"])
     if res.get("schedules"):
@@ -360,17 +398,18 @@ def main():
         receipt_snapshot.report(endpoint, sync_key, args.master)
     except Exception as ex:
         log("警告: 回報收料清單快照失敗: %s" % ex)
-    if not edits and not receipts:
+    if not edits and not receipts and not deletes:
         return 0
 
     master_dir, master_name = os.path.split(args.master)
     if os.path.exists(os.path.join(master_dir, "~$" + master_name)):
-        log("主檔目前被 Excel 開啟,%d 筆修改、%d 筆收料留待下次處理" % (len(edits), len(receipts)))
+        log("主檔目前被 Excel 開啟,%d 筆修改、%d 筆收料、%d 筆清單刪除留待下次處理" % (len(edits), len(receipts), len(deletes)))
         return 0
 
     state_path = os.path.join(os.path.dirname(args.log) or HERE, "receipts_done.json")
     done, failed = [], []
     r_done, r_failed, r_skipped = [], [], []
+    d_done, d_rows = [], 0
     try:
         backup(args.master, args.backup_dir)
         wb = openpyxl.load_workbook(args.master)
@@ -400,7 +439,10 @@ def main():
         if receipts:
             r_done, r_failed, r_skipped = apply_receipts(wb, receipts, state_path)
 
-        if done or r_done:
+        if deletes:  # 先寫入收料、再處理刪除,同一輪的結果才會一致
+            d_done, d_rows = apply_receipt_deletes(wb, deletes)
+
+        if done or r_done or d_rows:
             wb.save(args.master)
             if r_done:
                 remember_receipts(state_path, [x["id"] for x in r_done])
@@ -408,7 +450,7 @@ def main():
                 shutil.copy2(args.master, args.drive_copy)
             except Exception as ex:
                 log("警告: 已寫入主檔,但複製到雲端硬碟失敗(下次 WMS 更新時會一併複製): %s" % ex)
-            if r_done:  # 收料寫進「收料」表了:馬上回報最新清單(在 ack 之前,清單不會暫時少一筆)
+            if r_done or d_rows:  # 收料寫進/刪除:馬上回報最新清單(在 ack 之前,清單不會暫時少一筆)
                 try:
                     import receipt_snapshot
                     receipt_snapshot.report(endpoint, sync_key, args.master, force=True)
@@ -421,15 +463,15 @@ def main():
         log("處理失敗: %s" % ex)
         return 1
 
-    ids = [e["id"] for e in done + failed + r_done + r_skipped if e.get("id")]
+    ids = [e["id"] for e in done + failed + r_done + r_skipped + d_done if e.get("id")]
     if ids:
         try:
             call(endpoint, {"action": "ack", "key": sync_key, "ids": ",".join(ids)})
         except Exception as ex:
             log("警告: 回報已處理失敗,下次可能重複處理(儲位修改內容相同不影響;收料已用 receipts_done.json 防重複): %s" % ex)
 
-    log("完成: 儲位修改 寫入 %d 筆,略過 %d 筆;收料 寫入 %d 筆,重複略過 %d 筆,未處理 %d 筆"
-        % (len(done), len(failed), len(r_done), len(r_skipped), len(r_failed)))
+    log("完成: 儲位修改 寫入 %d 筆,略過 %d 筆;收料 寫入 %d 筆,重複略過 %d 筆,未處理 %d 筆;清單刪除 處理 %d 筆(刪除 %d 列)"
+        % (len(done), len(failed), len(r_done), len(r_skipped), len(r_failed), len(d_done), d_rows))
     return EXIT_APPLIED if done else 0
 
 
