@@ -116,8 +116,8 @@
     { key: "admin", label: "名單管理" },
     { key: "edit", label: "儲位編輯" },
     { key: "receive", label: "收料" },
-    { key: "erp_receipt", label: "ERP:進貨單" },
-    { key: "erp_issue", label: "ERP:製令領料單" },
+    { key: "erp_receipt", label: "ERP:進貨單簽核" },
+    { key: "erp_issue", label: "ERP:製令領料單簽核" },
     { key: "erp_wms", label: "ERP:WMS更新" }
   ];
   var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, erp_receipt: false, erp_issue: false, erp_wms: false };
@@ -700,7 +700,7 @@
   };
 
   var ERP_PAGES = {
-    issue: { title: "製令領料單", perm: "erp_issue" }
+    issue: { title: "製令領料單簽核", perm: "erp_issue" }
   };
 
   // 「進貨單」:確認後送出請求,由電腦上的 Claude 排程啟動 puri09 skill,在鼎新 ERP 的 PURI09 建立進貨單。
@@ -733,25 +733,88 @@
       }).catch(function () { /* 讀不到狀態不影響使用 */ });
     }
 
+    // 按下「進貨單簽核」:先列出已收料清單明細,按「確認」才送出請求
     btn.addEventListener("click", function () {
-      if (!window.confirm(
-        "確定要執行「ERP 進貨單」嗎?\n\n" +
-        "將依電腦上 WMS.xlsx「收料」工作表的所有資料,在鼎新 ERP 進貨單建立作業(PURI09)逐張建立並確認。\n\n" +
-        "※ 請先確認「收料」工作表只有尚未建立進貨單的資料,否則會重複建立。\n" +
-        "※ 執行期間該電腦的畫面會被自動操作。")) return;
-      btn.disabled = true;
-      note.textContent = "送出中…";
-      api("puri09_request").then(function (res) {
-        if (!res.ok) throw new Error(res.error || "送出失敗");
-        showToast("已送出進貨單請求");
-        refresh();
-      }).catch(function (err) {
-        note.textContent = err.message;
-        if (session) btn.disabled = false;
-      });
+      openPuriListDialog(function () { refresh(); });
     });
 
     refresh();
+  }
+
+  function openPuriListDialog(onSent) {
+    var modal = el(
+      '<div class="modal-backdrop">' +
+        '<div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="rcv-title">' +
+          '<h2 id="rcv-title">進貨單簽核</h2>' +
+          '<p class="rcv-intro">已收料清單明細(WMS.xlsx「收料」工作表)。按「確認」後,會依這份清單在鼎新 ERP 進貨單建立作業(PURI09)逐張建立並確認,執行期間該電腦的畫面會被自動操作。</p>' +
+          '<div class="rcv-box" id="rcv-box"><div class="skeleton">載入清單中…</div></div>' +
+          '<p class="modal-msg" id="rcv-msg"></p>' +
+          '<div class="modal-actions">' +
+            '<button type="button" class="btn btn-secondary" id="rcv-cancel">取消</button>' +
+            '<button type="button" class="btn" id="rcv-ok" disabled>確認</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>'
+    );
+    document.body.appendChild(modal);
+
+    var box = modal.querySelector("#rcv-box"), msg = modal.querySelector("#rcv-msg"), okBtn = modal.querySelector("#rcv-ok");
+    function close() {
+      document.removeEventListener("keydown", onKey);
+      if (modal.parentNode) modal.parentNode.removeChild(modal);
+    }
+    function onKey(e) { if (e.key === "Escape") close(); }
+    document.addEventListener("keydown", onKey);
+    modal.querySelector("#rcv-cancel").addEventListener("click", close);
+
+    function itemHtml(r, pending) {
+      return '<div class="rcv-item' + (pending ? ' pending' : '') + '">' +
+        '<div class="rcv-top"><span class="rcv-code">' + esc(r.c) + '</span>' +
+          '<span class="rcv-qty">數量 ' + esc(fmtNum(r.q)) + '</span></div>' +
+        (r.n ? '<div class="rcv-name">' + esc(r.n) + '</div>' : '') +
+        '<div class="rcv-sub">' + esc(r.v) + ' · ' + esc(r.p) +
+          (pending ? ' <span class="pending-chip">待寫入 Excel</span>' : '') + '</div>' +
+      '</div>';
+    }
+
+    api("receipt_list").then(function (res) {
+      if (!res.ok) throw new Error(res.error || "讀取清單失敗");
+      var snap = res.snapshot, rows = (snap && snap.rows) || [], pend = res.pending || [];
+      var html = "";
+      if (!snap) {
+        html = '<div class="empty-state">尚無清單資料,電腦約每 5 分鐘同步一次,請稍後再試</div>';
+      } else {
+        var when = new Date(snap.ts).toLocaleString("zh-TW", { hour12: false });
+        html += '<div class="rcv-count">共 ' + (snap.total || rows.length) + ' 筆已收料(清單更新:' + esc(when) + ')' +
+          (snap.total > rows.length ? ',僅列出前 ' + rows.length + ' 筆' : '') + '</div>';
+        html += rows.length ? rows.map(function (r) { return itemHtml(r, false); }).join("")
+          : '<div class="empty-state">「收料」工作表目前沒有資料</div>';
+      }
+      if (pend.length) {
+        html += '<div class="rcv-count rcv-warn">另有 ' + pend.length + ' 筆剛送出、尚未寫入 Excel(約 5 分鐘內寫入),不會包含在這次進貨單:</div>' +
+          pend.map(function (r) { return itemHtml(r, true); }).join("");
+      }
+      box.innerHTML = html;
+      okBtn.disabled = !rows.length;
+    }).catch(function (err) {
+      if (!session) { close(); return; }
+      box.innerHTML = '<div class="empty-state">' + esc(err.message) + '</div>';
+    });
+
+    okBtn.addEventListener("click", function () {
+      okBtn.disabled = true;
+      msg.textContent = "送出中…";
+      api("puri09_request").then(function (res) {
+        if (!res.ok) throw new Error(res.error || "送出失敗");
+        close();
+        showToast("已送出進貨單簽核請求");
+        if (onSent) onSent();
+      }).catch(function (err) {
+        if (!session) { close(); return; }
+        msg.textContent = err.message;
+        okBtn.disabled = false;
+      });
+    });
   }
 
   // 「WMS更新」:僅管理者。送出請求後由電腦端約每 5 分鐘檢查一次並啟動排程「WMS 自動更新」,
@@ -964,12 +1027,12 @@
         '<div class="erp-grid">' +
           (can("erp_receipt")
             ? '<button type="button" class="erp-tile erp-tile-wms" id="puri09-btn">' +
-              '<span class="erp-tile-icon">' + ERP_ICONS.receipt + '</span><span class="erp-tile-title">進貨單</span>' +
+              '<span class="erp-tile-icon">' + ERP_ICONS.receipt + '</span><span class="erp-tile-title">進貨單簽核</span>' +
               '<span class="erp-tile-note" id="puri09-note"></span></button>'
             : '') +
           (can("erp_issue")
             ? '<a class="erp-tile" href="#/erp/issue"><span class="erp-tile-tag">建置中</span>' +
-              '<span class="erp-tile-icon">' + ERP_ICONS.issue + '</span><span class="erp-tile-title">製令領料單</span></a>'
+              '<span class="erp-tile-icon">' + ERP_ICONS.issue + '</span><span class="erp-tile-title">製令領料單簽核</span></a>'
             : '') +
           (can("erp_wms")
             ? '<button type="button" class="erp-tile erp-tile-wms" id="wms-update-btn">' +

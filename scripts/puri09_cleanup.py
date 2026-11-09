@@ -158,7 +158,18 @@ def cmd_clear(argv):
         ws.delete_rows(r)
     wb.save(MASTER)
     left = len(read_rows(openpyxl.load_workbook(MASTER)[SHEET], cols))
-    return out({"ok": True, "deleted": len(del_rows), "requested": len(targets), "remaining": left, "backup": bak})
+    # 清除後立刻把最新(通常是空的)清單回報給網站,「進貨單簽核」才不會還顯示已處理的資料
+    synced = False
+    try:
+        cfg_path = os.path.join(HERE, "edit_config.json")
+        with open(cfg_path, encoding="utf-8-sig") as f:
+            cfg = json.load(f)
+        import receipt_snapshot
+        synced = receipt_snapshot.report(cfg["endpoint"], cfg["syncKey"], MASTER, force=True)
+    except Exception:
+        synced = False
+    return out({"ok": True, "deleted": len(del_rows), "requested": len(targets), "remaining": left, "backup": bak,
+                "snapshotSynced": synced})
 
 
 def cmd_sync():

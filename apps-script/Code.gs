@@ -346,6 +346,38 @@ function puriReport_(state, msg) {
   return { ok: true };
 }
 
+// ---------- 「已收料清單」(WMS.xlsx「收料」工作表的內容快照) ----------
+// 電腦端每次寫入收料 / 清除收料後,會把工作表目前的資料列回報上來(receipts_snapshot,需同步金鑰);
+// 網站「進貨單簽核」按下後,列出這份快照 + 尚未寫入 Excel 的排隊中收料,供使用者確認。
+
+var RSNAP_KEY = 'RECEIPT_SNAPSHOT';
+var RSNAP_MAX_ROWS = 60;
+var RSNAP_MAX_CHARS = 8500;   // 指令碼屬性單一值上限約 9KB
+
+function saveSnapshot_(body) {
+  var rows = Array.isArray(body.rows) ? body.rows : [];
+  var out = [];
+  rows.slice(0, RSNAP_MAX_ROWS).forEach(function (r) {
+    if (!r) return;
+    out.push({
+      v: clip_(r.v, 20), p: clip_(r.p, 32), c: clip_(r.c, 32), n: clip_(r.n, 24),
+      q: Number(r.q) || 0, d: clip_(r.d, 10)
+    });
+  });
+  var snap = { ts: Date.now(), total: parseInt(body.total, 10) || out.length, rows: out };
+  var raw = JSON.stringify(snap);
+  while (raw.length > RSNAP_MAX_CHARS && out.length) { out.pop(); raw = JSON.stringify(snap); }
+  props_().setProperty(RSNAP_KEY, raw);
+  return { ok: true, stored: out.length };
+}
+
+function receiptListView_() {
+  var pending = listReceipts_().map(function (r) {
+    return { v: r.vendor, p: r.po, c: r.code, n: clip_(r.name, 24), q: r.qty, ts: r.ts };
+  });
+  return { ok: true, snapshot: readJson_(RSNAP_KEY), pending: pending };
+}
+
 // ---------- 自動執行排程(ERP 頁「設定」;由本機排程每 5 分鐘取回並依時間啟動) ----------
 // SCHEDULES:{ <job>: { enabled, start: 'HH:MM', end: 'HH:MM', interval: 分鐘, skipSat, skipSun, updatedAt, by } }
 // 每天 start 起每 interval 分鐘執行一次,到 end 為止;skipSat / skipSun 為 true 時該天不執行。
@@ -454,6 +486,13 @@ function doPost(e) {
       return json_({ ok: true, email: user.email, name: user.name || info.name, isAdmin: user.isAdmin, perms: user.perms, key: key, session: s.token, exp: s.exp });
     }
 
+    // 電腦端回報「收料」工作表內容(用同步金鑰,不是登入工作階段)
+    if (action === 'receipts_snapshot') {
+      var kerr = checkSyncKey_(body.key);
+      if (kerr) return json_({ ok: false, error: kerr });
+      return json_(saveSnapshot_(body));
+    }
+
     var me = checkSession_(body.session);
     if (!me) return json_({ ok: false, needLogin: true, error: '登入已失效,請重新登入' });
 
@@ -473,8 +512,12 @@ function doPost(e) {
       if (!me.perms.erp_wms) return denied_('WMS更新');
       return json_(action === 'wms_update' ? requestWmsUpdate_(me) : wmsView_());
     }
+    if (action === 'receipt_list') {
+      if (!me.perms.erp_receipt) return denied_('進貨單簽核');
+      return json_(receiptListView_());
+    }
     if (action === 'puri09_status' || action === 'puri09_request') {
-      if (!me.perms.erp_receipt) return denied_('進貨單');
+      if (!me.perms.erp_receipt) return denied_('進貨單簽核');
       return json_(action === 'puri09_request' ? requestPuri_(me) : puriView_());
     }
     if (action === 'sched_get' || action === 'sched_set' || action === 'sched_delete') {

@@ -352,6 +352,12 @@ def main():
         start_wms_update(endpoint, sync_key, res["wms"])
     if res.get("schedules"):
         run_due_schedules(endpoint, sync_key, res["schedules"])
+    # 「收料」工作表內容有變動(例如使用者自己編輯/清除)就回報給網站,供「進貨單簽核」清單使用;沒變動不重送
+    try:
+        import receipt_snapshot
+        receipt_snapshot.report(endpoint, sync_key, args.master)
+    except Exception as ex:
+        log("警告: 回報收料清單快照失敗: %s" % ex)
     if not edits and not receipts:
         return 0
 
@@ -400,6 +406,12 @@ def main():
                 shutil.copy2(args.master, args.drive_copy)
             except Exception as ex:
                 log("警告: 已寫入主檔,但複製到雲端硬碟失敗(下次 WMS 更新時會一併複製): %s" % ex)
+            if r_done:  # 收料寫進「收料」表了:馬上回報最新清單(在 ack 之前,清單不會暫時少一筆)
+                try:
+                    import receipt_snapshot
+                    receipt_snapshot.report(endpoint, sync_key, args.master, force=True)
+                except Exception as ex:
+                    log("警告: 回報收料清單快照失敗: %s" % ex)
     except PermissionError as ex:
         log("主檔無法寫入(可能被開啟),留待下次處理: %s" % ex)
         return 0
