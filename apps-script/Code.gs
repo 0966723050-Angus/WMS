@@ -306,6 +306,46 @@ function requestWmsUpdate_(user) {
   return { ok: true };
 }
 
+// ---------- ERP「進貨單」(PURI09):網頁送出請求,電腦上的 Claude 排程取走後執行 puri09 skill ----------
+// PURI09_REQ    :排隊中的請求 {ts, by}
+// PURI09_STATUS :執行狀態 {state: running|done|error, msg, ts, by}
+
+var PURI_REQ_KEY = 'PURI09_REQ';
+var PURI_STATUS_KEY = 'PURI09_STATUS';
+var PURI_STALE_MS = 3 * 60 * 60 * 1000;   // 執行中超過 3 小時視為失效(避免當掉後按鈕永遠鎖住)
+
+function puriView_() {
+  var req = readJson_(PURI_REQ_KEY);
+  var st = readJson_(PURI_STATUS_KEY);
+  if (st && st.state === 'running' && Date.now() - st.ts > PURI_STALE_MS) st = { state: 'error', msg: '執行逾時未回報', ts: st.ts, by: st.by };
+  return { ok: true, queued: req, status: st };
+}
+
+function requestPuri_(user) {
+  var v = puriView_();
+  if (v.queued) return { ok: false, error: '已有進貨單請求排隊中,請稍候' };
+  if (v.status && v.status.state === 'running') return { ok: false, error: '進貨單正在執行中' };
+  props_().setProperty(PURI_REQ_KEY, JSON.stringify({ ts: Date.now(), by: user.email }));
+  return { ok: true };
+}
+
+// Claude 排程取請求:有排隊中的請求且目前沒有執行中,就取走並標記為執行中
+function puriClaim_() {
+  var v = puriView_();
+  if (!v.queued) return { ok: true, pending: false };
+  if (v.status && v.status.state === 'running') return { ok: true, pending: false, busy: true };
+  props_().deleteProperty(PURI_REQ_KEY);
+  props_().setProperty(PURI_STATUS_KEY, JSON.stringify({ state: 'running', msg: '', ts: Date.now(), by: v.queued.by }));
+  return { ok: true, pending: true, request: v.queued };
+}
+
+function puriReport_(state, msg) {
+  if (['done', 'error'].indexOf(state) === -1) return { ok: false, error: '狀態不正確' };
+  var cur = readJson_(PURI_STATUS_KEY) || {};
+  props_().setProperty(PURI_STATUS_KEY, JSON.stringify({ state: state, msg: clip_(msg, 300), ts: Date.now(), by: cur.by || '' }));
+  return { ok: true };
+}
+
 // ---------- 自動執行排程(ERP 頁「設定」;由本機排程每 5 分鐘取回並依時間啟動) ----------
 // SCHEDULES:{ <job>: { enabled, start: 'HH:MM', end: 'HH:MM', interval: 分鐘, skipSat, skipSun, updatedAt, by } }
 // 每天 start 起每 interval 分鐘執行一次,到 end 為止;skipSat / skipSun 為 true 時該天不執行。
@@ -433,6 +473,10 @@ function doPost(e) {
       if (!me.perms.erp_wms) return denied_('WMS更新');
       return json_(action === 'wms_update' ? requestWmsUpdate_(me) : wmsView_());
     }
+    if (action === 'puri09_status' || action === 'puri09_request') {
+      if (!me.perms.erp_receipt) return denied_('進貨單');
+      return json_(action === 'puri09_request' ? requestPuri_(me) : puriView_());
+    }
     if (action === 'sched_get' || action === 'sched_set' || action === 'sched_delete') {
       if (!me.isAdmin) return json_({ ok: false, error: '只有管理者可以使用' });
       return json_(scheduleAction_(body, me));
@@ -459,9 +503,13 @@ function doGet(e) {
   var lock = LockService.getScriptLock();
   lock.waitLock(15000);
   try {
-    if (p.action === 'pull' || p.action === 'ack' || p.action === 'set_data_key' || p.action === 'wms_report') {
+    if (p.action === 'pull' || p.action === 'ack' || p.action === 'set_data_key' || p.action === 'wms_report' ||
+        p.action === 'puri09_claim' || p.action === 'puri09_report') {
       var err = checkSyncKey_(p.key);
       if (err) return json_({ ok: false, error: err });
+
+      if (p.action === 'puri09_claim') return json_(puriClaim_());
+      if (p.action === 'puri09_report') return json_(puriReport_(String(p.state || ''), p.msg));
 
       if (p.action === 'pull') return json_({ ok: true, edits: listPending_(), receipts: listReceipts_(), wms: readJson_(WMS_REQ_KEY), schedules: getSchedules_() });
 

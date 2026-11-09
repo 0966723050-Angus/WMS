@@ -700,9 +700,59 @@
   };
 
   var ERP_PAGES = {
-    receipt: { title: "進貨單", perm: "erp_receipt" },
     issue: { title: "製令領料單", perm: "erp_issue" }
   };
+
+  // 「進貨單」:確認後送出請求,由電腦上的 Claude 排程啟動 puri09 skill,在鼎新 ERP 的 PURI09 建立進貨單。
+  // 狀態(排隊中 / 執行中 / 完成 / 失敗)由電腦端回報,顯示在按鈕下方。
+  function puriStatusText(res) {
+    var st = res.status, when = st && st.ts ? new Date(st.ts).toLocaleString("zh-TW", { hour12: false }) : "";
+    if (res.queued) return { text: "已送出,等待電腦上的 Claude 排程啟動", busy: true };
+    if (!st) return { text: "", busy: false };
+    if (st.state === "running") return { text: "執行中(" + when + " 起)", busy: true };
+    if (st.state === "done") return { text: "上次完成(" + when + ")" + (st.msg ? ":" + st.msg : ""), busy: false };
+    return { text: "上次失敗(" + when + "):" + (st.msg || ""), busy: false };
+  }
+
+  function setupPuri09() {
+    var btn = document.getElementById("puri09-btn");
+    var note = document.getElementById("puri09-note");
+    if (!btn || !note) return;
+    var timer = null;
+
+    function refresh() {
+      api("puri09_status").then(function (res) {
+        if (!document.body.contains(btn)) return; // 已離開此頁
+        if (!res.ok) { note.textContent = res.error || ""; return; }
+        var s = puriStatusText(res);
+        note.textContent = s.text;
+        btn.disabled = s.busy;
+        btn.classList.toggle("is-busy", s.busy);
+        clearTimeout(timer);
+        if (s.busy) timer = setTimeout(refresh, 20000); // 進行中才持續更新狀態
+      }).catch(function () { /* 讀不到狀態不影響使用 */ });
+    }
+
+    btn.addEventListener("click", function () {
+      if (!window.confirm(
+        "確定要執行「ERP 進貨單」嗎?\n\n" +
+        "將依電腦上 WMS.xlsx「收料」工作表的所有資料,在鼎新 ERP 進貨單建立作業(PURI09)逐張建立並確認。\n\n" +
+        "※ 請先確認「收料」工作表只有尚未建立進貨單的資料,否則會重複建立。\n" +
+        "※ 執行期間該電腦的畫面會被自動操作。")) return;
+      btn.disabled = true;
+      note.textContent = "送出中…";
+      api("puri09_request").then(function (res) {
+        if (!res.ok) throw new Error(res.error || "送出失敗");
+        showToast("已送出進貨單請求");
+        refresh();
+      }).catch(function (err) {
+        note.textContent = err.message;
+        if (session) btn.disabled = false;
+      });
+    });
+
+    refresh();
+  }
 
   // 「WMS更新」:僅管理者。送出請求後由電腦端約每 5 分鐘檢查一次並啟動排程「WMS 自動更新」,
   // 狀態(排隊中 / 執行中 / 完成 / 失敗)由電腦端回報,這裡顯示在按鈕下方。
@@ -913,8 +963,9 @@
         '</h1>' +
         '<div class="erp-grid">' +
           (can("erp_receipt")
-            ? '<a class="erp-tile" href="#/erp/receipt"><span class="erp-tile-tag">建置中</span>' +
-              '<span class="erp-tile-icon">' + ERP_ICONS.receipt + '</span><span class="erp-tile-title">進貨單</span></a>'
+            ? '<button type="button" class="erp-tile erp-tile-wms" id="puri09-btn">' +
+              '<span class="erp-tile-icon">' + ERP_ICONS.receipt + '</span><span class="erp-tile-title">進貨單</span>' +
+              '<span class="erp-tile-note" id="puri09-note"></span></button>'
             : '') +
           (can("erp_issue")
             ? '<a class="erp-tile" href="#/erp/issue"><span class="erp-tile-tag">建置中</span>' +
@@ -927,6 +978,7 @@
               '<span class="erp-tile-note" id="wms-sched-note"></span></button>'
             : '') +
         '</div>';
+      if (can("erp_receipt")) setupPuri09();
       if (can("erp_wms")) setupWmsUpdate();
       if (isAdmin && can("erp_wms")) {
         api("sched_get").then(function (res) {
