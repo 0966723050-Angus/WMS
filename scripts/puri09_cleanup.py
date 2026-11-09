@@ -21,6 +21,7 @@ import sys
 import openpyxl
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)  # `python -I` 不會自動加入本資料夾,receipt_snapshot 要靠這行才 import 得到
 # 環境變數 PURI09_MASTER / PURI09_DRIVE / PURI09_DIR 只在測試時用來改指向副本
 MASTER = os.environ.get("PURI09_MASTER", r"C:\ATK\Project\AI Agent\WMS\WMS.xlsx")
 DRIVE = os.environ.get("PURI09_DRIVE", r"C:\Users\angus.ad\我的雲端硬碟\ATK\WMS.xlsx")

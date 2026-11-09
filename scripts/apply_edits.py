@@ -18,6 +18,8 @@ import urllib.request
 import openpyxl
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# 排程用 `python -I` 執行(隔離模式不會把本資料夾放進模組搜尋路徑),要明確加入才找得到同資料夾的 receipt_snapshot 等模組
+sys.path.insert(0, HERE)
 DEFAULT_CONFIG = os.path.join(HERE, "edit_config.json")
 DEFAULT_MASTER = r"C:\ATK\Project\AI Agent\WMS\WMS.xlsx"
 DEFAULT_DRIVE_COPY = r"C:\Users\angus.ad\我的雲端硬碟\ATK\WMS.xlsx"
