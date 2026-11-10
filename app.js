@@ -1586,17 +1586,14 @@
     var pairs = opts.pairs || pos.map(function (po, i) { return { po: po, vendor: vendors[i] || vendors[0] || "" }; });
     if (!pairs.length) pairs = [{ po: "", vendor: vendors[0] || "" }];
 
-    var pickHtml;
+    // 此物料有多張採購單時,先用下拉選單挑一組(會帶入下面兩個欄位);廠商與採購單號一律可以直接修改
+    var pickHtml = "";
     if (pairs.length > 1) {
       pickHtml =
-        '<div class="field"><span class="field-label">採購單號 / 廠商(此物料有多張採購單,請選擇)</span>' +
+        '<div class="field"><span class="field-label">此物料有多張採購單,請選擇</span>' +
         '<select id="recv-pair">' + pairs.map(function (p, i) {
           return '<option value="' + i + '">' + esc(p.po) + ' — ' + esc(p.vendor) + '</option>';
         }).join("") + '</select></div>';
-    } else {
-      pickHtml =
-        '<div class="recv-info-row"><span class="k">廠商</span><span class="v" id="recv-vendor"></span></div>' +
-        '<div class="recv-info-row"><span class="k">採購單號</span><span class="v" id="recv-po"></span></div>';
     }
 
     var modal = el(
@@ -1604,10 +1601,14 @@
         '<div class="modal" role="dialog" aria-modal="true" aria-labelledby="recv-title">' +
           '<h2 id="recv-title">確認收料</h2>' +
           '<div class="modal-info recv-info">' +
-            pickHtml +
             '<div class="recv-info-row"><span class="k">品號</span><span class="v" id="recv-code"></span></div>' +
             '<div class="recv-info-row"><span class="k">品名</span><span class="v" id="recv-name"></span></div>' +
           '</div>' +
+          pickHtml +
+          '<div class="field"><span class="field-label">廠商(可修改)</span>' +
+            '<input type="text" id="recv-vendor" maxlength="100" autocomplete="off" /></div>' +
+          '<div class="field"><span class="field-label">採購單號(可修改)</span>' +
+            '<input type="text" id="recv-po" maxlength="100" autocomplete="off" autocapitalize="off" spellcheck="false" /></div>' +
           '<div class="field"><span class="field-label">數量(可修改)</span>' +
             '<input type="number" id="recv-qty" inputmode="decimal" min="0" step="any" /></div>' +
           '<p class="modal-msg" id="recv-msg"></p>' +
@@ -1622,8 +1623,14 @@
 
     // 用 textContent 填入,避免任何特殊字元被當成 HTML
     var vEl = modal.querySelector("#recv-vendor"), pEl = modal.querySelector("#recv-po");
-    if (vEl) vEl.textContent = pairs[0].vendor || "(無)";
-    if (pEl) pEl.textContent = pairs[0].po || "(無採購單)";
+    var pairSel = modal.querySelector("#recv-pair");
+    function fillPair() {
+      var p = pairs[pairSel ? parseInt(pairSel.value, 10) : 0] || pairs[0];
+      vEl.value = p.vendor || "";
+      pEl.value = p.po || "";
+    }
+    fillPair();
+    if (pairSel) pairSel.addEventListener("change", fillPair);
     modal.querySelector("#recv-code").textContent = r.materialCode;
     modal.querySelector("#recv-name").textContent = r.materialName;
     var qtyEl = modal.querySelector("#recv-qty");
@@ -1643,12 +1650,12 @@
     okBtn.addEventListener("click", function () {
       var qty = Number(qtyEl.value);
       if (!(qty > 0)) { msg.textContent = "數量必須大於 0"; return; }
-      var pairEl = modal.querySelector("#recv-pair");
-      var pair = pairs[pairEl ? parseInt(pairEl.value, 10) : 0];
+      var pair = pairs[pairSel ? parseInt(pairSel.value, 10) : 0] || pairs[0];
+      var vendor = vEl.value.trim(), po = pEl.value.trim();
       msg.textContent = "送出中…";
       okBtn.disabled = true;
       api("receive", {
-        order: pair.order || orderOfRow(r), vendor: pair.vendor, po: pair.po,
+        order: pair.order || orderOfRow(r), vendor: vendor, po: po,
         code: r.materialCode, name: r.materialName, qty: qty
       })
         .then(function (res) {
