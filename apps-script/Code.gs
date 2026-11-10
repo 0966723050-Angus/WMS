@@ -424,7 +424,7 @@ function deleteReceiptRow_(body, user) {
   if (kind !== 'sheet') return { ok: false, error: '不支援的動作' };
 
   var po = clip_(body.po, 32), code = clip_(body.code, 32);
-  if (!po || !code) return { ok: false, error: '缺少採購單或品號' };
+  if (!code) return { ok: false, error: '缺少品號' };   // 採購單號可以是空白(沒有採購單的收料列也要能刪除)
   var v = puriView_();
   if (v.queued || (v.status && v.status.state === 'running')) {
     return { ok: false, error: '進貨單簽核請求已送出或正在執行,現在不能刪除清單' };
