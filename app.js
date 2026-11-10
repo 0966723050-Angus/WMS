@@ -212,6 +212,8 @@
     var erpBtn = document.getElementById("erp-btn");
     if (adminBtn) adminBtn.hidden = !can("admin");
     if (erpBtn) erpBtn.hidden = !canSeeErp();
+    var scanBtn = document.getElementById("scan-btn");
+    if (scanBtn) scanBtn.hidden = !(session && can("receive") && isMobileDevice());
     if (!info) return;
     if (!session) { info.innerHTML = ""; return; }
     info.innerHTML = '已登入:' + esc(session.name || session.email) + ' (' + esc(session.email) + ') · <a href="#" id="logout-link">登出</a>';
@@ -908,14 +910,14 @@
 
   function checkFailures() {
     if (!session || !can("erp_receipt") || document.hidden) return;
-    if (document.querySelector(".modal-backdrop")) return; // 正在操作其他視窗時先不打擾,下一輪再檢查
+    if (document.querySelector(".modal-backdrop") || scanner) return; // 正在操作其他視窗或掃描時先不打擾,下一輪再檢查
     api("receipt_list").then(function (res) {
       if (!res || !res.ok) return;
       var rows = ((res.snapshot && res.snapshot.rows) || []).filter(function (r) { return isFailMark(r.f); });
       if (!rows.length) { lsSet(FAIL_ACK_KEY, null); return; } // 失敗項目都處理掉了,下次再失敗才會重新通知
       var sig = failSignature(rows);
       if (lsGet(FAIL_ACK_KEY) === sig) return;
-      if (document.querySelector(".modal-backdrop")) return;
+      if (document.querySelector(".modal-backdrop") || scanner) return;
       openFailureDialog(rows, sig);
     }).catch(function () { /* 讀不到就下一輪再試 */ });
   }
@@ -1577,9 +1579,11 @@
     return d > 0 ? d : 1;
   }
 
-  function openReceiveDialog(r) {
+  // opts(掃描收料用,可省略): { pairs: [{po, vendor, order}], qty, warn, onSent, onClose }
+  function openReceiveDialog(r, opts) {
+    opts = opts || {};
     var pos = r.poNos || [], vendors = r.vendors || [];
-    var pairs = pos.map(function (po, i) { return { po: po, vendor: vendors[i] || vendors[0] || "" }; });
+    var pairs = opts.pairs || pos.map(function (po, i) { return { po: po, vendor: vendors[i] || vendors[0] || "" }; });
     if (!pairs.length) pairs = [{ po: "", vendor: vendors[0] || "" }];
 
     var pickHtml;
@@ -1623,12 +1627,14 @@
     modal.querySelector("#recv-code").textContent = r.materialCode;
     modal.querySelector("#recv-name").textContent = r.materialName;
     var qtyEl = modal.querySelector("#recv-qty");
-    qtyEl.value = defaultReceiveQty(r);
+    qtyEl.value = opts.qty > 0 ? opts.qty : defaultReceiveQty(r);
 
     var msg = modal.querySelector("#recv-msg"), okBtn = modal.querySelector("#recv-ok");
+    if (opts.warn) msg.textContent = opts.warn;
     function close() {
       document.removeEventListener("keydown", onKey);
       if (modal.parentNode) modal.parentNode.removeChild(modal);
+      if (opts.onClose) { var f = opts.onClose; opts.onClose = null; f(); }
     }
     function onKey(e) { if (e.key === "Escape") close(); }
     document.addEventListener("keydown", onKey);
@@ -1642,11 +1648,12 @@
       msg.textContent = "送出中…";
       okBtn.disabled = true;
       api("receive", {
-        order: orderOfRow(r), vendor: pair.vendor, po: pair.po,
+        order: pair.order || orderOfRow(r), vendor: pair.vendor, po: pair.po,
         code: r.materialCode, name: r.materialName, qty: qty
       })
         .then(function (res) {
           if (!res.ok) throw new Error(res.error || "送出失敗");
+          if (opts.onSent) opts.onSent();
           close();
           showToast("已送出收料,稍後會寫入 Excel「收料」工作表");
         })
@@ -1657,6 +1664,236 @@
         });
     });
   }
+
+  // ---------- 掃描 QR code 收料(手機限定;iOS / Android 共用) ----------
+  // QR 內容: 系列號碼#廠商#採購單別-單號#材料品號#品名#規格#數量
+  // 掃到後依「採購單別-單號 + 材料品號」在資料庫找出物料,開啟收料確認視窗;按下確認(或取消)後回到掃描。
+
+  var SCAN_SN_KEY = "wms_scan_sn";
+  var scanner = null; // 掃描中的狀態;沒在掃描時為 null
+
+  function isMobileDevice() {
+    var ua = navigator.userAgent || "";
+    if (/Android|iPhone|iPad|iPod/i.test(ua)) return true;
+    return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1; // iPadOS 會偽裝成 Mac
+  }
+
+  function parseScanText(text) {
+    var p = String(text || "").trim().split("#");
+    if (p.length < 7) return null;
+    var qty = Number(p[p.length - 1]);
+    return {
+      sn: p[0].trim(), vendor: p[1].trim(), po: p[2].trim(), code: p[3].trim(),
+      name: p[4].trim(), spec: p.slice(5, -1).join("#").trim(), qty: qty
+    };
+  }
+
+  // 在資料庫找出符合的物料。回傳 { row, pairs } 或 { error }
+  function findScanMatch(q) {
+    var mats = state.data && state.data.materials;
+    if (!mats) return { error: "資料尚未載入完成,請稍候再掃" };
+    var code = q.code.toLowerCase(), po = q.po;
+    var codeHit = false, seen = {}, pairs = [], first = null;
+    Object.keys(mats).forEach(function (order) {
+      mats[order].forEach(function (row) {
+        if (String(row.materialCode || "").trim().toLowerCase() !== code) return;
+        codeHit = true;
+        (row.poNos || []).forEach(function (p, i) {
+          p = String(p || "").trim();
+          if (!p || !(p === po || p.indexOf(po + "-") === 0)) return;
+          if (seen[p]) return; // 同一張採購單序號只留一筆
+          seen[p] = true;
+          if (!first) first = row;
+          pairs.push({ po: p, vendor: (row.vendors || [])[i] || (row.vendors || [])[0] || q.vendor, order: order });
+        });
+      });
+    });
+    if (first) return { row: first, pairs: pairs };
+    if (codeHit) return { error: "找到品號 " + q.code + ",但沒有採購單 " + q.po };
+    return { error: "資料庫找不到品號 " + q.code + "(採購單 " + q.po + ");新資料可能還沒更新,請按重新整理" };
+  }
+
+  function scanSnSeen(sn) {
+    try { var m = JSON.parse(lsGet(SCAN_SN_KEY) || "{}"); return m[sn] || 0; } catch (e) { return 0; }
+  }
+
+  function scanSnMark(sn) {
+    var m = {};
+    try { m = JSON.parse(lsGet(SCAN_SN_KEY) || "{}"); } catch (e) { m = {}; }
+    m[sn] = Date.now();
+    var keys = Object.keys(m).sort(function (a, b) { return m[b] - m[a]; });
+    keys.slice(300).forEach(function (k) { delete m[k]; });
+    lsSet(SCAN_SN_KEY, JSON.stringify(m));
+  }
+
+  function fmtScanTime(ts) {
+    var d = new Date(ts), p = function (n) { return n < 10 ? "0" + n : "" + n; };
+    return (d.getMonth() + 1) + "/" + d.getDate() + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+
+  function loadJsQr() {
+    if (window.jsQR) return Promise.resolve();
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement("script");
+      s.src = "vendor/jsQR.min.js";
+      s.onload = function () { window.jsQR ? resolve() : reject(new Error("QR 解碼程式載入失敗")); };
+      s.onerror = function () { reject(new Error("QR 解碼程式載入失敗")); };
+      document.head.appendChild(s);
+    });
+  }
+
+  // 回傳 function(video) -> Promise<string|null>:Android 等有內建辨識的用內建,其餘(iOS)用 jsQR
+  function makeQrReader() {
+    function viaJsQr() {
+      return loadJsQr().then(function () {
+        var canvas = document.createElement("canvas");
+        var ctx = canvas.getContext("2d", { willReadFrequently: true });
+        return function (video) {
+          var vw = video.videoWidth, vh = video.videoHeight;
+          if (!vw || !vh) return Promise.resolve(null);
+          var scale = Math.min(1, 720 / Math.max(vw, vh));
+          canvas.width = Math.round(vw * scale);
+          canvas.height = Math.round(vh * scale);
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          var img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          var res = window.jsQR(img.data, img.width, img.height, { inversionAttempts: "dontInvert" });
+          return Promise.resolve(res ? res.data : null);
+        };
+      });
+    }
+    if (!("BarcodeDetector" in window)) return viaJsQr();
+    return Promise.resolve()
+      .then(function () { return BarcodeDetector.getSupportedFormats ? BarcodeDetector.getSupportedFormats() : ["qr_code"]; })
+      .then(function (formats) {
+        if (formats.indexOf("qr_code") === -1) return viaJsQr();
+        var det = new BarcodeDetector({ formats: ["qr_code"] });
+        return function (video) {
+          return det.detect(video).then(function (codes) { return codes.length ? codes[0].rawValue : null; });
+        };
+      })
+      .catch(viaJsQr);
+  }
+
+  function setScanStatus(text, kind) {
+    if (!scanner) return;
+    scanner.statusEl.textContent = text;
+    scanner.statusEl.className = "scan-status" + (kind ? " " + kind : "");
+  }
+
+  function closeScanner() {
+    var s = scanner;
+    if (!s) return;
+    scanner = null;
+    s.stopped = true;
+    if (s.timer) clearTimeout(s.timer);
+    try { s.stream && s.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { /* 略過 */ }
+    try { s.wake && s.wake.release(); } catch (e) { /* 略過 */ }
+    if (s.root.parentNode) s.root.parentNode.removeChild(s.root);
+    document.body.classList.remove("scan-open");
+  }
+
+  function handleScanned(raw) {
+    var s = scanner;
+    if (!s) return;
+    var now = Date.now();
+    // 同一張標籤還在鏡頭前時不重複處理;離開鏡頭 1.5 秒後再掃到才算新的一次
+    if (raw === s.lastRaw && now - s.lastSeen < 1500) { s.lastSeen = now; return; }
+    s.lastRaw = raw; s.lastSeen = now;
+    if (navigator.vibrate) { try { navigator.vibrate(60); } catch (e) { /* 略過 */ } }
+
+    var q = parseScanText(raw);
+    if (!q) { setScanStatus("不是收料用的 QR code(格式不符)", "err"); return; }
+    var m = findScanMatch(q);
+    if (m.error) { setScanStatus(m.error, "err"); return; }
+
+    var warn = "";
+    var seenAt = q.sn ? scanSnSeen(q.sn) : 0;
+    if (seenAt) warn = "⚠ 序號 " + q.sn + " 已在 " + fmtScanTime(seenAt) + " 送出過收料,請確認是否重複";
+    s.busy = true;
+    setScanStatus("確認收料中…");
+    openReceiveDialog(m.row, {
+      pairs: m.pairs,
+      qty: q.qty,
+      warn: warn,
+      onSent: function () { if (q.sn) scanSnMark(q.sn); },
+      onClose: function () {
+        if (!scanner) return;
+        scanner.busy = false;
+        scanner.lastSeen = Date.now(); // 標籤多半還在鏡頭前,從現在起算
+        setScanStatus("請對準下一個 QR code");
+      }
+    });
+  }
+
+  function scanLoop() {
+    var s = scanner;
+    if (!s || s.stopped) return;
+    if (!session) { closeScanner(); return; }
+    var next = function () { if (scanner === s && !s.stopped) s.timer = setTimeout(scanLoop, 140); };
+    if (s.busy || !s.read || s.video.readyState < 2) { next(); return; }
+    s.read(s.video).then(function (raw) { if (raw && scanner === s && !s.busy) handleScanned(raw); })
+      .catch(function () { /* 單張影像辨識失敗,略過 */ })
+      .then(next);
+  }
+
+  function openScanner() {
+    if (scanner || !session) return;
+    if (!can("receive")) { showToast("你的帳號沒有收料權限"); return; }
+    var root = el(
+      '<div class="scan-overlay" role="dialog" aria-label="掃描 QR code 收料">' +
+        '<video class="scan-video" playsinline muted autoplay></video>' +
+        '<div class="scan-frame"><i></i></div>' +
+        '<div class="scan-top"><span class="scan-title">掃描 QR code 收料</span>' +
+          '<button type="button" class="scan-exit">退出</button></div>' +
+        '<div class="scan-status">啟動相機中…</div>' +
+      '</div>'
+    );
+    document.body.appendChild(root);
+    document.body.classList.add("scan-open");
+    scanner = {
+      root: root, video: root.querySelector("video"), statusEl: root.querySelector(".scan-status"),
+      stream: null, read: null, busy: false, stopped: false, lastRaw: "", lastSeen: 0, timer: null, wake: null
+    };
+    var s = scanner;
+    root.querySelector(".scan-exit").addEventListener("click", closeScanner);
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setScanStatus("這個瀏覽器無法使用相機(需要 https 網址)", "err");
+      return;
+    }
+    Promise.all([
+      navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false
+      }),
+      makeQrReader()
+    ]).then(function (res) {
+      if (scanner !== s) { res[0].getTracks().forEach(function (t) { t.stop(); }); return; } // 載入期間已退出
+      s.stream = res[0];
+      s.read = res[1];
+      s.video.srcObject = s.stream;
+      var p = s.video.play();
+      if (p && p.catch) p.catch(function () { /* autoplay 已設定,略過 */ });
+      setScanStatus("對準物品上的 QR code");
+      try { if (navigator.wakeLock) navigator.wakeLock.request("screen").then(function (w) { s.wake = w; }, function () {}); } catch (e) { /* 略過 */ }
+      scanLoop();
+    }).catch(function (err) {
+      if (scanner !== s) return;
+      var name = err && err.name;
+      var text = (name === "NotAllowedError" || name === "SecurityError")
+        ? "相機權限被拒絕,請到手機設定允許本網站使用相機後再試"
+        : (name === "NotFoundError" || name === "OverconstrainedError") ? "找不到可用的相機"
+        : (err && err.message) || "相機啟動失敗";
+      setScanStatus(text, "err");
+    });
+  }
+
+  // 從背景回到前景時,相機可能已被系統停止:停止中的畫面直接退出,避免卡在黑畫面
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState !== "visible" || !scanner || !scanner.stream) return;
+    var live = scanner.stream.getTracks().some(function (t) { return t.readyState === "live"; });
+    if (!live) { closeScanner(); showToast("相機已中斷,請重新按「掃描」"); }
+  });
 
   // ---------- Shared markup helpers ----------
 
@@ -2072,6 +2309,9 @@
     if (refreshBtn) {
       refreshBtn.addEventListener("click", refreshData);
     }
+
+    var scanBtn = document.getElementById("scan-btn");
+    if (scanBtn) scanBtn.addEventListener("click", openScanner);
 
     var appEl = document.getElementById("app");
     if (appEl) {

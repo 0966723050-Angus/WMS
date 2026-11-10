@@ -1067,3 +1067,40 @@ table.data-table tbody tr:hover { background: var(--brand-soft); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition: none !important; }
 }
+
+/* ---------- 掃描 QR code 收料(手機) ---------- */
+body.scan-open { overflow: hidden; }
+.scan-overlay {
+  position: fixed; top: 0; right: 0; bottom: 0; left: 0;
+  z-index: 90; /* 比收料確認視窗(.modal-backdrop 100)低,確認視窗會疊在掃描畫面上 */
+  background: #000; color: #fff;
+}
+.scan-video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
+.scan-frame {
+  position: absolute; left: 50%; top: 44%;
+  width: min(68vw, 320px); height: min(68vw, 320px);
+  transform: translate(-50%, -50%);
+  border-radius: 14px;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.38);
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  pointer-events: none;
+}
+.scan-top {
+  position: absolute; top: 0; left: 0; right: 0;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: calc(env(safe-area-inset-top, 0px) + 12px) 14px 12px;
+  background: linear-gradient(rgba(0, 0, 0, 0.65), rgba(0, 0, 0, 0));
+}
+.scan-title { font-size: 16px; font-weight: 700; }
+.scan-exit {
+  min-width: 72px; height: 40px; padding: 0 16px;
+  border: 1px solid rgba(255, 255, 255, 0.7); border-radius: 999px;
+  background: rgba(0, 0, 0, 0.45); color: #fff; font-size: 15px; font-weight: 700;
+}
+.scan-status {
+  position: absolute; left: 14px; right: 14px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 28px);
+  padding: 12px 14px; border-radius: 12px; text-align: center;
+  background: rgba(0, 0, 0, 0.6); font-size: 15px; line-height: 1.4;
+}
+.scan-status.err { background: rgba(185, 28, 28, 0.92); }

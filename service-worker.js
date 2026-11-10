@@ -1,4 +1,4 @@
-﻿var CACHE_NAME = "wms-cache-v34";
+﻿var CACHE_NAME = "wms-cache-v35";
 var CORE_ASSETS = [
   "./",
   "./index.html",
@@ -9,6 +9,7 @@ var CORE_ASSETS = [
   "./data.enc",
   "./vendor/xlsx.full.min.js",
   "./vendor/pako_inflate.min.js",
+  "./vendor/jsQR.min.js",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
   "./icons/atk-logo.png",
