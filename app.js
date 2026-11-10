@@ -1825,10 +1825,17 @@
     });
   }
 
+  function playScanVideo(s) {
+    if (!s || s.stopped || !s.video || !s.video.srcObject || !s.video.paused) return;
+    var p = s.video.play();
+    if (p && p.catch) p.catch(function () { /* 被瀏覽器擋下時,下一輪迴圈或點一下畫面會再試 */ });
+  }
+
   function scanLoop() {
     var s = scanner;
     if (!s || s.stopped) return;
     if (!session) { closeScanner(); return; }
+    playScanVideo(s); // 影片被系統暫停(例如 iOS)時自動恢復播放,畫面才看得到實物
     var next = function () { if (scanner === s && !s.stopped) s.timer = setTimeout(scanLoop, 140); };
     if (s.busy || !s.read || s.video.readyState < 2) { next(); return; }
     s.read(s.video).then(function (raw) { if (raw && scanner === s && !s.busy) handleScanned(raw); })
@@ -1855,7 +1862,14 @@
       stream: null, read: null, busy: false, stopped: false, lastRaw: "", lastSeen: 0, timer: null, wake: null
     };
     var s = scanner;
+    // iOS Safari:用 HTML 字串建立的 video,muted 屬性不會生效,影片不會播放(畫面全黑但仍抓得到影格),要用程式明確設定
+    s.video.muted = true;
+    s.video.defaultMuted = true;
+    s.video.playsInline = true;
+    s.video.setAttribute("playsinline", "");
+    s.video.setAttribute("webkit-playsinline", "");
     root.querySelector(".scan-exit").addEventListener("click", closeScanner);
+    root.addEventListener("click", function () { playScanVideo(s); }); // 保底:點一下畫面也會重新嘗試播放
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setScanStatus("這個瀏覽器無法使用相機(需要 https 網址)", "err");
@@ -1872,8 +1886,8 @@
       s.stream = res[0];
       s.read = res[1];
       s.video.srcObject = s.stream;
-      var p = s.video.play();
-      if (p && p.catch) p.catch(function () { /* autoplay 已設定,略過 */ });
+      s.video.addEventListener("loadedmetadata", function () { playScanVideo(s); });
+      playScanVideo(s);
       setScanStatus("對準物品上的 QR code");
       try { if (navigator.wakeLock) navigator.wakeLock.request("screen").then(function (w) { s.wake = w; }, function () {}); } catch (e) { /* 略過 */ }
       scanLoop();
