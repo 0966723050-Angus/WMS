@@ -363,7 +363,8 @@ function saveSnapshot_(body) {
     if (!r) return;
     out.push({
       v: clip_(r.v, 20), p: clip_(r.p, 32), c: clip_(r.c, 32), n: clip_(r.n, 24),
-      q: Number(r.q) || 0, d: clip_(r.d, 10)
+      q: Number(r.q) || 0, d: clip_(r.d, 10),
+      f: clip_(r.f, 80)   // 「收料」G 欄的失敗標記,例「⚠ 失敗:查無採購序號」
     });
   });
   var snap = { ts: Date.now(), total: parseInt(body.total, 10) || out.length, rows: out };

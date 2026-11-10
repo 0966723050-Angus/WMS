@@ -51,7 +51,8 @@ def report(endpoint, key, master, force=False):
         rows = _rows(master)
         payload = {
             "action": "receipts_snapshot", "key": key, "total": len(rows),
-            "rows": [{"v": r["vendor"], "p": r["po"], "c": r["code"], "n": r["name"], "q": r["qty"], "d": r["date"]}
+            "rows": [{"v": r["vendor"], "p": r["po"], "c": r["code"], "n": r["name"], "q": r["qty"], "d": r["date"],
+                      "f": r.get("fail", "")}
                      for r in rows[:MAX_ROWS]],
         }
         res = _post(endpoint, payload)

@@ -40,6 +40,8 @@ ALIASES = {
     "name": ["品名"],
     "qty": ["數量", "收料數量", "進貨數量"],
 }
+# 選用欄位(沒有也不算缺欄):G 欄「狀態」,puri09 在 ERP 作業失敗時寫入「⚠ 失敗:原因」
+STATUS_ALIASES = ["狀態"]
 
 
 def out(obj, code=0):
@@ -77,6 +79,10 @@ def columns(ws):
                 cols[key] = by_header[a]
                 break
     missing = [k for k in ALIASES if k not in cols]
+    for a in STATUS_ALIASES:
+        if a in by_header:
+            cols["status"] = by_header[a]
+            break
     return cols, missing
 
 
@@ -84,13 +90,14 @@ def read_rows(ws, cols):
     rows = []
     for r in range(2, ws.max_row + 1):
         vals = {k: ws.cell(r, c).value for k, c in cols.items()}
-        if all(v in (None, "") for v in vals.values()):
+        if all(v in (None, "") for k, v in vals.items() if k != "status"):
             continue
         rows.append({
             "row": r,
             "vendor": norm(vals["vendor"]), "po": norm(vals["po"]), "code": norm(vals["code"]),
             "name": norm(vals["name"]), "qty": qty_of(vals["qty"]),
             "date": vals["date"].strftime("%Y-%m-%d") if hasattr(vals["date"], "strftime") else norm(vals["date"]),
+            "fail": norm(vals.get("status")),   # 例:「⚠ 失敗:查無採購序號」,沒有就是空字串
         })
     return rows
 

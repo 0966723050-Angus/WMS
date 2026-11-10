@@ -281,6 +281,7 @@
     render();
     loadData().then(render).catch(handleLoadError);
     refreshMe();
+    startFailureWatch();
   }
 
   // 管理者可能在登入後才調整權限:開啟時向伺服器取得最新權限,有變動就更新畫面
@@ -772,13 +773,15 @@
     // kind: "sheet"(已寫入 Excel)/ "pending"(排隊中)/ "deleting"(已送出刪除,等電腦同步)
     function itemHtml(r, kind, idx) {
       var del = kind === "deleting";
-      return '<div class="rcv-item' + (kind === "pending" ? ' pending' : '') + (del ? ' deleting' : '') + '">' +
+      var failed = kind !== "pending" && isFailMark(r.f);
+      return '<div class="rcv-item' + (kind === "pending" ? ' pending' : '') + (del ? ' deleting' : '') + (failed ? ' failed' : '') + '">' +
         '<div class="rcv-top"><span class="rcv-code">' + esc(r.c) + '</span>' +
           '<span class="rcv-qty">數量 ' + esc(fmtNum(r.q)) + '</span></div>' +
         (r.n ? '<div class="rcv-name">' + esc(r.n) + '</div>' : '') +
         '<div class="rcv-sub">' + esc(r.v) + ' · ' + esc(r.p) +
           (kind === "pending" ? ' <span class="pending-chip">待寫入 Excel</span>' : '') +
           (del ? ' <span class="pending-chip">刪除中,約 5 分鐘內同步到 Excel</span>' : '') + '</div>' +
+        (failed ? '<div class="rcv-fail">' + esc(r.f) + '</div>' : '') +
         (del ? '' : '<button type="button" class="rcv-del" data-kind="' + kind + '" data-i="' + idx + '" aria-label="刪除這一筆">刪除</button>') +
       '</div>';
     }
@@ -857,6 +860,72 @@
         msg.textContent = err.message;
         okBtn.disabled = false;
       });
+    });
+  }
+
+  // ---- 進貨單簽核失敗通知 ----
+  // puri09 在 ERP 作業失敗時,會在 WMS.xlsx「收料」G 欄寫「⚠ 失敗:原因」;電腦端把它回報上來後,
+  // 這裡每分鐘檢查一次,出現(新的)失敗項目就跳出回報視窗通知使用者。按「知道了」後同一批不再重複彈出。
+  var FAIL_ACK_KEY = "wms_fail_ack";
+  var failTimer = null;
+
+  function isFailMark(s) { return !!s && /⚠|失敗/.test(String(s)); }
+
+  function failSignature(rows) {
+    return rows.map(function (r) { return [r.p, r.c, r.f].join("|"); }).sort().join(";");
+  }
+
+  function openFailureDialog(rows, sig) {
+    var modal = el(
+      '<div class="modal-backdrop">' +
+        '<div class="modal modal-wide" role="alertdialog" aria-modal="true" aria-labelledby="fail-title">' +
+          '<h2 id="fail-title" class="fail-title">⚠ 進貨單簽核有 ' + rows.length + ' 筆失敗</h2>' +
+          '<p class="rcv-intro">以下項目在 ERP 作業時失敗,資料仍留在 WMS.xlsx「收料」工作表,並標記了失敗原因,請確認處理:</p>' +
+          '<div class="rcv-box">' + rows.map(function (r) {
+            return '<div class="rcv-item failed">' +
+              '<div class="rcv-top"><span class="rcv-code">' + esc(r.c) + '</span><span class="rcv-qty">數量 ' + esc(fmtNum(r.q)) + '</span></div>' +
+              (r.n ? '<div class="rcv-name">' + esc(r.n) + '</div>' : '') +
+              '<div class="rcv-sub">' + esc(r.v) + ' · ' + esc(r.p) + '</div>' +
+              '<div class="rcv-fail">' + esc(r.f) + '</div>' +
+            '</div>';
+          }).join("") + '</div>' +
+          '<div class="modal-actions">' +
+            '<button type="button" class="btn btn-secondary" id="fail-view">查看簽核清單</button>' +
+            '<button type="button" class="btn" id="fail-ok">知道了</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>'
+    );
+    document.body.appendChild(modal);
+    function close() { if (modal.parentNode) modal.parentNode.removeChild(modal); }
+    modal.querySelector("#fail-ok").addEventListener("click", function () { lsSet(FAIL_ACK_KEY, sig); close(); });
+    modal.querySelector("#fail-view").addEventListener("click", function () {
+      lsSet(FAIL_ACK_KEY, sig);
+      close();
+      openPuriListDialog(null);
+    });
+  }
+
+  function checkFailures() {
+    if (!session || !can("erp_receipt") || document.hidden) return;
+    if (document.querySelector(".modal-backdrop")) return; // 正在操作其他視窗時先不打擾,下一輪再檢查
+    api("receipt_list").then(function (res) {
+      if (!res || !res.ok) return;
+      var rows = ((res.snapshot && res.snapshot.rows) || []).filter(function (r) { return isFailMark(r.f); });
+      if (!rows.length) { lsSet(FAIL_ACK_KEY, null); return; } // 失敗項目都處理掉了,下次再失敗才會重新通知
+      var sig = failSignature(rows);
+      if (lsGet(FAIL_ACK_KEY) === sig) return;
+      if (document.querySelector(".modal-backdrop")) return;
+      openFailureDialog(rows, sig);
+    }).catch(function () { /* 讀不到就下一輪再試 */ });
+  }
+
+  function startFailureWatch() {
+    if (failTimer) return;
+    setTimeout(checkFailures, 3000);
+    failTimer = setInterval(checkFailures, 60000);
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") checkFailures();
     });
   }
 
