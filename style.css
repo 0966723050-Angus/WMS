@@ -674,6 +674,11 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); width:
 button.erp-tile { font: inherit; cursor: pointer; width: 100%; }
 button.erp-tile:disabled { cursor: default; transform: none; }
 button.erp-tile:disabled:hover { border-color: var(--border); box-shadow: var(--shadow); }
+/* 「製令領料單」:卡片本身不能點,裡面有「新增」「簽核」兩個按鈕 */
+.erp-tile-group:hover { transform: none; border-color: var(--border); box-shadow: var(--shadow); }
+.erp-tile-group:hover .erp-tile-icon { background: var(--brand-soft); color: var(--brand); }
+.erp-tile-actions { display: flex; gap: 10px; margin-top: 2px; }
+.erp-tile-actions .btn { min-width: 76px; justify-content: center; }
 .erp-tile-note { font-size: 12.5px; line-height: 1.5; color: var(--text-muted); text-align: center; min-height: 1.2em; }
 .erp-tile-note:empty { display: none; }
 #wms-update-note:not(:empty) {
@@ -695,6 +700,7 @@ button.erp-tile:disabled:hover { border-color: var(--border); box-shadow: var(--
   }
   .erp-tile-icon { width: 48px; height: 48px; }
   .erp-tile-wms .erp-tile-icon { grid-row: 1 / span 3; align-self: start; }
+  .erp-tile-group .erp-tile-icon { grid-row: 1 / span 2; align-self: start; }
   .erp-tile-title { font-size: 17px; }
   .erp-tile-note { text-align: left; }
   .erp-tile-tag { top: 50%; transform: translateY(-50%); }

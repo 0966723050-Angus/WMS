@@ -117,7 +117,7 @@
     { key: "edit", label: "儲位編輯" },
     { key: "receive", label: "收料" },
     { key: "erp_receipt", label: "ERP:進貨單簽核" },
-    { key: "erp_issue", label: "ERP:製令領料單簽核" },
+    { key: "erp_issue", label: "ERP:製令領料單" },
     { key: "erp_wms", label: "ERP:WMS更新" }
   ];
   var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, erp_receipt: false, erp_issue: false, erp_wms: false };
@@ -703,7 +703,8 @@
   };
 
   var ERP_PAGES = {
-    issue: { title: "製令領料單簽核", perm: "erp_issue" }
+    "issue-new": { title: "製令領料單新增", perm: "erp_issue" },
+    "issue-sign": { title: "製令領料單簽核", perm: "erp_issue" }
   };
 
   // 「進貨單」:確認後送出請求,由電腦上的 Claude 排程啟動 puri09 skill,在鼎新 ERP 的 PURI09 建立進貨單。
@@ -1145,8 +1146,12 @@
               '<span class="erp-tile-note" id="puri09-note"></span></button>'
             : '') +
           (can("erp_issue")
-            ? '<a class="erp-tile" href="#/erp/issue"><span class="erp-tile-tag">建置中</span>' +
-              '<span class="erp-tile-icon">' + ERP_ICONS.issue + '</span><span class="erp-tile-title">製令領料單簽核</span></a>'
+            ? '<div class="erp-tile erp-tile-group">' +
+              '<span class="erp-tile-icon">' + ERP_ICONS.issue + '</span><span class="erp-tile-title">製令領料單</span>' +
+              '<span class="erp-tile-actions">' +
+                '<a class="btn btn-sm" href="#/erp/issue-new">新增</a>' +
+                '<a class="btn btn-sm btn-secondary" href="#/erp/issue-sign">簽核</a>' +
+              '</span></div>'
             : '') +
           (can("erp_wms")
             ? '<button type="button" class="erp-tile erp-tile-wms" id="wms-update-btn">' +
