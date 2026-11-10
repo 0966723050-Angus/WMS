@@ -224,8 +224,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); width:
 }
 
 @media (max-width: 440px) {
-  .icon-btn-group { gap: 4px; padding: 6px 6px; }
-  .icon-btn { padding: 0 10px; font-size: 12.5px; gap: 4px; height: 32px; }
+  .icon-btn-group { gap: 3px; padding: 6px 6px; }
+  .icon-btn { padding: 0 8px; font-size: 12.5px; gap: 4px; height: 32px; }
   .icon-btn svg { width: 15px; height: 15px; }
   .icon-btn.icon-only-sm { padding: 0 9px; }
   .icon-btn.icon-only-sm .icon-label { display: none; }
