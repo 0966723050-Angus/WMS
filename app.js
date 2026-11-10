@@ -1786,6 +1786,7 @@
     scanner = null;
     s.stopped = true;
     if (s.timer) clearTimeout(s.timer);
+    if (s.raf) cancelAnimationFrame(s.raf);
     try { s.stream && s.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { /* 略過 */ }
     try { s.wake && s.wake.release(); } catch (e) { /* 略過 */ }
     if (s.root.parentNode) s.root.parentNode.removeChild(s.root);
@@ -1831,10 +1832,32 @@
     if (p && p.catch) p.catch(function () { /* 被瀏覽器擋下時,下一輪迴圈或點一下畫面會再試 */ });
   }
 
+  // 預覽畫面改畫在 canvas 上(把 video 的每一格影像畫上去,滿版裁切)。
+  // iPhone 上 <video> 本身可能顯示全黑,但影格讀得到(能掃出資料),所以不直接顯示 video。
+  function paintScan(s) {
+    if (!s || s.stopped) return;
+    var now = Date.now();
+    if (now - s.lastPaint >= 30) {
+      s.lastPaint = now;
+      var c = s.view, v = s.video;
+      var dpr = Math.min(window.devicePixelRatio || 1, 2);
+      var cw = Math.round(c.clientWidth * dpr), ch = Math.round(c.clientHeight * dpr);
+      if (cw && ch && (c.width !== cw || c.height !== ch)) { c.width = cw; c.height = ch; }
+      if (v.videoWidth && v.videoHeight && v.readyState >= 2 && c.width && c.height) {
+        var k = Math.max(c.width / v.videoWidth, c.height / v.videoHeight);
+        var dw = v.videoWidth * k, dh = v.videoHeight * k;
+        try { s.vctx.drawImage(v, (c.width - dw) / 2, (c.height - dh) / 2, dw, dh); } catch (e) { /* 這一格略過 */ }
+      }
+    }
+    s.raf = requestAnimationFrame(function () { paintScan(s); });
+  }
+
   function scanLoop() {
     var s = scanner;
     if (!s || s.stopped) return;
     if (!session) { closeScanner(); return; }
+    // 小字顯示相機狀態,方便回報問題(解析度/播放中)
+    s.infoEl.textContent = "相機 " + (s.video.videoWidth || 0) + "×" + (s.video.videoHeight || 0) + (s.video.paused ? " · 暫停" : " · 播放中");
     playScanVideo(s); // 影片被系統暫停(例如 iOS)時自動恢復播放,畫面才看得到實物
     var next = function () { if (scanner === s && !s.stopped) s.timer = setTimeout(scanLoop, 140); };
     if (s.busy || !s.read || s.video.readyState < 2) { next(); return; }
@@ -1849,16 +1872,20 @@
     var root = el(
       '<div class="scan-overlay" role="dialog" aria-label="掃描 QR code 收料">' +
         '<video class="scan-video" playsinline muted autoplay></video>' +
+        '<canvas class="scan-view"></canvas>' +
         '<div class="scan-frame"><i></i></div>' +
         '<div class="scan-top"><span class="scan-title">掃描 QR code 收料</span>' +
           '<button type="button" class="scan-exit">退出</button></div>' +
+        '<div class="scan-info"></div>' +
         '<div class="scan-status">啟動相機中…</div>' +
       '</div>'
     );
     document.body.appendChild(root);
     document.body.classList.add("scan-open");
+    var view = root.querySelector(".scan-view");
     scanner = {
       root: root, video: root.querySelector("video"), statusEl: root.querySelector(".scan-status"),
+      view: view, vctx: view.getContext("2d"), infoEl: root.querySelector(".scan-info"), raf: 0, lastPaint: 0,
       stream: null, read: null, busy: false, stopped: false, lastRaw: "", lastSeen: 0, timer: null, wake: null
     };
     var s = scanner;
@@ -1888,6 +1915,7 @@
       s.video.srcObject = s.stream;
       s.video.addEventListener("loadedmetadata", function () { playScanVideo(s); });
       playScanVideo(s);
+      paintScan(s);
       setScanStatus("對準物品上的 QR code");
       try { if (navigator.wakeLock) navigator.wakeLock.request("screen").then(function (w) { s.wake = w; }, function () {}); } catch (e) { /* 略過 */ }
       scanLoop();

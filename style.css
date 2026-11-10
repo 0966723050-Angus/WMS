@@ -1075,7 +1075,12 @@ body.scan-open { overflow: hidden; }
   z-index: 90; /* 比收料確認視窗(.modal-backdrop 100)低,確認視窗會疊在掃描畫面上 */
   background: #000; color: #fff;
 }
-.scan-video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
+.scan-video, .scan-view { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
+.scan-view { z-index: 1; background: #000; } /* 預覽改畫在 canvas(蓋在 video 上),避免 iOS 上 video 顯示全黑 */
+.scan-frame, .scan-top, .scan-info, .scan-status { z-index: 2; }
+.scan-info { position: absolute; left: 16px; top: calc(env(safe-area-inset-top, 0px) + 58px); font-size: 11px; opacity: 0.65; }
+/* iOS WebKit:影片上蓋過毛玻璃(backdrop-filter)後可能變全黑,掃描中關掉對話框的毛玻璃 */
+body.scan-open .modal-backdrop { -webkit-backdrop-filter: none; backdrop-filter: none; }
 .scan-frame {
   position: absolute; left: 50%; top: 44%;
   width: min(68vw, 320px); height: min(68vw, 320px);
