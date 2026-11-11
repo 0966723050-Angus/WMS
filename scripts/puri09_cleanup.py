@@ -2,11 +2,14 @@
 
     python -I puri09_cleanup.py read
         讀「收料」工作表第 2 列起的資料列,印成 JSON 清單,並存一份快照(puri09_snapshot.json)。
-    python -I puri09_cleanup.py clear --done "3303-20261102004-0001,3303-...-0002"
+    python -I puri09_cleanup.py clear --done "3303-20261102004-0001=3402-20261110002,3303-...-0002=3402-20261110002"
         只清除「已成功建立進貨單」的列(以採購單別-單號-序號比對快照),建立失敗/略過的列保留。
+        每個項目寫成「採購單別-單號-序號=ERP 產生的進貨單別-單號」,清除的同時會把這些列寫進
+        「進退貨履歷」工作表(日期=今天、單據=進貨、單別、單號、廠商、採購單、品號、品名、數量)。
+        退貨單簽核之後也用同一個指令,加上 --kind 退貨。
         快照之後才新增的收料(網站又送了新的)不會被動到。清除前會先備份 WMS.xlsx。
-    python -I puri09_cleanup.py clear --all
-        清除快照內所有列(全部都成功時使用)。
+    python -I puri09_cleanup.py clear --all --doc 3402-20261110002
+        清除快照內所有列(全部都成功、且同一張單時使用),一樣會寫進「進退貨履歷」。
     python -I puri09_cleanup.py sync
         把 WMS.xlsx 複製到雲端硬碟同步資料夾。
 
@@ -29,6 +32,19 @@ _WORK = os.environ.get("PURI09_DIR", HERE)
 BACKUP_DIR = os.path.join(_WORK, "backup")
 SNAPSHOT = os.path.join(_WORK, "puri09_snapshot.json")
 SHEET = "收料"
+HISTORY_SHEET = "進退貨履歷"
+# 「進退貨履歷」標題列可接受的寫法
+HIST_ALIASES = {
+    "date": ["日期"],
+    "kind": ["單據"],
+    "doc_type": ["單別"],
+    "doc_no": ["單號"],
+    "vendor": ["廠商", "廠商簡稱"],
+    "po": ["採購單別-單號-序號", "採購單號", "採購單別單號序號", "採購單"],
+    "code": ["品號", "材料品號"],
+    "name": ["品名"],
+    "qty": ["數量"],
+}
 KEEP_BACKUPS = 20
 
 # 標題列可接受的寫法(和 apply_edits.py 一致)
@@ -113,6 +129,71 @@ def backup():
     return name
 
 
+def split_doc(doc):
+    """'3402-20261110002' -> ('3402', '20261110002')"""
+    doc = norm(doc)
+    if "-" in doc:
+        a, b = doc.split("-", 1)
+        return a.strip(), b.strip()
+    return "", doc
+
+
+def hist_columns(ws):
+    by_header = {}
+    for c in range(1, ws.max_column + 1):
+        h = str(ws.cell(1, c).value or "").strip()
+        if h:
+            by_header[h] = c
+    cols = {}
+    for key, names in HIST_ALIASES.items():
+        for a in names:
+            if a in by_header:
+                cols[key] = by_header[a]
+                break
+    return cols, [k for k in HIST_ALIASES if k not in cols]
+
+
+def hist_last_row(ws, cols):
+    for r in range(ws.max_row, 1, -1):
+        if any(ws.cell(r, c).value not in (None, "") for c in cols.values()):
+            return r
+    return 1
+
+
+def append_history(wb, entries, kind):
+    """把 entries([{row資料, doc}])接在「進退貨履歷」最後。已有同一單據/採購單/品號/數量的列不重複寫。回傳寫入列數。"""
+    ws = wb[HISTORY_SHEET]
+    cols, missing = hist_columns(ws)
+    if missing:
+        raise ValueError("「%s」標題列缺少欄位: %s" % (HISTORY_SHEET, ",".join(HIST_ALIASES[k][0] for k in missing)))
+    existing = set()
+    last = hist_last_row(ws, cols)
+    for r in range(2, last + 1):
+        existing.add((norm(ws.cell(r, cols["doc_type"]).value), norm(ws.cell(r, cols["doc_no"]).value),
+                      norm(ws.cell(r, cols["po"]).value), norm(ws.cell(r, cols["code"]).value),
+                      qty_of(ws.cell(r, cols["qty"]).value)))
+    today = datetime.date.today()
+    n = 0
+    for e in entries:
+        dtype, dno = split_doc(e["doc"])
+        key = (dtype, dno, e["po"], e["code"], e["qty"])
+        if dno and key in existing:
+            continue
+        last += 1
+        c = ws.cell(last, cols["date"], today)
+        c.number_format = "yyyy-mm-dd"
+        values = {"kind": kind, "doc_type": dtype, "doc_no": dno, "vendor": e["vendor"], "po": e["po"],
+                  "code": e["code"], "name": e["name"]}
+        for k, v in values.items():
+            cell = ws.cell(last, cols[k], v)
+            cell.number_format = "@"   # 單別/單號/採購單這類數字開頭的文字,一律存成文字
+        q = e["qty"]
+        ws.cell(last, cols["qty"], int(q) if q == int(q) else q)
+        existing.add(key)
+        n += 1
+    return n
+
+
 def cmd_read():
     wb = openpyxl.load_workbook(MASTER, read_only=False, data_only=True)
     if SHEET not in wb.sheetnames:
@@ -136,13 +217,24 @@ def cmd_clear(argv):
     except Exception:
         return out({"ok": False, "error": "找不到快照,請先執行 read"}, 1)
 
+    kind = argv[argv.index("--kind") + 1] if "--kind" in argv else "進貨"
+    if kind not in ("進貨", "退貨"):
+        return out({"ok": False, "error": "--kind 只能是 進貨 或 退貨"}, 1)
+    doc_of = {}   # 採購單別-單號-序號 -> ERP 產生的進貨(退貨)單別-單號
     if "--all" in argv:
         targets = snap
+        default_doc = argv[argv.index("--doc") + 1] if "--doc" in argv else ""
+        for r in snap:
+            doc_of[r["po"]] = default_doc
     elif "--done" in argv:
-        done = {norm(p) for p in argv[argv.index("--done") + 1].split(",") if norm(p)}
-        targets = [r for r in snap if r["po"] in done]
+        for item in argv[argv.index("--done") + 1].split(","):
+            if not norm(item):
+                continue
+            po, _, doc = item.partition("=")
+            doc_of[norm(po)] = norm(doc)
+        targets = [r for r in snap if r["po"] in doc_of]
     else:
-        return out({"ok": False, "error": "請指定 --done <採購單列表> 或 --all"}, 1)
+        return out({"ok": False, "error": "請指定 --done <採購單=單據號,...> 或 --all --doc <單據號>"}, 1)
 
     wb = openpyxl.load_workbook(MASTER)
     ws = wb[SHEET]
@@ -153,6 +245,7 @@ def cmd_clear(argv):
     cur = read_rows(ws, cols)
     used = set()
     del_rows = []
+    entries = []
     for t in targets:  # 逐筆找目前工作表裡內容完全相同的那一列(只刪一列)
         for r in cur:
             if r["row"] in used:
@@ -160,8 +253,17 @@ def cmd_clear(argv):
             if (r["vendor"], r["po"], r["code"], r["qty"]) == (t["vendor"], t["po"], t["code"], t["qty"]):
                 used.add(r["row"])
                 del_rows.append(r["row"])
+                entries.append({"vendor": r["vendor"], "po": r["po"], "code": r["code"], "name": r["name"],
+                                "qty": r["qty"], "doc": doc_of.get(t["po"], "")})
                 break
+    if HISTORY_SHEET not in wb.sheetnames:
+        return out({"ok": False, "error": "WMS.xlsx 沒有工作表「%s」,未清除收料資料" % HISTORY_SHEET}, 1)
+    no_doc = [e["po"] for e in entries if not e["doc"]]
     bak = backup()
+    try:
+        recorded = append_history(wb, entries, kind)   # 先寫履歷;標題對不上就整個中止,收料資料不動
+    except ValueError as ex:
+        return out({"ok": False, "error": "%s,未清除收料資料" % ex}, 1)
     for r in sorted(del_rows, reverse=True):
         ws.delete_rows(r)
     wb.save(MASTER)
@@ -169,6 +271,8 @@ def cmd_clear(argv):
     # 清除後立刻把最新(通常是空的)清單回報給網站,「進貨單簽核」才不會還顯示已處理的資料
     synced = False
     try:
+        if "PURI09_MASTER" in os.environ:   # 測試用副本不回報給正式網站
+            raise RuntimeError("test copy")
         cfg_path = os.path.join(HERE, "edit_config.json")
         with open(cfg_path, encoding="utf-8-sig") as f:
             cfg = json.load(f)
@@ -176,8 +280,11 @@ def cmd_clear(argv):
         synced = receipt_snapshot.report(cfg["endpoint"], cfg["syncKey"], MASTER, force=True)
     except Exception:
         synced = False
-    return out({"ok": True, "deleted": len(del_rows), "requested": len(targets), "remaining": left, "backup": bak,
-                "snapshotSynced": synced})
+    res = {"ok": True, "deleted": len(del_rows), "requested": len(targets), "remaining": left, "backup": bak,
+           "history": recorded, "snapshotSynced": synced}
+    if no_doc:
+        res["warning"] = "這些項目沒有指定單據號,履歷的單別/單號是空白: " + ",".join(no_doc)
+    return out(res)
 
 
 def cmd_sync():
