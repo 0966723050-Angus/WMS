@@ -160,7 +160,7 @@ def hist_last_row(ws, cols):
     return 1
 
 
-def append_history(wb, entries, kind):
+def append_history(wb, entries, kind, when=None):
     """把 entries([{row資料, doc}])接在「進退貨履歷」最後。已有同一單據/採購單/品號/數量的列不重複寫。回傳寫入列數。"""
     ws = wb[HISTORY_SHEET]
     cols, missing = hist_columns(ws)
@@ -172,7 +172,7 @@ def append_history(wb, entries, kind):
         existing.add((norm(ws.cell(r, cols["doc_type"]).value), norm(ws.cell(r, cols["doc_no"]).value),
                       norm(ws.cell(r, cols["po"]).value), norm(ws.cell(r, cols["code"]).value),
                       qty_of(ws.cell(r, cols["qty"]).value)))
-    today = datetime.date.today()
+    today = when or datetime.date.today()
     n = 0
     for e in entries:
         dtype, dno = split_doc(e["doc"])
