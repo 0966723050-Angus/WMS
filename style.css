@@ -645,8 +645,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); width:
 .erp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; margin-top: 4px; }
 .erp-tile {
   position: relative;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
-  min-height: 150px; padding: 20px 16px;
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 8px;
+  min-height: 150px; padding: 24px 16px 20px;
   background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
   box-shadow: var(--shadow); color: var(--text); text-decoration: none; text-align: center;
   transition: box-shadow 0.2s var(--ease), border-color 0.2s ease, transform 0.2s var(--ease);
