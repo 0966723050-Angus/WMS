@@ -771,7 +771,7 @@ button.erp-tile:disabled:hover { border-color: var(--border); box-shadow: var(--
 .perm-none { font-size: 12.5px; color: var(--text-muted); }
 
 /* ---------- 收料鈕與確認視窗 ---------- */
-.material-card-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+.material-card-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; margin-top: 12px; }
 .recv-btn {
   display: inline-flex;
   align-items: center;
@@ -804,6 +804,40 @@ button.erp-tile:disabled:hover { border-color: var(--border); box-shadow: var(--
   transform: none;
 }
 table.data-table .recv-btn { min-height: 28px; padding: 0 12px; font-size: 12px; }
+/* 退料鈕(收料鈕下面):外框樣式和實心的收料鈕區隔;尚未收料時反白 */
+.ret-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 18px;
+  border-radius: 999px;
+  border: 1px solid var(--brand);
+  background: var(--surface);
+  color: var(--brand);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
+}
+.ret-btn:hover { background: var(--brand-soft); box-shadow: 0 2px 8px rgba(15, 118, 110, 0.2); }
+.ret-btn:active { transform: translateY(1px); }
+.ret-btn:disabled,
+.ret-btn:disabled:hover {
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  border-color: var(--border);
+  box-shadow: none;
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+table.data-table .ret-btn { min-height: 28px; padding: 0 12px; font-size: 12px; }
+.cell-actions { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
+.cell-actions .recv-btn { justify-content: center; }
 .recv-info .field { margin-top: 0; }
 .recv-info-row { display: flex; gap: 10px; padding: 3px 0; font-size: 14px; }
 .recv-info-row .k { color: var(--text-muted); flex: 0 0 64px; }

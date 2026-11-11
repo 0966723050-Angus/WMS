@@ -116,16 +116,18 @@
     { key: "admin", label: "名單管理" },
     { key: "edit", label: "儲位編輯" },
     { key: "receive", label: "收料" },
+    { key: "ret", label: "退料" },
     { key: "erp_receipt", label: "ERP:進貨單簽核" },
+    { key: "erp_return", label: "ERP:退貨單簽核" },
     { key: "erp_issue", label: "ERP:製令領料單" },
     { key: "erp_wms", label: "ERP:WMS更新" }
   ];
-  var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, erp_receipt: false, erp_issue: false, erp_wms: false };
+  var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_issue: false, erp_wms: false };
 
   function can(perm) { return !!(session && session.perms && session.perms[perm]); }
 
   function canSeeErp() {
-    return can("admin") || can("erp_receipt") || can("erp_issue") || can("erp_wms");
+    return can("admin") || can("erp_receipt") || can("erp_return") || can("erp_issue") || can("erp_wms");
   }
 
   // 舊版登入資料沒有 perms:管理者視為全部權限,其他人視為只有儲位編輯
@@ -698,6 +700,8 @@
     receipt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg>',
     // 領料:清單
     issue: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3v2h6V3M9 10h6M9 14h6M9 18h3"/></svg>',
+    // 退貨:回復箭頭
+    ret: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 010 11H11"/></svg>',
     // 更新:循環箭頭
     wms: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 01-14.3 4.9M4 12a8 8 0 0114.3-4.9"/><path d="M18.5 3v4.2h-4.2M5.5 21v-4.2h4.2"/></svg>'
   };
@@ -707,8 +711,23 @@
     "issue-sign": { title: "製令領料單簽核", perm: "erp_issue" }
   };
 
-  // 「進貨單」:確認後送出請求,由電腦上的 Claude 排程啟動 puri09 skill,在鼎新 ERP 的 PURI09 建立進貨單。
-  // 狀態(排隊中 / 執行中 / 完成 / 失敗)由電腦端回報,顯示在按鈕下方。
+  // 「進貨單簽核」「退貨單簽核」:列出清單、確認後送出請求,由電腦上的 Claude 啟動對應的 skill 在鼎新 ERP 建立並確認單據。
+  // 狀態(排隊中 / 執行中 / 完成 / 失敗)由電腦端回報,顯示在按鈕下方。兩者共用同一套畫面,依 kind 切換文字與 API。
+  var PUR_KINDS = {
+    receipt: {
+      title: "進貨單簽核", sheet: "收料", what: "收料", doneWord: "已收料", doc: "進貨單", perm: "erp_receipt",
+      listApi: "receipt_list", delApi: "receipt_delete", statusApi: "puri09_status", reqApi: "puri09_request",
+      btnId: "puri09-btn", noteId: "puri09-note", failKey: "wms_fail_ack",
+      intro: "已收料清單明細(WMS.xlsx「收料」工作表)。按「確認」後,會依這份清單在鼎新 ERP 進貨單建立作業(PURI09)逐張建立並確認,執行期間該電腦的畫面會被自動操作。"
+    },
+    ret: {
+      title: "退貨單簽核", sheet: "退料", what: "退料", doneWord: "已退料", doc: "退貨單", perm: "erp_return",
+      listApi: "return_list", delApi: "return_delete", statusApi: "ret_status", reqApi: "ret_request",
+      btnId: "ret-btn", noteId: "ret-note", failKey: "wms_fail_ack_ret",
+      intro: "已退料清單明細(WMS.xlsx「退料」工作表)。按「確認」後,會依這份清單在鼎新 ERP 逐張建立並確認退貨單,執行期間該電腦的畫面會被自動操作。"
+    }
+  };
+
   function puriStatusText(res) {
     var st = res.status, when = st && st.ts ? new Date(st.ts).toLocaleString("zh-TW", { hour12: false }) : "";
     if (res.queued) return { text: "已送出,等待電腦上的 Claude 排程啟動", busy: true };
@@ -718,14 +737,15 @@
     return { text: "上次失敗(" + when + "):" + (st.msg || ""), busy: false };
   }
 
-  function setupPuri09() {
-    var btn = document.getElementById("puri09-btn");
-    var note = document.getElementById("puri09-note");
+  function setupPuri09(kindKey) {
+    var K = PUR_KINDS[kindKey || "receipt"];
+    var btn = document.getElementById(K.btnId);
+    var note = document.getElementById(K.noteId);
     if (!btn || !note) return;
     var timer = null;
 
     function refresh() {
-      api("puri09_status").then(function (res) {
+      api(K.statusApi).then(function (res) {
         if (!document.body.contains(btn)) return; // 已離開此頁
         if (!res.ok) { note.textContent = res.error || ""; return; }
         var s = puriStatusText(res);
@@ -737,20 +757,22 @@
       }).catch(function () { /* 讀不到狀態不影響使用 */ });
     }
 
-    // 按下「進貨單簽核」:先列出已收料清單明細,按「確認」才送出請求
+    // 按下「進貨單簽核」/「退貨單簽核」:先列出已收料/已退料清單明細,按「確認」才送出請求
     btn.addEventListener("click", function () {
-      openPuriListDialog(function () { refresh(); });
+      openPuriListDialog(kindKey || "receipt", function () { refresh(); });
     });
 
     refresh();
   }
 
-  function openPuriListDialog(onSent) {
+  function openPuriListDialog(kindKey, onSent) {
+    kindKey = kindKey || "receipt";
+    var K = PUR_KINDS[kindKey], isRet = kindKey === "ret";
     var modal = el(
       '<div class="modal-backdrop">' +
         '<div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="rcv-title">' +
-          '<h2 id="rcv-title">進貨單簽核</h2>' +
-          '<p class="rcv-intro">已收料清單明細(WMS.xlsx「收料」工作表)。按「確認」後,會依這份清單在鼎新 ERP 進貨單建立作業(PURI09)逐張建立並確認,執行期間該電腦的畫面會被自動操作。</p>' +
+          '<h2 id="rcv-title">' + esc(K.title) + '</h2>' +
+          '<p class="rcv-intro">' + esc(K.intro) + '</p>' +
           '<div class="rcv-box" id="rcv-box"><div class="skeleton">載入清單中…</div></div>' +
           '<p class="modal-msg" id="rcv-msg"></p>' +
           '<div class="modal-actions">' +
@@ -773,6 +795,8 @@
 
     var curRows = [], curPend = [];
 
+    function docText(r) { return isRet && r.dn ? ' · 進貨單 ' + esc((r.dt || "") + "-" + r.dn) : ""; }
+
     // kind: "sheet"(已寫入 Excel)/ "pending"(排隊中)/ "deleting"(已送出刪除,等電腦同步)
     function itemHtml(r, kind, idx) {
       var del = kind === "deleting";
@@ -781,7 +805,7 @@
         '<div class="rcv-top"><span class="rcv-code">' + esc(r.c) + '</span>' +
           '<span class="rcv-qty">數量 ' + esc(fmtNum(r.q)) + '</span></div>' +
         (r.n ? '<div class="rcv-name">' + esc(r.n) + '</div>' : '') +
-        '<div class="rcv-sub">' + esc(r.v) + ' · ' + esc(r.p) +
+        '<div class="rcv-sub">' + esc(r.v) + ' · ' + esc(r.p) + docText(r) +
           (kind === "pending" ? ' <span class="pending-chip">待寫入 Excel</span>' : '') +
           (del ? ' <span class="pending-chip">刪除中,約 5 分鐘內同步到 Excel</span>' : '') + '</div>' +
         (failed ? '<div class="rcv-fail">' + esc(r.f) + '</div>' : '') +
@@ -790,7 +814,7 @@
     }
 
     function load() {
-      return api("receipt_list").then(function (res) {
+      return api(K.listApi).then(function (res) {
         if (!res.ok) throw new Error(res.error || "讀取清單失敗");
         var snap = res.snapshot;
         curRows = (snap && snap.rows) || [];
@@ -800,19 +824,19 @@
           html = '<div class="empty-state">尚無清單資料,電腦約每 5 分鐘同步一次,請稍後再試</div>';
         } else {
           var when = new Date(snap.ts).toLocaleString("zh-TW", { hour12: false });
-          html += '<div class="rcv-count">共 ' + (snap.total || curRows.length) + ' 筆已收料(清單更新:' + esc(when) + ')' +
+          html += '<div class="rcv-count">共 ' + (snap.total || curRows.length) + ' 筆' + K.doneWord + '(清單更新:' + esc(when) + ')' +
             (snap.total > curRows.length ? ',僅列出前 ' + curRows.length + ' 筆' : '') + '</div>';
           html += curRows.length ? curRows.map(function (r, i) { return itemHtml(r, r.del ? "deleting" : "sheet", i); }).join("")
-            : '<div class="empty-state">「收料」工作表目前沒有資料</div>';
+            : '<div class="empty-state">「' + esc(K.sheet) + '」工作表目前沒有資料</div>';
         }
         if (curPend.length) {
-          html += '<div class="rcv-count rcv-warn">另有 ' + curPend.length + ' 筆剛送出、尚未寫入 Excel(約 5 分鐘內寫入),不會包含在這次進貨單:</div>' +
+          html += '<div class="rcv-count rcv-warn">另有 ' + curPend.length + ' 筆剛送出、尚未寫入 Excel(約 5 分鐘內寫入),不會包含在這次' + esc(K.doc) + ':</div>' +
             curPend.map(function (r, i) { return itemHtml(r, "pending", i); }).join("");
         }
         box.innerHTML = html;
         var deleting = curRows.filter(function (r) { return r.del; }).length;
         var usable = curRows.length - deleting;
-        okBtn.disabled = usable < 1 || deleting > 0;   // 有刪除還沒同步到 Excel 時,先不能確認(否則會把已刪除的列也建成進貨單)
+        okBtn.disabled = usable < 1 || deleting > 0;   // 有刪除還沒同步到 Excel 時,先不能確認(否則會把已刪除的列也建成單據)
         if (deleting) msg.textContent = "有 " + deleting + " 筆刪除正在同步到 Excel,同步完成後才能按「確認」(約 5 分鐘內,可重新開啟清單查看)";
         else if (msg.textContent.indexOf("正在同步") !== -1) msg.textContent = "";
       }).catch(function (err) {
@@ -828,16 +852,18 @@
       if (!b || b.disabled) return;
       var kind = b.getAttribute("data-kind"), r = (kind === "pending" ? curPend : curRows)[parseInt(b.getAttribute("data-i"), 10)];
       if (!r) return;
-      var what = r.c + (r.n ? " " + r.n : "") + "\n數量 " + fmtNum(r.q) + " · " + r.v + " · " + r.p;
-      if (!window.confirm("確定要刪除這一筆收料嗎?\n\n" + what + "\n\n" + (kind === "pending"
+      var what = r.c + (r.n ? " " + r.n : "") + "\n數量 " + fmtNum(r.q) + " · " + r.v + " · " + r.p +
+        (isRet && r.dn ? "\n進貨單 " + (r.dt || "") + "-" + r.dn : "");
+      if (!window.confirm("確定要刪除這一筆" + K.what + "嗎?\n\n" + what + "\n\n" + (kind === "pending"
         ? "這筆還沒寫入 Excel,刪除後就不會寫入。"
-        : "將從 WMS.xlsx「收料」工作表移除(電腦約 5 分鐘內同步,同時更新雲端硬碟),此動作無法復原。"))) return;
+        : "將從 WMS.xlsx「" + K.sheet + "」工作表移除(電腦約 5 分鐘內同步,同時更新雲端硬碟),此動作無法復原。"))) return;
       b.disabled = true;
       msg.textContent = "刪除中…";
       var payload = kind === "pending"
         ? { kind: "pending", id: r.id }
         : { kind: "sheet", vendor: r.v, po: r.p, code: r.c, qty: r.q };
-      api("receipt_delete", payload).then(function (res) {
+      if (isRet && kind !== "pending") { payload.docType = r.dt; payload.docNo = r.dn; }
+      api(K.delApi, payload).then(function (res) {
         if (!res.ok) throw new Error(res.error || "刪除失敗");
         msg.textContent = "";
         showToast(kind === "pending" ? "已刪除" : "已送出刪除,稍後同步到 Excel");
@@ -853,10 +879,10 @@
     okBtn.addEventListener("click", function () {
       okBtn.disabled = true;
       msg.textContent = "送出中…";
-      api("puri09_request").then(function (res) {
+      api(K.reqApi).then(function (res) {
         if (!res.ok) throw new Error(res.error || "送出失敗");
         close();
-        showToast("已送出進貨單簽核請求");
+        showToast("已送出" + K.title + "請求");
         if (onSent) onSent();
       }).catch(function (err) {
         if (!session) { close(); return; }
@@ -866,29 +892,29 @@
     });
   }
 
-  // ---- 進貨單簽核失敗通知 ----
-  // puri09 在 ERP 作業失敗時,會在 WMS.xlsx「收料」G 欄寫「⚠ 失敗:原因」;電腦端把它回報上來後,
+  // ---- 簽核失敗通知 ----
+  // puri09 / 退貨單流程在 ERP 作業失敗時,會在 WMS.xlsx「收料」「退料」的「狀態」欄寫「⚠ 失敗:原因」;電腦端把它回報上來後,
   // 這裡每分鐘檢查一次,出現(新的)失敗項目就跳出回報視窗通知使用者。按「知道了」後同一批不再重複彈出。
-  var FAIL_ACK_KEY = "wms_fail_ack";
   var failTimer = null;
 
   function isFailMark(s) { return !!s && /⚠|失敗/.test(String(s)); }
 
   function failSignature(rows) {
-    return rows.map(function (r) { return [r.p, r.c, r.f].join("|"); }).sort().join(";");
+    return rows.map(function (r) { return [r.p, r.c, r.f, r.dn || ""].join("|"); }).sort().join(";");
   }
 
-  function openFailureDialog(rows, sig) {
+  function openFailureDialog(kindKey, rows, sig) {
+    var K = PUR_KINDS[kindKey], isRet = kindKey === "ret";
     var modal = el(
       '<div class="modal-backdrop">' +
         '<div class="modal modal-wide" role="alertdialog" aria-modal="true" aria-labelledby="fail-title">' +
-          '<h2 id="fail-title" class="fail-title">⚠ 進貨單簽核有 ' + rows.length + ' 筆失敗</h2>' +
-          '<p class="rcv-intro">以下項目在 ERP 作業時失敗,資料仍留在 WMS.xlsx「收料」工作表,並標記了失敗原因,請確認處理:</p>' +
+          '<h2 id="fail-title" class="fail-title">⚠ ' + esc(K.title) + '有 ' + rows.length + ' 筆失敗</h2>' +
+          '<p class="rcv-intro">以下項目在 ERP 作業時失敗,資料仍留在 WMS.xlsx「' + esc(K.sheet) + '」工作表,並標記了失敗原因,請確認處理:</p>' +
           '<div class="rcv-box">' + rows.map(function (r) {
             return '<div class="rcv-item failed">' +
               '<div class="rcv-top"><span class="rcv-code">' + esc(r.c) + '</span><span class="rcv-qty">數量 ' + esc(fmtNum(r.q)) + '</span></div>' +
               (r.n ? '<div class="rcv-name">' + esc(r.n) + '</div>' : '') +
-              '<div class="rcv-sub">' + esc(r.v) + ' · ' + esc(r.p) + '</div>' +
+              '<div class="rcv-sub">' + esc(r.v) + ' · ' + esc(r.p) + (isRet && r.dn ? ' · 進貨單 ' + esc((r.dt || "") + "-" + r.dn) : "") + '</div>' +
               '<div class="rcv-fail">' + esc(r.f) + '</div>' +
             '</div>';
           }).join("") + '</div>' +
@@ -901,26 +927,32 @@
     );
     document.body.appendChild(modal);
     function close() { if (modal.parentNode) modal.parentNode.removeChild(modal); }
-    modal.querySelector("#fail-ok").addEventListener("click", function () { lsSet(FAIL_ACK_KEY, sig); close(); });
+    modal.querySelector("#fail-ok").addEventListener("click", function () { lsSet(K.failKey, sig); close(); });
     modal.querySelector("#fail-view").addEventListener("click", function () {
-      lsSet(FAIL_ACK_KEY, sig);
+      lsSet(K.failKey, sig);
       close();
-      openPuriListDialog(null);
+      openPuriListDialog(kindKey, null);
     });
   }
 
+  function busyForNotice() { return !!document.querySelector(".modal-backdrop") || !!scanner; }
+
   function checkFailures() {
-    if (!session || !can("erp_receipt") || document.hidden) return;
-    if (document.querySelector(".modal-backdrop") || scanner) return; // 正在操作其他視窗或掃描時先不打擾,下一輪再檢查
-    api("receipt_list").then(function (res) {
-      if (!res || !res.ok) return;
-      var rows = ((res.snapshot && res.snapshot.rows) || []).filter(function (r) { return isFailMark(r.f); });
-      if (!rows.length) { lsSet(FAIL_ACK_KEY, null); return; } // 失敗項目都處理掉了,下次再失敗才會重新通知
-      var sig = failSignature(rows);
-      if (lsGet(FAIL_ACK_KEY) === sig) return;
-      if (document.querySelector(".modal-backdrop") || scanner) return;
-      openFailureDialog(rows, sig);
-    }).catch(function () { /* 讀不到就下一輪再試 */ });
+    if (!session || document.hidden || busyForNotice()) return; // 正在操作其他視窗或掃描時先不打擾,下一輪再檢查
+    var kinds = Object.keys(PUR_KINDS).filter(function (k) { return can(PUR_KINDS[k].perm); });
+    (function next(i) {
+      if (i >= kinds.length) return;
+      var kindKey = kinds[i], K = PUR_KINDS[kindKey];
+      api(K.listApi).then(function (res) {
+        if (!res || !res.ok) return next(i + 1);
+        var rows = ((res.snapshot && res.snapshot.rows) || []).filter(function (r) { return isFailMark(r.f); });
+        if (!rows.length) { lsSet(K.failKey, null); return next(i + 1); } // 失敗項目都處理掉了,下次再失敗才會重新通知
+        var sig = failSignature(rows);
+        if (lsGet(K.failKey) === sig) return next(i + 1);
+        if (busyForNotice()) return;
+        openFailureDialog(kindKey, rows, sig);
+      }).catch(function () { /* 讀不到就下一輪再試 */ });
+    })(0);
   }
 
   function startFailureWatch() {
@@ -1145,6 +1177,11 @@
               '<span class="erp-tile-icon">' + ERP_ICONS.receipt + '</span><span class="erp-tile-title">進貨單簽核</span>' +
               '<span class="erp-tile-note" id="puri09-note"></span></button>'
             : '') +
+          (can("erp_return")
+            ? '<button type="button" class="erp-tile erp-tile-wms" id="ret-btn">' +
+              '<span class="erp-tile-icon">' + ERP_ICONS.ret + '</span><span class="erp-tile-title">退貨單簽核</span>' +
+              '<span class="erp-tile-note" id="ret-note"></span></button>'
+            : '') +
           (can("erp_issue")
             ? '<div class="erp-tile erp-tile-group">' +
               '<span class="erp-tile-icon">' + ERP_ICONS.issue + '</span><span class="erp-tile-title">製令領料單</span>' +
@@ -1160,7 +1197,8 @@
               '<span class="erp-tile-note" id="wms-sched-note"></span></button>'
             : '') +
         '</div>';
-      if (can("erp_receipt")) setupPuri09();
+      if (can("erp_receipt")) setupPuri09("receipt");
+      if (can("erp_return")) setupPuri09("ret");
       if (can("erp_wms")) setupWmsUpdate();
       if (isAdmin && can("erp_wms")) {
         api("sched_get").then(function (res) {
@@ -1584,27 +1622,89 @@
     return d > 0 ? d : 1;
   }
 
-  // opts(掃描收料用,可省略): { pairs: [{po, vendor, order}], qty, warn, onSent, onClose }
+  // ---------- 退料:查「進退貨履歷」找出已進貨的單據 ----------
+  // 履歷來自 WMS.xlsx「進退貨履歷」工作表(進貨單簽核成功時由電腦端寫入),隨網站資料一起發布(state.data.history)。
+  // 一列物料能退料的條件:履歷裡有這個物料的「進貨」紀錄,且(進貨合計 − 退貨合計)> 0。
+
+  function historyIndex() {
+    var d = state.data;
+    if (!d) return {};
+    if (d.__hidx) return d.__hidx;
+    var idx = {};
+    (d.history || []).forEach(function (h) { (idx[h.code] = idx[h.code] || []).push(h); });
+    d.__hidx = idx;
+    return idx;
+  }
+
+  // 回傳 { cands: [進貨紀錄(新的在前)], net: 可退數量 } 或 null(沒有進貨紀錄 / 已全數退料)
+  // 比對方式:物料列有採購單號、而且履歷有同一採購單序號的紀錄,就只看那些採購單;
+  // 否則(例如採購單已收完、WMS 更新後物料列不再帶採購單號)改看這個品號所有的進貨 / 退貨紀錄。
+  function returnInfo(r) {
+    var rows = historyIndex()[String(r.materialCode || "").trim()];
+    if (!rows || !rows.length) return null;
+    var pos = {}, hasPo = false;
+    (r.poNos || []).forEach(function (p) { p = String(p || "").trim(); if (p) { pos[p] = true; hasPo = true; } });
+    var byPo = hasPo ? rows.filter(function (h) { return pos[h.po]; }) : [];
+    var use = byPo.length ? byPo : rows;
+    var cands = [], net = 0;
+    use.forEach(function (h) {
+      if (h.kind === "進貨") { cands.push(h); net += Number(h.qty) || 0; } else { net -= Number(h.qty) || 0; }
+    });
+    if (!cands.length || !(net > 0)) return null;
+    return { cands: cands.slice().reverse(), net: net };
+  }
+
+  function returnBtnHtml(r) {
+    if (!can("ret")) return "";
+    // 尚未收料(履歷沒有進貨紀錄)或已全數退料:退料鍵反白(停用)
+    if (!returnInfo(r)) {
+      return '<button type="button" class="ret-btn" disabled title="尚未收料(進退貨履歷沒有進貨紀錄)或已全數退料,不能退料">退料</button>';
+    }
+    return '<button type="button" class="ret-btn" data-ret="' + recvIndex(r) + '">退料</button>';
+  }
+
+  function openReturnDialog(r) {
+    var info = returnInfo(r);
+    if (!info) { showToast("進退貨履歷找不到這項物料的進貨紀錄(或已全數退料),無法退料"); return; }
+    var vendors = r.vendors || [], vendorOf = {};
+    (r.poNos || []).forEach(function (p, i) { vendorOf[String(p || "").trim()] = vendors[i] || vendors[0] || ""; });
+    var pairs = info.cands.map(function (h) {
+      var q = Number(h.qty) || 0;
+      return { po: h.po, vendor: h.vendor || vendorOf[h.po] || "", docType: h.docType, docNo: h.docNo, qty: q, defQty: Math.min(q, info.net) };
+    });
+    openReceiveDialog(r, { mode: "return", pairs: pairs, qty: pairs[0].defQty });
+  }
+
+  // opts(可省略): { mode: "return"(退料,多進貨單別/單號欄位), pairs: [{po, vendor, order, docType, docNo, qty, defQty}], qty, warn, onSent, onClose }
   function openReceiveDialog(r, opts) {
     opts = opts || {};
+    var isRet = opts.mode === "return";
     var pos = r.poNos || [], vendors = r.vendors || [];
     var pairs = opts.pairs || pos.map(function (po, i) { return { po: po, vendor: vendors[i] || vendors[0] || "" }; });
     if (!pairs.length) pairs = [{ po: "", vendor: vendors[0] || "" }];
 
-    // 此物料有多張採購單時,先用下拉選單挑一組(會帶入下面兩個欄位);廠商與採購單號一律可以直接修改
+    // 此物料有多張採購單(退料:多張進貨單)時,先用下拉選單挑一組(會帶入下面的欄位);欄位一律可以直接修改
     var pickHtml = "";
     if (pairs.length > 1) {
       pickHtml =
-        '<div class="field"><span class="field-label">此物料有多張採購單,請選擇</span>' +
+        '<div class="field"><span class="field-label">' + (isRet ? '此物料有多張進貨單,請選擇' : '此物料有多張採購單,請選擇') + '</span>' +
         '<select id="recv-pair">' + pairs.map(function (p, i) {
-          return '<option value="' + i + '">' + esc(p.po) + ' — ' + esc(p.vendor) + '</option>';
+          return '<option value="' + i + '">' + (isRet
+            ? esc((p.docType || "") + "-" + (p.docNo || "")) + ' · ' + esc(p.po) + ' · 數量 ' + esc(fmtNum(p.qty))
+            : esc(p.po) + ' — ' + esc(p.vendor)) + '</option>';
         }).join("") + '</select></div>';
     }
+    var docHtml = isRet
+      ? '<div class="field"><span class="field-label">進貨單別(可修改)</span>' +
+          '<input type="text" id="recv-doctype" maxlength="20" autocomplete="off" autocapitalize="off" spellcheck="false" /></div>' +
+        '<div class="field"><span class="field-label">進貨單號(可修改)</span>' +
+          '<input type="text" id="recv-docno" maxlength="40" autocomplete="off" autocapitalize="off" spellcheck="false" /></div>'
+      : '';
 
     var modal = el(
       '<div class="modal-backdrop">' +
         '<div class="modal" role="dialog" aria-modal="true" aria-labelledby="recv-title">' +
-          '<h2 id="recv-title">確認收料</h2>' +
+          '<h2 id="recv-title">' + (isRet ? '確認退料' : '確認收料') + '</h2>' +
           '<div class="modal-info recv-info">' +
             '<div class="recv-info-row"><span class="k">品號</span><span class="v" id="recv-code"></span></div>' +
             '<div class="recv-info-row"><span class="k">品名</span><span class="v" id="recv-name"></span></div>' +
@@ -1614,6 +1714,7 @@
             '<input type="text" id="recv-vendor" maxlength="100" autocomplete="off" /></div>' +
           '<div class="field"><span class="field-label">採購單號(可修改)</span>' +
             '<input type="text" id="recv-po" maxlength="100" autocomplete="off" autocapitalize="off" spellcheck="false" /></div>' +
+          docHtml +
           '<div class="field"><span class="field-label">數量(可修改)</span>' +
             '<input type="number" id="recv-qty" inputmode="decimal" min="0" step="any" /></div>' +
           '<p class="modal-msg" id="recv-msg"></p>' +
@@ -1626,19 +1727,26 @@
     );
     document.body.appendChild(modal);
 
-    // 用 textContent 填入,避免任何特殊字元被當成 HTML
+    // 用 textContent / value 填入,避免任何特殊字元被當成 HTML
     var vEl = modal.querySelector("#recv-vendor"), pEl = modal.querySelector("#recv-po");
+    var dtEl = modal.querySelector("#recv-doctype"), dnEl = modal.querySelector("#recv-docno");
+    var qtyEl = modal.querySelector("#recv-qty");
     var pairSel = modal.querySelector("#recv-pair");
-    function fillPair() {
-      var p = pairs[pairSel ? parseInt(pairSel.value, 10) : 0] || pairs[0];
+    function curPair() { return pairs[pairSel ? parseInt(pairSel.value, 10) : 0] || pairs[0]; }
+    function fillPair(changed) {
+      var p = curPair();
       vEl.value = p.vendor || "";
       pEl.value = p.po || "";
+      if (isRet) {
+        dtEl.value = p.docType || "";
+        dnEl.value = p.docNo || "";
+        if (changed && p.defQty > 0) qtyEl.value = p.defQty;   // 換一張進貨單,數量預設改成那張的可退數量
+      }
     }
-    fillPair();
-    if (pairSel) pairSel.addEventListener("change", fillPair);
+    fillPair(false);
+    if (pairSel) pairSel.addEventListener("change", function () { fillPair(true); });
     modal.querySelector("#recv-code").textContent = r.materialCode;
     modal.querySelector("#recv-name").textContent = r.materialName;
-    var qtyEl = modal.querySelector("#recv-qty");
     qtyEl.value = opts.qty > 0 ? opts.qty : defaultReceiveQty(r);
 
     var msg = modal.querySelector("#recv-msg"), okBtn = modal.querySelector("#recv-ok");
@@ -1655,19 +1763,24 @@
     okBtn.addEventListener("click", function () {
       var qty = Number(qtyEl.value);
       if (!(qty > 0)) { msg.textContent = "數量必須大於 0"; return; }
-      var pair = pairs[pairSel ? parseInt(pairSel.value, 10) : 0] || pairs[0];
-      var vendor = vEl.value.trim(), po = pEl.value.trim();
+      var pair = curPair();
+      var payload = {
+        order: pair.order || orderOfRow(r), vendor: vEl.value.trim(), po: pEl.value.trim(),
+        code: r.materialCode, name: r.materialName, qty: qty
+      };
+      if (isRet) {
+        payload.docType = dtEl.value.trim();
+        payload.docNo = dnEl.value.trim();
+        if (!payload.docType || !payload.docNo) { msg.textContent = "請填入進貨單別與進貨單號"; return; }
+      }
       msg.textContent = "送出中…";
       okBtn.disabled = true;
-      api("receive", {
-        order: pair.order || orderOfRow(r), vendor: vendor, po: po,
-        code: r.materialCode, name: r.materialName, qty: qty
-      })
+      api(isRet ? "return" : "receive", payload)
         .then(function (res) {
           if (!res.ok) throw new Error(res.error || "送出失敗");
           if (opts.onSent) opts.onSent();
           close();
-          showToast("已送出收料,稍後會寫入 Excel「收料」工作表");
+          showToast(isRet ? "已送出退料,稍後會寫入 Excel「退料」工作表" : "已送出收料,稍後會寫入 Excel「收料」工作表");
         })
         .catch(function (err) {
           if (!session) { close(); return; } // 登入已失效,已切換到登入畫面
@@ -2157,7 +2270,7 @@
             '<div><span class="k">未領用量:</span> <span class="v material-remain">' + fmtNum(r.remainQty) + '</span></div>' +
             '<div><span class="k">庫存數量:</span> <span class="v">' + fmtNum(r.stockQty) + '</span></div>' +
           '</div>' +
-          (can("receive") ? '<div class="material-card-actions">' + receiveBtnHtml(r) + '</div>' : '') +
+          ((can("receive") || can("ret")) ? '<div class="material-card-actions">' + receiveBtnHtml(r) + returnBtnHtml(r) + '</div>' : '') +
         '</div>'
       );
     }).join("") + '</div>';
@@ -2168,7 +2281,7 @@
       '<th>採購單號</th><th>廠商</th>' +
       '<th class="num">需領用量</th><th>預交日</th><th>到料狀態</th>' +
       '<th class="num">已入料量</th><th class="num">已領用量</th><th class="num">未領用量</th><th class="num">庫存數量</th>' +
-      (can("receive") ? '<th>收料</th>' : '') +
+      ((can("receive") || can("ret")) ? '<th>' + (can("receive") && can("ret") ? '收料 / 退料' : can("receive") ? '收料' : '退料') + '</th>' : '') +
       '</tr></thead><tbody>' +
       rows.map(function (r) {
         return '<tr>' +
@@ -2186,7 +2299,7 @@
           '<td class="num">' + fmtNum(r.issuedQty) + '</td>' +
           '<td class="num material-remain">' + fmtNum(r.remainQty) + '</td>' +
           '<td class="num">' + fmtNum(r.stockQty) + '</td>' +
-          (can("receive") ? '<td>' + receiveBtnHtml(r) + '</td>' : '') +
+          ((can("receive") || can("ret")) ? '<td><div class="cell-actions">' + receiveBtnHtml(r) + returnBtnHtml(r) + '</div></td>' : '') +
           '</tr>';
       }).join("") +
       '</tbody></table></div>';
@@ -2370,6 +2483,12 @@
     var appEl = document.getElementById("app");
     if (appEl) {
       appEl.addEventListener("click", function (e) {
+        var rb = e.target.closest ? e.target.closest(".ret-btn") : null;
+        if (rb && !rb.disabled) {
+          var rr = recvRows[parseInt(rb.getAttribute("data-ret"), 10)];
+          if (rr) openReturnDialog(rr);
+          return;
+        }
         var b = e.target.closest ? e.target.closest(".recv-btn") : null;
         if (!b) return;
         var r = recvRows[parseInt(b.getAttribute("data-recv"), 10)];

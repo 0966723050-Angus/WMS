@@ -42,8 +42,14 @@ def out(obj):
 
 
 def main(argv):
+    argv = list(argv)
+    # 加上 --ret 就是「退貨單簽核」的佇列(動作 ret_claim / ret_report),否則是「進貨單簽核」(puri09_claim / puri09_report)
+    prefix = "puri09"
+    if "--ret" in argv:
+        argv.remove("--ret")
+        prefix = "ret"
     if len(argv) < 2 or argv[1] not in ("claim", "report"):
-        out({"ok": False, "error": "用法: puri09_queue.py claim | report <done|error> <訊息>"})
+        out({"ok": False, "error": "用法: puri09_queue.py [--ret] claim | report <done|error> <訊息>"})
         return 2
     try:
         with open(CONFIG, encoding="utf-8-sig") as f:
@@ -55,12 +61,12 @@ def main(argv):
 
     try:
         if argv[1] == "claim":
-            res = call(endpoint, {"action": "puri09_claim", "key": key})
+            res = call(endpoint, {"action": prefix + "_claim", "key": key})
         else:
             if len(argv) < 3 or argv[2] not in ("done", "error"):
                 out({"ok": False, "error": "report 需要狀態 done 或 error"})
                 return 2
-            res = call(endpoint, {"action": "puri09_report", "key": key, "state": argv[2], "msg": " ".join(argv[3:])[:300]})
+            res = call(endpoint, {"action": prefix + "_report", "key": key, "state": argv[2], "msg": " ".join(argv[3:])[:300]})
     except Exception as ex:
         out({"ok": False, "error": "連不上中繼服務: %s" % ex})
         return 1

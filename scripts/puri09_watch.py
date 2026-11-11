@@ -1,7 +1,8 @@
 """ERP「進貨單」請求監看器(給 Claude 的 Monitor 工具使用,讓按下確認後幾秒內就開始執行)。
 
 每 10 秒向中繼服務取一次請求(puri09_claim:取走即標記為執行中)。
-取到請求時,在標準輸出印一行 "PURI09_REQUEST by=<帳號>",Monitor 會把這一行當成通知喚醒 Claude 去執行 puri09 skill。
+取到進貨單請求時,在標準輸出印一行 "PURI09_REQUEST by=<帳號>",Monitor 會把這一行當成通知喚醒 Claude 去執行 puri09 skill;
+同時也檢查「退貨單簽核」的佇列(ret_claim),取到時印 "RETURN_REQUEST by=<帳號>"。
 連續讀取失敗時,每次失敗串只印一行 "PURI09_WATCH_ERROR ..." 提醒。沒有請求時不輸出任何東西。
 
 用法: python -I scripts\\puri09_watch.py            (一直執行,由 Monitor 到期時結束它)
@@ -19,8 +20,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.path.join(HERE, "edit_config.json")
 
 
-def claim(endpoint, key):
-    url = endpoint + ("&" if "?" in endpoint else "?") + urllib.parse.urlencode({"action": "puri09_claim", "key": key})
+def claim(endpoint, key, action="puri09_claim"):
+    url = endpoint + ("&" if "?" in endpoint else "?") + urllib.parse.urlencode({"action": action, "key": key})
     with urllib.request.urlopen(url, timeout=30) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
@@ -45,6 +46,13 @@ def main(argv):
                 print("PURI09_REQUEST by=%s" % by, flush=True)
             elif not res.get("ok"):
                 raise RuntimeError(res.get("error") or "中繼回應錯誤")
+            # 退貨單簽核的佇列(舊版中繼沒有這個動作時略過,不算錯誤)
+            try:
+                res2 = claim(endpoint, key, "ret_claim")
+                if res2.get("ok") and res2.get("pending"):
+                    print("RETURN_REQUEST by=%s" % (res2.get("request") or {}).get("by", ""), flush=True)
+            except Exception:
+                pass
         except Exception as ex:
             failing += 1
             if failing == 3:  # 連續失敗 3 次才提醒一次,之後靜默直到恢復

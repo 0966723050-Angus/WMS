@@ -160,6 +160,29 @@ def main():
                 "bin": norm(bin_no),
             })
 
+    # 進退貨履歷:網站物料卡片的「退料」鍵用它找出已進貨的單據(單別/單號)與可退數量
+    history = []
+    if "進退貨履歷" in wb.sheetnames:
+        ws5 = wb["進退貨履歷"]
+        for row in ws5.iter_rows(min_row=2, values_only=True):
+            if not row or not any(row[:9]):
+                continue
+            h_date, h_kind, h_type, h_no, h_vendor, h_po, h_code, h_name, h_qty = (list(row[:9]) + [None] * 9)[:9]
+            h_kind = str(norm(h_kind))
+            if h_kind not in ("進貨", "退貨") or not norm(h_code):
+                continue
+            history.append({
+                "date": h_date.strftime("%Y-%m-%d") if hasattr(h_date, "strftime") else str(norm(h_date)),
+                "kind": h_kind,
+                "docType": str(norm(h_type)),
+                "docNo": str(norm(h_no)),
+                "vendor": str(norm(h_vendor)),
+                "po": str(norm(h_po)),
+                "code": str(norm(h_code)),
+                "name": str(norm(h_name)),
+                "qty": h_qty if isinstance(h_qty, (int, float)) else 0,
+            })
+
     source_mtime = datetime.datetime.fromtimestamp(os.path.getmtime(args.src))
 
     data = {
@@ -168,6 +191,7 @@ def main():
         "projects": [projects[c] for c in project_order],
         "materials": materials,
         "storageItems": storage_items,
+        "history": history,
     }
 
     plain = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -179,7 +203,7 @@ def main():
 
     n_orders = sum(len(p["orders"]) for p in data["projects"])
     n_materials = sum(len(v) for v in materials.values())
-    print(f"projects={len(data['projects'])} orders={n_orders} material_rows={n_materials} storage_items={len(storage_items)}")
+    print(f"projects={len(data['projects'])} orders={n_orders} material_rows={n_materials} storage_items={len(storage_items)} history={len(history)}")
 
 
 if __name__ == "__main__":

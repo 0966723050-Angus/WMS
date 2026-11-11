@@ -90,12 +90,12 @@ function makeSession_(email) {
 }
 
 // ---------- 權限 ----------
-// admin 名單管理 / edit 儲位編輯 / receive 收料 / erp_receipt 進貨單 / erp_issue 製令領料單 / erp_wms WMS更新
+// admin 名單管理 / edit 儲位編輯 / receive 收料 / ret 退料 / erp_receipt 進貨單 / erp_return 退貨單 / erp_issue 製令領料單 / erp_wms WMS更新
 // 帳號記錄裡沒有 perms 的舊帳號 = 只有「儲位編輯」(維持原本能做的事)。主管理者(ADMIN_EMAIL)永遠全部權限。
 
-var PERM_KEYS = ['admin', 'edit', 'receive', 'erp_receipt', 'erp_issue', 'erp_wms'];
+var PERM_KEYS = ['admin', 'edit', 'receive', 'ret', 'erp_receipt', 'erp_return', 'erp_issue', 'erp_wms'];
 // 沒設定過的項目用預設值:儲位編輯、收料原本所有人都能用,所以舊帳號維持有這兩項
-var PERM_DEFAULTS = { admin: false, edit: true, receive: true, erp_receipt: false, erp_issue: false, erp_wms: false };
+var PERM_DEFAULTS = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_issue: false, erp_wms: false };
 
 function normPerms_(p) {
   var out = {};
@@ -245,29 +245,41 @@ function saveEdit_(body, user) {
   return { ok: true, id: id };
 }
 
-// ---------- 收料(網頁送出,本機排程寫入 WMS.xlsx 的「收料」工作表) ----------
+// ---------- 收料 / 退料(網頁送出,本機排程寫入 WMS.xlsx 的「收料」「退料」工作表) ----------
+// 兩種清單共用同一套流程,依 kind 選用不同的屬性前綴與狀態鍵:
+//   receipt:收料 -> 進貨單簽核(PURI09)      ret:退料 -> 退貨單簽核
 
-var RECEIPT_PREFIX = 'r_';
+var KINDS = {
+  receipt: { prefix: 'r_', delPrefix: 'd_', snapKey: 'RECEIPT_SNAPSHOT', reqKey: 'PURI09_REQ', statusKey: 'PURI09_STATUS', label: '進貨單', what: '收料' },
+  ret:     { prefix: 't_', delPrefix: 'x_', snapKey: 'RETURN_SNAPSHOT',  reqKey: 'RETURN_REQ',  statusKey: 'RETURN_STATUS',  label: '退貨單', what: '退料' }
+};
 var MAX_RECEIPTS = 500;
 
-function listReceipts_() {
+function kindOf_(kind) { return kind === 'ret' ? KINDS.ret : KINDS.receipt; }
+
+function listByPrefix_(prefix) {
   var all = props_().getProperties();
   var out = [];
   Object.keys(all).forEach(function (k) {
-    if (k.indexOf(RECEIPT_PREFIX) !== 0) return;
+    if (k.indexOf(prefix) !== 0) return;
     try { out.push(JSON.parse(all[k])); } catch (err) { /* 略過壞資料 */ }
   });
   out.sort(function (a, b) { return a.ts - b.ts; });
   return out;
 }
 
-function saveReceipt_(body, user) {
+function listReceipts_(kind) { return listByPrefix_(kindOf_(kind).prefix); }
+
+function saveReceipt_(body, user, kind) {
+  var K = kindOf_(kind), isRet = K === KINDS.ret;
   var code = clip_(body.code, 60);
   var qty = Number(body.qty);
   if (!code) return { ok: false, error: '缺少品號' };
   if (!(qty > 0) || qty > 10000000) return { ok: false, error: '數量必須大於 0' };
   qty = Math.round(qty * 1000) / 1000;
-  if (listReceipts_().length >= MAX_RECEIPTS) return { ok: false, error: '待處理的收料過多,請稍後再試' };
+  var docType = clip_(body.docType, 20), docNo = clip_(body.docNo, 40);
+  if (isRet && (!docType || !docNo)) return { ok: false, error: '請填入進貨單別與進貨單號' };
+  if (listReceipts_(kind).length >= MAX_RECEIPTS) return { ok: false, error: '待處理的' + K.what + '過多,請稍後再試' };
   var ts = Date.now();
   var id = ts + '_' + Math.random().toString(36).slice(2, 8);
   var rec = {
@@ -275,7 +287,8 @@ function saveReceipt_(body, user) {
     vendor: clip_(body.vendor, 100), po: clip_(body.po, 100),
     code: code, name: clip_(body.name, 200), qty: qty, order: clip_(body.order, 60)
   };
-  props_().setProperty(RECEIPT_PREFIX + id, JSON.stringify(rec));
+  if (isRet) { rec.docType = docType; rec.docNo = docNo; }
+  props_().setProperty(K.prefix + id, JSON.stringify(rec));
   return { ok: true, id: id };
 }
 
@@ -306,144 +319,145 @@ function requestWmsUpdate_(user) {
   return { ok: true };
 }
 
-// ---------- ERP「進貨單」(PURI09):網頁送出請求,電腦上的 Claude 排程取走後執行 puri09 skill ----------
-// PURI09_REQ    :排隊中的請求 {ts, by}
-// PURI09_STATUS :執行狀態 {state: running|done|error, msg, ts, by}
+// ---------- ERP「進貨單」(PURI09)/「退貨單」:網頁送出請求,電腦上的 Claude 取走後執行對應的 skill ----------
+// PURI09_REQ / RETURN_REQ       :排隊中的請求 {ts, by}
+// PURI09_STATUS / RETURN_STATUS :執行狀態 {state: running|done|error, msg, ts, by}
 
-var PURI_REQ_KEY = 'PURI09_REQ';
-var PURI_STATUS_KEY = 'PURI09_STATUS';
 var PURI_STALE_MS = 3 * 60 * 60 * 1000;   // 執行中超過 3 小時視為失效(避免當掉後按鈕永遠鎖住)
 
-function puriView_() {
-  var req = readJson_(PURI_REQ_KEY);
-  var st = readJson_(PURI_STATUS_KEY);
+function puriView_(kind) {
+  var K = kindOf_(kind);
+  var req = readJson_(K.reqKey);
+  var st = readJson_(K.statusKey);
   if (st && st.state === 'running' && Date.now() - st.ts > PURI_STALE_MS) st = { state: 'error', msg: '執行逾時未回報', ts: st.ts, by: st.by };
   return { ok: true, queued: req, status: st };
 }
 
-function requestPuri_(user) {
-  var v = puriView_();
-  if (v.queued) return { ok: false, error: '已有進貨單請求排隊中,請稍候' };
-  if (v.status && v.status.state === 'running') return { ok: false, error: '進貨單正在執行中' };
-  var dn = listDeletes_().length;   // 有刪除還沒同步到 Excel,這時送出會把已刪除的列也建成進貨單
+function requestPuri_(user, kind) {
+  var K = kindOf_(kind);
+  var v = puriView_(kind);
+  if (v.queued) return { ok: false, error: '已有' + K.label + '請求排隊中,請稍候' };
+  if (v.status && v.status.state === 'running') return { ok: false, error: K.label + '正在執行中' };
+  var dn = listDeletes_(kind).length;   // 有刪除還沒同步到 Excel,這時送出會把已刪除的列也建成單據
   if (dn) return { ok: false, error: '還有 ' + dn + ' 筆刪除正在同步到 Excel(約 5 分鐘內),請稍後再確認' };
-  props_().setProperty(PURI_REQ_KEY, JSON.stringify({ ts: Date.now(), by: user.email }));
+  props_().setProperty(K.reqKey, JSON.stringify({ ts: Date.now(), by: user.email }));
   return { ok: true };
 }
 
-// Claude 排程取請求:有排隊中的請求且目前沒有執行中,就取走並標記為執行中
-function puriClaim_() {
-  var v = puriView_();
+// Claude 取請求:有排隊中的請求且目前沒有執行中,就取走並標記為執行中
+function puriClaim_(kind) {
+  var K = kindOf_(kind);
+  var v = puriView_(kind);
   if (!v.queued) return { ok: true, pending: false };
   if (v.status && v.status.state === 'running') return { ok: true, pending: false, busy: true };
-  props_().deleteProperty(PURI_REQ_KEY);
-  props_().setProperty(PURI_STATUS_KEY, JSON.stringify({ state: 'running', msg: '', ts: Date.now(), by: v.queued.by }));
+  props_().deleteProperty(K.reqKey);
+  props_().setProperty(K.statusKey, JSON.stringify({ state: 'running', msg: '', ts: Date.now(), by: v.queued.by }));
   return { ok: true, pending: true, request: v.queued };
 }
 
-function puriReport_(state, msg) {
+function puriReport_(state, msg, kind) {
+  var K = kindOf_(kind);
   if (['done', 'error'].indexOf(state) === -1) return { ok: false, error: '狀態不正確' };
-  var cur = readJson_(PURI_STATUS_KEY) || {};
-  props_().setProperty(PURI_STATUS_KEY, JSON.stringify({ state: state, msg: clip_(msg, 300), ts: Date.now(), by: cur.by || '' }));
+  var cur = readJson_(K.statusKey) || {};
+  props_().setProperty(K.statusKey, JSON.stringify({ state: state, msg: clip_(msg, 300), ts: Date.now(), by: cur.by || '' }));
   return { ok: true };
 }
 
-// ---------- 「已收料清單」(WMS.xlsx「收料」工作表的內容快照) ----------
-// 電腦端每次寫入收料 / 清除收料後,會把工作表目前的資料列回報上來(receipts_snapshot,需同步金鑰);
-// 網站「進貨單簽核」按下後,列出這份快照 + 尚未寫入 Excel 的排隊中收料,供使用者確認。
+// ---------- 「已收料 / 已退料清單」(WMS.xlsx「收料」「退料」工作表的內容快照) ----------
+// 電腦端每次寫入 / 清除後,會把工作表目前的資料列回報上來(receipts_snapshot / returns_snapshot,需同步金鑰);
+// 網站「進貨單簽核」「退貨單簽核」按下後,列出這份快照 + 尚未寫入 Excel 的排隊中項目,供使用者確認。
 
-var RSNAP_KEY = 'RECEIPT_SNAPSHOT';
 var RSNAP_MAX_ROWS = 60;
 var RSNAP_MAX_CHARS = 8500;   // 指令碼屬性單一值上限約 9KB
 
-function saveSnapshot_(body) {
+function saveSnapshot_(body, kind) {
+  var K = kindOf_(kind), isRet = K === KINDS.ret;
   var rows = Array.isArray(body.rows) ? body.rows : [];
   var out = [];
   rows.slice(0, RSNAP_MAX_ROWS).forEach(function (r) {
     if (!r) return;
-    out.push({
+    var o = {
       v: clip_(r.v, 20), p: clip_(r.p, 32), c: clip_(r.c, 32), n: clip_(r.n, 24),
       q: Number(r.q) || 0, d: clip_(r.d, 10),
-      f: clip_(r.f, 80)   // 「收料」G 欄的失敗標記,例「⚠ 失敗:查無採購序號」
-    });
+      f: clip_(r.f, 80)   // 工作表「狀態」欄的失敗標記,例「⚠ 失敗:查無採購序號」
+    };
+    if (isRet) { o.dt = clip_(r.dt, 12); o.dn = clip_(r.dn, 24); }
+    out.push(o);
   });
   var snap = { ts: Date.now(), total: parseInt(body.total, 10) || out.length, rows: out };
   var raw = JSON.stringify(snap);
   while (raw.length > RSNAP_MAX_CHARS && out.length) { out.pop(); raw = JSON.stringify(snap); }
-  props_().setProperty(RSNAP_KEY, raw);
+  props_().setProperty(K.snapKey, raw);
   return { ok: true, stored: out.length };
 }
 
-// ---- 清單的「刪除」:網站送出刪除請求,電腦端約每 5 分鐘從 WMS.xlsx「收料」表移除對應列並回報 ----
-var DEL_PREFIX = 'd_';
+// ---- 清單的「刪除」:網站送出刪除請求,電腦端約每 1 分鐘從 WMS.xlsx 對應工作表移除該列並回報 ----
 var MAX_DELETES = 200;
 
-function listDeletes_() {
-  var all = props_().getProperties();
-  var out = [];
-  Object.keys(all).forEach(function (k) {
-    if (k.indexOf(DEL_PREFIX) !== 0) return;
-    try { out.push(JSON.parse(all[k])); } catch (err) { /* 略過壞資料 */ }
-  });
-  out.sort(function (a, b) { return a.ts - b.ts; });
-  return out;
+function listDeletes_(kind) { return listByPrefix_(kindOf_(kind).delPrefix); }
+
+// 以「廠商|採購單|品號|數量|進貨單別-單號」辨識同一列(和快照內容一致,字數已依快照上限截短);進貨單別-單號只有退料用
+function rowKey_(v, p, c, q, doc) {
+  return [clip_(v, 20), clip_(p, 32), clip_(c, 32), String(Number(q) || 0), clip_(doc, 40)].join('|');
 }
 
-// 以「廠商|採購單|品號|數量」辨識同一列(和快照內容一致,字數已依快照上限截短)
-function rowKey_(v, p, c, q) {
-  return [clip_(v, 20), clip_(p, 32), clip_(c, 32), String(Number(q) || 0)].join('|');
-}
+function docKey_(dt, dn) { return (dt || dn) ? clip_(dt, 12) + '-' + clip_(dn, 24) : ''; }
 
-function receiptListView_() {
-  var pending = listReceipts_().map(function (r) {
-    return { id: r.id, v: r.vendor, p: r.po, c: r.code, n: clip_(r.name, 24), q: r.qty, ts: r.ts };
+function receiptListView_(kind) {
+  var K = kindOf_(kind), isRet = K === KINDS.ret;
+  var pending = listReceipts_(kind).map(function (r) {
+    var o = { id: r.id, v: r.vendor, p: r.po, c: r.code, n: clip_(r.name, 24), q: r.qty, ts: r.ts };
+    if (isRet) { o.dt = r.docType; o.dn = r.docNo; }
+    return o;
   });
-  var snap = readJson_(RSNAP_KEY);
-  var dels = listDeletes_();
+  var snap = readJson_(K.snapKey);
+  var dels = listDeletes_(kind);
   if (snap && Array.isArray(snap.rows) && dels.length) {   // 已送出刪除、電腦還沒處理的列,標記「刪除中」
     var left = {};
-    dels.forEach(function (d) { var k = rowKey_(d.vendor, d.po, d.code, d.qty); left[k] = (left[k] || 0) + 1; });
+    dels.forEach(function (d) { var k = rowKey_(d.vendor, d.po, d.code, d.qty, docKey_(d.docType, d.docNo)); left[k] = (left[k] || 0) + 1; });
     snap.rows.forEach(function (r) {
-      var k = rowKey_(r.v, r.p, r.c, r.q);
+      var k = rowKey_(r.v, r.p, r.c, r.q, docKey_(r.dt, r.dn));
       if (left[k] > 0) { r.del = true; left[k]--; }
     });
   }
   return { ok: true, snapshot: snap, pending: pending, deleting: dels.length };
 }
 
-function deleteReceiptRow_(body, user) {
-  var kind = String(body.kind || '');
-  if (kind === 'pending') {   // 還沒寫進 Excel 的排隊中收料:直接移除,之後就不會寫入
+function deleteReceiptRow_(body, user, kind) {
+  var K = kindOf_(kind), isRet = K === KINDS.ret;
+  var sub = String(body.kind || '');
+  if (sub === 'pending') {   // 還沒寫進 Excel 的排隊中項目:直接移除,之後就不會寫入
     var id = String(body.id || '').trim();
-    if (!id || props_().getProperty(RECEIPT_PREFIX + id) === null) {
+    if (!id || props_().getProperty(K.prefix + id) === null) {
       return { ok: false, error: '這筆已經寫入 Excel(或已不存在),請重新開啟清單後再刪除' };
     }
-    props_().deleteProperty(RECEIPT_PREFIX + id);
+    props_().deleteProperty(K.prefix + id);
     return { ok: true, removed: true };
   }
-  if (kind !== 'sheet') return { ok: false, error: '不支援的動作' };
+  if (sub !== 'sheet') return { ok: false, error: '不支援的動作' };
 
   var po = clip_(body.po, 32), code = clip_(body.code, 32);
-  if (!code) return { ok: false, error: '缺少品號' };   // 採購單號可以是空白(沒有採購單的收料列也要能刪除)
-  var v = puriView_();
+  if (!code) return { ok: false, error: '缺少品號' };   // 採購單號可以是空白(沒有採購單的列也要能刪除)
+  var v = puriView_(kind);
   if (v.queued || (v.status && v.status.state === 'running')) {
-    return { ok: false, error: '進貨單簽核請求已送出或正在執行,現在不能刪除清單' };
+    return { ok: false, error: K.label + '簽核請求已送出或正在執行,現在不能刪除清單' };
   }
-  var key = rowKey_(body.vendor, po, code, body.qty);
-  var snap = readJson_(RSNAP_KEY);
+  var dt = isRet ? clip_(body.docType, 12) : '', dn = isRet ? clip_(body.docNo, 24) : '';
+  var key = rowKey_(body.vendor, po, code, body.qty, docKey_(dt, dn));
+  var snap = readJson_(K.snapKey);
   var have = snap && Array.isArray(snap.rows)
-    ? snap.rows.filter(function (r) { return rowKey_(r.v, r.p, r.c, r.q) === key; }).length : 0;
+    ? snap.rows.filter(function (r) { return rowKey_(r.v, r.p, r.c, r.q, docKey_(r.dt, r.dn)) === key; }).length : 0;
   if (!have) return { ok: false, error: '清單已更新,找不到這筆,請重新開啟清單' };
-  var dels = listDeletes_();
-  var already = dels.filter(function (d) { return rowKey_(d.vendor, d.po, d.code, d.qty) === key; }).length;
+  var dels = listDeletes_(kind);
+  var already = dels.filter(function (d) { return rowKey_(d.vendor, d.po, d.code, d.qty, docKey_(d.docType, d.docNo)) === key; }).length;
   if (already >= have) return { ok: false, error: '這筆已經在刪除中' };
   if (dels.length >= MAX_DELETES) return { ok: false, error: '待處理的刪除過多,請稍後再試' };
 
   var ts = Date.now();
   var did = ts + '_' + Math.random().toString(36).slice(2, 8);
-  props_().setProperty(DEL_PREFIX + did, JSON.stringify({
-    id: did, ts: ts, by: user.email, vendor: clip_(body.vendor, 20), po: po, code: code, qty: Number(body.qty) || 0
-  }));
+  var rec = { id: did, ts: ts, by: user.email, vendor: clip_(body.vendor, 20), po: po, code: code, qty: Number(body.qty) || 0 };
+  if (isRet) { rec.docType = dt; rec.docNo = dn; }
+  props_().setProperty(K.delPrefix + did, JSON.stringify(rec));
   return { ok: true, queued: true };
 }
 
@@ -556,10 +570,10 @@ function doPost(e) {
     }
 
     // 電腦端回報「收料」工作表內容(用同步金鑰,不是登入工作階段)
-    if (action === 'receipts_snapshot') {
+    if (action === 'receipts_snapshot' || action === 'returns_snapshot') {
       var kerr = checkSyncKey_(body.key);
       if (kerr) return json_({ ok: false, error: kerr });
-      return json_(saveSnapshot_(body));
+      return json_(saveSnapshot_(body, action === 'returns_snapshot' ? 'ret' : 'receipt'));
     }
 
     var me = checkSession_(body.session);
@@ -575,7 +589,11 @@ function doPost(e) {
     }
     if (action === 'receive') {
       if (!me.perms.receive) return denied_('收料');
-      return json_(saveReceipt_(body, me));
+      return json_(saveReceipt_(body, me, 'receipt'));
+    }
+    if (action === 'return') {
+      if (!me.perms.ret) return denied_('退料');
+      return json_(saveReceipt_(body, me, 'ret'));
     }
     if (action === 'wms_status' || action === 'wms_update') {
       if (!me.perms.erp_wms) return denied_('WMS更新');
@@ -583,15 +601,27 @@ function doPost(e) {
     }
     if (action === 'receipt_list') {
       if (!me.perms.erp_receipt) return denied_('進貨單簽核');
-      return json_(receiptListView_());
+      return json_(receiptListView_('receipt'));
     }
     if (action === 'receipt_delete') {
       if (!me.perms.erp_receipt) return denied_('進貨單簽核');
-      return json_(deleteReceiptRow_(body, me));
+      return json_(deleteReceiptRow_(body, me, 'receipt'));
     }
     if (action === 'puri09_status' || action === 'puri09_request') {
       if (!me.perms.erp_receipt) return denied_('進貨單簽核');
-      return json_(action === 'puri09_request' ? requestPuri_(me) : puriView_());
+      return json_(action === 'puri09_request' ? requestPuri_(me, 'receipt') : puriView_('receipt'));
+    }
+    if (action === 'return_list') {
+      if (!me.perms.erp_return) return denied_('退貨單簽核');
+      return json_(receiptListView_('ret'));
+    }
+    if (action === 'return_delete') {
+      if (!me.perms.erp_return) return denied_('退貨單簽核');
+      return json_(deleteReceiptRow_(body, me, 'ret'));
+    }
+    if (action === 'ret_status' || action === 'ret_request') {
+      if (!me.perms.erp_return) return denied_('退貨單簽核');
+      return json_(action === 'ret_request' ? requestPuri_(me, 'ret') : puriView_('ret'));
     }
     if (action === 'sched_get' || action === 'sched_set' || action === 'sched_delete') {
       if (!me.isAdmin) return json_({ ok: false, error: '只有管理者可以使用' });
@@ -620,14 +650,20 @@ function doGet(e) {
   lock.waitLock(15000);
   try {
     if (p.action === 'pull' || p.action === 'ack' || p.action === 'set_data_key' || p.action === 'wms_report' ||
-        p.action === 'puri09_claim' || p.action === 'puri09_report') {
+        p.action === 'puri09_claim' || p.action === 'puri09_report' || p.action === 'ret_claim' || p.action === 'ret_report') {
       var err = checkSyncKey_(p.key);
       if (err) return json_({ ok: false, error: err });
 
-      if (p.action === 'puri09_claim') return json_(puriClaim_());
-      if (p.action === 'puri09_report') return json_(puriReport_(String(p.state || ''), p.msg));
+      if (p.action === 'puri09_claim') return json_(puriClaim_('receipt'));
+      if (p.action === 'puri09_report') return json_(puriReport_(String(p.state || ''), p.msg, 'receipt'));
+      if (p.action === 'ret_claim') return json_(puriClaim_('ret'));
+      if (p.action === 'ret_report') return json_(puriReport_(String(p.state || ''), p.msg, 'ret'));
 
-      if (p.action === 'pull') return json_({ ok: true, edits: listPending_(), receipts: listReceipts_(), deletes: listDeletes_(), wms: readJson_(WMS_REQ_KEY), schedules: getSchedules_() });
+      if (p.action === 'pull') return json_({
+        ok: true, edits: listPending_(), receipts: listReceipts_('receipt'), deletes: listDeletes_('receipt'),
+        returns: listReceipts_('ret'), returnDeletes: listDeletes_('ret'),
+        wms: readJson_(WMS_REQ_KEY), schedules: getSchedules_()
+      });
 
       // 本機回報 WMS 更新狀態;回報 running 代表請求已被取走,一併清除排隊中的請求
       if (p.action === 'wms_report') {
@@ -648,7 +684,7 @@ function doGet(e) {
       String(p.ids || '').split(',').forEach(function (id) {
         id = id.trim();
         if (!id) return;
-        [PREFIX, RECEIPT_PREFIX, DEL_PREFIX].forEach(function (pre) {
+        [PREFIX, KINDS.receipt.prefix, KINDS.receipt.delPrefix, KINDS.ret.prefix, KINDS.ret.delPrefix].forEach(function (pre) {
           if (props_().getProperty(pre + id) !== null) {
             props_().deleteProperty(pre + id);
             removed++;
