@@ -165,11 +165,17 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); width:
   white-space: normal;
   word-break: break-word;
 }
-.brand-sub { font-size: 11.5px; opacity: 0.82; letter-spacing: 0.5px; }
 
 @media (max-width: 400px) {
   .brand-title { font-size: 13.5px; }
-  .brand-sub { font-size: 10px; }
+}
+
+/* 電腦版(寬螢幕):標題放大並在標題列正中央,Logo 靠左 */
+@media (min-width: 768px) {
+  .brand { position: relative; justify-content: center; padding: 14px 24px; }
+  .brand-logo { position: absolute; left: 24px; top: 50%; transform: translateY(-50%); height: 42px; padding: 5px 9px; }
+  .brand-text { align-items: center; text-align: center; }
+  .brand-title { font-size: 30px; letter-spacing: 0.6px; line-height: 1.2; }
 }
 
 /* 功能按鈕列:一般為淡色膠囊,所在頁面的按鍵為實心主色 */
