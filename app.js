@@ -2464,7 +2464,7 @@
 
   function toolbarHtml(ids, f, exportLabel) {
     return (
-      '<div class="toolbar">' +
+      '<div class="toolbar toolbar-material">' +
         '<input type="search" id="' + ids.search + '" placeholder="搜尋 (品號 / 品名 / 規格 / 廠商 / 採購單號)" value="' + esc(f.query) + '" />' +
         '<select id="' + ids.status + '">' +
           '<option value="">到料:全部</option>' +
