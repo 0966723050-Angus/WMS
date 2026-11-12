@@ -36,6 +36,7 @@ from PIL import Image, ImageChops, ImageFilter
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.path.join(HERE, "edit_config.json")
 PROGRAMS_FILE = os.path.join(HERE, "sign_programs.json")   # 備援;主要來源是下面的 Excel 對照表
+SITE_PROGRAMS_FILE = os.path.join(HERE, "sign_programs_site.json")   # 網頁上「編輯表單清單」存的清單(apply_edits 同步下來);有的話優先使用
 FORMS_XLSX = os.environ.get("SIGN_FORMS_XLSX", r"C:\ATK\Project\AI Agent\ERP\表單與程式碼對照表.xlsx")
 OCR_PS = os.path.join(HERE, "ocr_win.ps1")
 WORK = os.environ.get("SIGN_WORK", os.path.join(HERE, "sign_capture"))
@@ -291,7 +292,15 @@ def parse_red_line(text):
 # ---------------------------------------------------------------- 程式代碼(標題列 ( ) 內)
 
 def load_programs():
-    """程式代碼對照表 -> [{'code': 'PURI07', 'name': '採購單'}, ...]。一個代碼可以對應多個表單名稱(例如 INVI05)。"""
+    """程式代碼對照表 -> [{'code': 'PURI07', 'name': '採購單'}, ...]。一個代碼可以對應多個表單名稱(例如 INVI05)。
+    網頁上編輯過的清單(sign_programs_site.json)優先,其次是 Excel 對照表,最後是備援 json。"""
+    try:
+        with open(SITE_PROGRAMS_FILE, encoding="utf-8-sig") as f:
+            site = [{"code": str(p["code"]).upper(), "name": str(p["name"])} for p in json.load(f) if p.get("code") and p.get("name")]
+        if site:
+            return site
+    except Exception:
+        pass
     try:
         import openpyxl
         wb = openpyxl.load_workbook(FORMS_XLSX, read_only=True, data_only=True)

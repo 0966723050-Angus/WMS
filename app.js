@@ -1170,7 +1170,10 @@
   var SIGN_IMG_MAX = 1600000;   // 圖片大小上限(Apps Script 端也會檢查)
 
   // 表單名稱 <-> 程式代碼對照表(來自 ERP 資料夾的「表單與程式碼對照表.xlsx」,隨網站資料發布)
-  function signFormList() { return (state.data && state.data.signForms) || []; }
+  // 表單名稱 / 程式代碼對照:網頁上編輯過的清單(存在伺服器,所有人共用)優先,沒編輯過就用對照表 Excel 的預設清單
+  var signProgs = null;
+  function signFormList() { return signProgs || (state.data && state.data.signForms) || []; }
+  function canEditProgs() { return can("admin") || can("erp_sign"); }
   function signCodeOfName(name) {
     var f = signFormList().filter(function (x) { return x.name === name; })[0];
     return f ? f.code : "";
@@ -1210,7 +1213,9 @@
       '</section>' +
 
       '<section class="sign-card">' +
-        '<h2 class="sign-h">手動新增</h2>' +
+        '<h2 class="sign-h sign-h-row"><span>手動新增</span>' +
+          (canEditProgs() ? '<button type="button" class="btn btn-sm btn-secondary" id="prog-edit" title="新增、修改、刪除下拉選單裡的表單名稱與程式代碼">編輯表單清單</button>' : '') +
+        '</h2>' +
         '<div class="sign-row sign-add">' +
           '<span class="sign-chk"></span>' +
           '<select id="add-name" class="sign-name" aria-label="表單名稱">' + signNameOptions("") + '</select>' +
@@ -1397,6 +1402,92 @@
         return loadForms();
       }).catch(function (err) { if (session) msg(err.message); });
     });
+
+    // ---- 編輯表單清單(下拉選單的表單名稱 + 程式代碼) ----
+    function refreshNameOptions() {
+      var cur = $("add-name").value;
+      if (!signFormList().some(function (x) { return x.name === cur; })) cur = "";   // 手動新增的下拉選單不保留已被刪掉的名稱
+      $("add-name").innerHTML = signNameOptions(cur);
+      Array.prototype.forEach.call(document.querySelectorAll("#sign-list .sign-name"), function (s) {
+        var v = s.value;
+        s.innerHTML = signNameOptions(v);
+      });
+    }
+
+    function loadProgs() {
+      api("signprogs_get").then(function (res) {
+        if (!res.ok || !alive()) return;
+        signProgs = Array.isArray(res.progs) ? res.progs : null;
+        refreshNameOptions();
+      }).catch(function () { /* 讀不到就用預設清單 */ });
+    }
+
+    function openProgDialog() {
+      var base = signFormList().map(function (x) { return { name: x.name, code: x.code }; });
+      var modal = el(
+        '<div class="modal-backdrop">' +
+          '<div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="prog-title">' +
+            '<h2 id="prog-title">編輯表單清單</h2>' +
+            '<p class="rcv-intro">這份清單是「手動新增」與清單裡「表單名稱」下拉選單的選項,所有同仁共用;截圖辨識也會用它校正程式代碼。同一個程式代碼可以對應多個表單名稱。</p>' +
+            '<div class="prog-head"><span>表單名稱</span><span>程式代碼</span><span></span></div>' +
+            '<div class="prog-box" id="prog-box"></div>' +
+            '<button type="button" class="btn btn-sm btn-secondary" id="prog-add">＋ 新增一列</button>' +
+            '<p class="modal-msg" id="prog-msg"></p>' +
+            '<div class="modal-actions">' +
+              '<button type="button" class="btn btn-secondary" id="prog-reset">還原預設</button>' +
+              '<button type="button" class="btn btn-secondary" id="prog-cancel">取消</button>' +
+              '<button type="button" class="btn" id="prog-save">儲存</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>'
+      );
+      document.body.appendChild(modal);
+      var box = modal.querySelector("#prog-box"), pmsg = modal.querySelector("#prog-msg");
+      function rowEl(x) {
+        var r = el('<div class="prog-row"><input class="prog-name" maxlength="30" placeholder="表單名稱" autocomplete="off" />' +
+          '<input class="prog-code" maxlength="10" placeholder="程式代碼" autocomplete="off" autocapitalize="characters" spellcheck="false" />' +
+          '<button type="button" class="rcv-del" aria-label="刪除這一列">刪除</button></div>');
+        r.querySelector(".prog-name").value = x.name || "";
+        r.querySelector(".prog-code").value = x.code || "";
+        r.querySelector(".prog-code").addEventListener("input", function (e) { e.target.value = e.target.value.toUpperCase(); });
+        r.querySelector(".rcv-del").addEventListener("click", function () { r.parentNode.removeChild(r); });
+        return r;
+      }
+      base.forEach(function (x) { box.appendChild(rowEl(x)); });
+      modal.querySelector("#prog-add").addEventListener("click", function () {
+        var r = rowEl({}); box.appendChild(r); r.querySelector(".prog-name").focus(); box.scrollTop = box.scrollHeight;
+      });
+      function close() { if (modal.parentNode) modal.parentNode.removeChild(modal); }
+      modal.querySelector("#prog-cancel").addEventListener("click", close);
+      modal.addEventListener("click", function (e) { if (e.target === modal) close(); });
+      function busyBtns(b) { ["prog-save", "prog-reset", "prog-cancel", "prog-add"].forEach(function (id) { modal.querySelector("#" + id).disabled = b; }); }
+      modal.querySelector("#prog-save").addEventListener("click", function () {
+        var progs = Array.prototype.map.call(box.querySelectorAll(".prog-row"), function (r) {
+          return { name: r.querySelector(".prog-name").value.trim(), code: r.querySelector(".prog-code").value.trim().toUpperCase() };
+        });
+        busyBtns(true); pmsg.textContent = "儲存中…";
+        api("signprogs_save", { progs: progs }).then(function (res) {
+          if (!res.ok) throw new Error(res.error || "儲存失敗");
+          signProgs = res.progs;
+          refreshNameOptions();
+          close();
+          showToast("已儲存表單清單");
+        }).catch(function (err) { busyBtns(false); pmsg.textContent = err.message; });
+      });
+      modal.querySelector("#prog-reset").addEventListener("click", function () {
+        if (!window.confirm("要還原成預設清單嗎?\n(預設清單來自「表單與程式碼對照表.xlsx」,你在網頁上做的修改會被清掉)")) return;
+        busyBtns(true); pmsg.textContent = "還原中…";
+        api("signprogs_reset").then(function (res) {
+          if (!res.ok) throw new Error(res.error || "還原失敗");
+          signProgs = null;
+          refreshNameOptions();
+          close();
+          showToast("已還原預設清單");
+        }).catch(function (err) { busyBtns(false); pmsg.textContent = err.message; });
+      });
+    }
+    if ($("prog-edit")) $("prog-edit").addEventListener("click", openProgDialog);
+    loadProgs();
 
     // ---- 手動新增 ----
     $("add-name").addEventListener("change", function () { linkNameAndCode($("add-name").closest(".sign-row"), $("add-name")); });

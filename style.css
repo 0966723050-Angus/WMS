@@ -1204,6 +1204,14 @@ body.scan-open .modal-backdrop { -webkit-backdrop-filter: none; backdrop-filter:
 /* 待簽核表單頁 */
 .sign-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-top: 14px; }
 .sign-h { margin: 0 0 8px; font-size: 16px; }
+.sign-h-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* 編輯表單清單對話框 */
+.prog-head, .prog-row { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) 56px; gap: 6px; align-items: center; }
+.prog-head { margin-top: 10px; font-size: 12.5px; font-weight: 700; color: var(--text-muted); padding: 0 2px; }
+.prog-box { max-height: 46vh; overflow-y: auto; margin: 4px 0 10px; padding: 2px 0; }
+.prog-row { padding: 3px 0; }
+.prog-row input { width: 100%; min-width: 0; height: 36px; padding: 0 8px; font: inherit; font-size: 14px; color: var(--text); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px; box-sizing: border-box; }
+.prog-row .rcv-del { margin: 0; justify-self: end; }
 .sign-count { font-size: 12.5px; font-weight: 600; color: var(--text-muted); margin-left: 8px; }
 .sign-drop { margin-top: 10px; border: 2px dashed var(--border-strong); border-radius: 10px; padding: 18px; text-align: center; color: var(--text-muted); font-size: 14px; outline: none; }
 .sign-drop:hover, .sign-drop:focus { border-color: var(--brand); }

@@ -451,6 +451,17 @@ def main():
                 call(endpoint, {"action": "sign_ack", "key": sync_key, "ts": sreq.get("ts"), "msg": msg})
         except Exception as ex:
             log("警告: 寫入待簽核清單失敗: %s" % ex)
+    # 網頁上「編輯表單清單」存的對照清單 -> 存成本機檔,辨識程式校正程式代碼時優先使用(沒編輯過 / 已還原預設就刪掉檔案)
+    if "signProgs" in res:
+        try:
+            site_file = os.path.join(HERE, "sign_programs_site.json")
+            if isinstance(res["signProgs"], list) and res["signProgs"]:
+                with open(site_file, "w", encoding="utf-8") as f:
+                    json.dump(res["signProgs"], f, ensure_ascii=False)
+            elif os.path.exists(site_file):
+                os.remove(site_file)
+        except Exception as ex:
+            log("警告: 同步表單清單失敗: %s" % ex)
     # 待簽核清單有新增項目:用釘釘機器人通知(網址放在 edit_config.json 的 dingtalkWebhook;沒設定就不通知)
     try:
         import dingtalk_notify

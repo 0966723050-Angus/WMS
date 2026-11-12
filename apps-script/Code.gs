@@ -544,6 +544,35 @@ function signNotifyAck_(idsCsv) {
   return { ok: true, removed: q.length - left.length };
 }
 
+// ---------- 表單名稱 / 程式代碼對照清單(網頁「手動新增」下拉選單用;可在網頁編輯) ----------
+// 沒編輯過是 null,網頁就用對照表 Excel(隨 data.enc 發布)的預設清單;編輯過就整份存在 SIGN_PROGS,
+// 並隨 pull 帶回給電腦端,辨識程式也用這份校正標題列的程式代碼。編輯權限:管理者或 erp_sign。
+var SIGN_PROGS_KEY = 'SIGN_PROGS';
+var MAX_SIGN_PROGS = 100;
+function getSignProgs_() { var v = readJson_(SIGN_PROGS_KEY); return Array.isArray(v) ? v : null; }
+
+function saveSignProgs_(body) {
+  var list = Array.isArray(body.progs) ? body.progs : null;
+  if (!list) return { ok: false, error: '清單格式不正確' };
+  if (list.length > MAX_SIGN_PROGS) return { ok: false, error: '最多 ' + MAX_SIGN_PROGS + ' 筆' };
+  var out = [], seen = {};
+  for (var i = 0; i < list.length; i++) {
+    var x = list[i] || {};
+    var name = clip_(x.name, 30).replace(/^\s+|\s+$/g, ''), code = String(x.code || '').replace(/\s+/g, '').toUpperCase();
+    if (!name && !code) continue;   // 空白列略過
+    if (!name) return { ok: false, error: '第 ' + (i + 1) + ' 列:表單名稱不可空白' };
+    if (!/^[A-Z0-9]{4,10}$/.test(code)) return { ok: false, error: '第 ' + (i + 1) + ' 列:程式代碼要 4~10 碼英文字母或數字' };
+    var k = name + '|' + code;
+    if (seen[k]) continue;
+    seen[k] = true;
+    out.push({ name: name, code: code });
+  }
+  var raw = JSON.stringify(out);
+  if (encodeURIComponent(raw).replace(/%[0-9A-F]{2}/g, 'x').length > 8500) return { ok: false, error: '清單太長(名稱請簡短一點)' };
+  props_().setProperty(SIGN_PROGS_KEY, raw);
+  return { ok: true, progs: out };
+}
+
 // 網頁上手動新增 / 修改一張(有 id 就是修改)
 function saveSignForm_(body, user) {
   var c = cleanSignFields_(body);
@@ -945,10 +974,16 @@ function doPost(e) {
       if (!me.perms.erp_receipt) return denied_('進貨單簽核');
       return json_(action === 'puri09_request' ? requestPuri_(me, 'receipt') : puriView_('receipt'));
     }
-    if (action.indexOf('sign') === 0 && ['signforms_list', 'signforms_save', 'signforms_delete', 'sign_status', 'sign_request',
+    if (action.indexOf('sign') === 0 && ['signprogs_get', 'signprogs_save', 'signprogs_reset', 'signforms_list', 'signforms_save', 'signforms_delete', 'sign_status', 'sign_request',
         'signimg_upload', 'signimg_list'].indexOf(action) !== -1) {
       // 待簽核表單頁面所有登入同仁都能用(看清單、上傳截圖、編輯、刪除);erp_sign 權限只管「確認」鍵(sign_request)
       if (action === 'sign_request' && !me.perms.erp_sign) return denied_('待簽核表單確認');
+      if (action === 'signprogs_get') return json_({ ok: true, progs: getSignProgs_() });
+      if (action === 'signprogs_save' || action === 'signprogs_reset') {
+        if (!me.perms.admin && !me.perms.erp_sign) return denied_('編輯表單清單');
+        if (action === 'signprogs_reset') { props_().deleteProperty(SIGN_PROGS_KEY); return json_({ ok: true, progs: null }); }
+        return json_(saveSignProgs_(body));
+      }
       if (action === 'signforms_list') return json_({ ok: true, forms: listSignForms_() });
       if (action === 'signforms_save') return json_(saveSignForm_(body, me));
       if (action === 'signforms_delete') return json_(deleteSignForm_(body));
@@ -1026,7 +1061,7 @@ function doGet(e) {
       if (p.action === 'pull') return json_({
         ok: true, edits: listPending_(), receipts: listReceipts_('receipt'), deletes: listDeletes_('receipt'),
         returns: listReceipts_('ret'), returnDeletes: listDeletes_('ret'), signImages: claimSignImages_(), signFilesPurged: purgeSignFiles_(), signRequest: readJson_(KINDS.sign.reqKey),
-        signNotify: readJson_(SIGN_NOTIFY_KEY) || [], signTotal: listSignForms_().length,
+        signProgs: getSignProgs_(), signNotify: readJson_(SIGN_NOTIFY_KEY) || [], signTotal: listSignForms_().length,
         wms: readJson_(WMS_REQ_KEY), schedules: getSchedules_()
       });
 

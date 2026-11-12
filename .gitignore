@@ -17,3 +17,4 @@ scripts/returns_done.json
 scripts/sign_capture/
 scripts/sign_sheet_state.json
 scripts/dingtalk_state.json
+scripts/sign_programs_site.json
