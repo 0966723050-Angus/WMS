@@ -1155,3 +1155,7 @@ body.scan-open .modal-backdrop { -webkit-backdrop-filter: none; backdrop-filter:
   background: rgba(0, 0, 0, 0.6); font-size: 15px; line-height: 1.4;
 }
 .scan-status.err { background: rgba(185, 28, 28, 0.92); }
+
+/* 待簽核表單頁 */
+.sign-head-actions { display: inline-flex; gap: 8px; }
+.sign-box { max-height: none; }

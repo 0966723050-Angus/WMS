@@ -1,0 +1,525 @@
+"""ERP 螢幕截圖 -> 文字辨識 -> 傳送到 WMS 網站「待簽核表單」的資料來源。
+
+流程:取得畫面(即時截圖 / 剪貼簿圖片 / 圖片檔) -> 辨識 -> 把辨識出的表單送到網站中繼(Apps Script)。
+
+兩種畫面:
+  1. 有紅色框框:只辨識紅框內的文字 —— 4 碼單別、11 碼單號、單據名稱、廠商名稱;
+     加上最上方標題列「(  )」內的 6 碼程式代碼(例如 PURI07)。每個紅框(或框內每一行)是一張待簽核表單。
+  2. 沒有紅框:辨識工具列下方藍綠色框框(單別、單號),加上標題列的程式代碼。
+
+文字辨識用 Windows 內建 OCR(scripts\\ocr_win.ps1,不需安裝任何套件)。標題裡的小字英文代碼 OCR 讀不準,
+所以用 sign_programs.json(程式代碼對照表:中文程式名稱 <-> 代碼)校正;表裡沒有的程式會記錄 OCR 原始結果並標記為不確定。
+
+用法:
+    python -I sign_capture.py --image 圖片.png            辨識圖片檔(只顯示結果,加 --push 才傳送)
+    python -I sign_capture.py --clipboard --push          辨識剪貼簿裡的圖片(例如用「剪取工具」框好紅框後複製)
+    python -I sign_capture.py --screen --delay 5 --push   5 秒後截取「最前面的視窗」(請先切到 ERP)
+    python -I sign_capture.py --screen --full --push      截取整個螢幕(所有螢幕)
+輸出一律是一行 JSON(結果),結束代碼:0 成功(有辨識到表單);2 沒辨識到任何表單;1 其他錯誤。
+設定檔 scripts\\edit_config.json(同 puri09_queue.py)。
+"""
+import argparse
+import datetime
+import difflib
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.request
+from collections import Counter
+
+from PIL import Image, ImageChops, ImageFilter
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+CONFIG = os.path.join(HERE, "edit_config.json")
+PROGRAMS_FILE = os.path.join(HERE, "sign_programs.json")
+OCR_PS = os.path.join(HERE, "ocr_win.ps1")
+WORK = os.environ.get("SIGN_WORK", os.path.join(HERE, "sign_capture"))
+LOG_FILE = os.path.join(WORK, "sign_capture.log")
+CREATE_NO_WINDOW = 0x08000000
+
+RESAMPLE = {"lanczos": Image.LANCZOS, "bicubic": Image.BICUBIC}
+
+
+def log(msg):
+    try:
+        os.makedirs(WORK, exist_ok=True)
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write("[%s] %s\n" % (datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), msg))
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------- 顏色遮罩與連通區塊(純 Pillow,不需 numpy)
+
+def _band_mask(band, test):
+    return band.point(lambda v: 255 if test(v) else 0)
+
+
+def red_mask(img):
+    """紅色標記(使用者畫的框、箭頭)。門檻放寬到能容忍 JPEG 壓縮後變淡的紅線,再膨脹一圈接回被壓縮切碎的細線。"""
+    r, g, b = img.convert("RGB").split()
+    m = ImageChops.multiply(_band_mask(ImageChops.subtract(r, g), lambda v: v > 85),
+                            _band_mask(ImageChops.subtract(r, b), lambda v: v > 85))
+    m = ImageChops.multiply(m, _band_mask(r, lambda v: v > 150))
+    return m.filter(ImageFilter.MaxFilter(3))
+
+
+def cyan_mask(img):
+    r, g, b = img.convert("RGB").split()
+    m = ImageChops.multiply(_band_mask(r, lambda v: v < 80), _band_mask(g, lambda v: v > 170))
+    m = ImageChops.multiply(m, _band_mask(b, lambda v: v > 170))
+    return ImageChops.multiply(m, _band_mask(ImageChops.difference(g, b), lambda v: v < 50))
+
+
+_RUN = re.compile(rb"\xff+")
+
+
+def components(mask, min_pixels=6):
+    """遮罩中相連的白色區塊(8 方向相連),回傳 [{'box': (x0,y0,x1,y1), 'n': 像素數}]。以每列的連續段落合併,速度快。"""
+    w, h = mask.size
+    data = mask.tobytes()
+    parent, info = [], []
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    prev = []
+    for y in range(h):
+        row = data[y * w:(y + 1) * w]
+        cur = []
+        for m in _RUN.finditer(row):
+            x0, x1 = m.span()
+            rid = len(parent)
+            parent.append(rid)
+            info.append((x0, x1, y))
+            cur.append((rid, x0, x1))
+            for pid, px0, px1 in prev:
+                if px0 <= x1 and x0 <= px1:
+                    ra, rb = find(rid), find(pid)
+                    if ra != rb:
+                        parent[ra] = rb
+        prev = cur
+    agg = {}
+    for rid, (x0, x1, y) in enumerate(info):
+        root = find(rid)
+        a = agg.get(root)
+        if a is None:
+            agg[root] = [x0, y, x1, y + 1, x1 - x0]
+        else:
+            a[0] = min(a[0], x0)
+            a[1] = min(a[1], y)
+            a[2] = max(a[2], x1)
+            a[3] = max(a[3], y + 1)
+            a[4] += x1 - x0
+    return [{"box": tuple(a[:4]), "n": a[4]} for a in agg.values() if a[4] >= min_pixels]
+
+
+def find_red_boxes(img):
+    """紅色空心矩形(使用者畫的框)。排除工具列上的紅色小圖示、標題列的紅色箭頭。"""
+    W, H = img.size
+    boxes = []
+    for c in components(red_mask(img)):
+        x0, y0, x1, y1 = c["box"]
+        w, h = x1 - x0, y1 - y0
+        if w < max(60, W * 0.04) or not (10 <= h <= H * 0.25):
+            continue
+        if y1 < H * 0.05:            # 標題列(箭頭)
+            continue
+        if c["n"] / float(w * h) > 0.35:   # 實心的不是框
+            continue
+        boxes.append((x0, y0, x1, y1))
+    boxes.sort(key=lambda b: (b[1], b[0]))
+    return boxes
+
+
+def find_cyan_fields(img):
+    """工具列下方表頭區的藍綠色輸入框(單別、單號),由上到下取前兩個。表格標題列的藍綠格位置較低,不算。"""
+    W, H = img.size
+    fields = []
+    for c in components(cyan_mask(img)):
+        x0, y0, x1, y1 = c["box"]
+        w, h = x1 - x0, y1 - y0
+        if w >= 30 and 12 <= h <= 48 and y0 < H * 0.35 and y0 > H * 0.04:
+            fields.append((x0, y0, x1, y1))
+    fields.sort(key=lambda b: (b[1], b[0]))
+    return fields[:2]
+
+
+# ---------------------------------------------------------------- 裁切、前處理、OCR
+
+def whiten(c, cyan, red=True):
+    """把紅色標記(和藍綠底)換成白色,只留文字,OCR 準確度會高很多。"""
+    c = c.convert("RGB")
+    mask = red_mask(c)
+    if cyan:
+        mask = ImageChops.lighter(mask, cyan_mask(c))
+    white = Image.new("RGB", c.size, (255, 255, 255))
+    c.paste(white, mask=mask)
+    return c
+
+
+def finish(c, scale, resample, mode):
+    if mode == "bin":
+        c = c.point(lambda v: 0 if v < 150 else 255)
+    c = c.resize((c.size[0] * scale, c.size[1] * scale), RESAMPLE[resample])
+    pad = 10 * scale
+    out = Image.new("RGB", (c.size[0] + 2 * pad, c.size[1] + 2 * pad), (255, 255, 255))
+    out.paste(c, (pad, pad))
+    return out
+
+
+def run_ocr(paths):
+    """一次辨識多張圖,回傳和 paths 對齊的文字清單。"""
+    os.makedirs(WORK, exist_ok=True)
+    lst = os.path.join(WORK, "ocr_list.txt")
+    with open(lst, "w", encoding="utf-8") as f:
+        f.write("\n".join(paths))
+    r = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", OCR_PS, "-ListFile", lst],
+                       capture_output=True, creationflags=CREATE_NO_WINDOW)
+    if r.returncode != 0:
+        raise RuntimeError("OCR 失敗: " + r.stderr.decode("utf-8", "replace")[:300])
+    data = json.loads(r.stdout.decode("utf-8-sig"))
+    by_path = {os.path.normcase(os.path.abspath(d["path"])): d["text"] for d in data}
+    return [by_path.get(os.path.normcase(os.path.abspath(p)), "") for p in paths]
+
+
+class Ocr:
+    """收集要辨識的裁切圖(每個區域多種前處理),最後一次 OCR,再依區域取回各版本的文字。"""
+
+    def __init__(self, img, tag):
+        self.img, self.tag = img, tag
+        self.jobs = []   # (region_name, path)
+        self.dir = os.path.join(WORK, "crops")
+        os.makedirs(self.dir, exist_ok=True)
+
+    def add(self, name, box, cyan, variants):
+        base = whiten(self.img.crop(box), cyan=cyan)
+        for scale, resample, mode in variants:
+            p = os.path.join(self.dir, "%s_%s_s%d_%s_%s.png" % (self.tag, name, scale, resample, mode))
+            finish(base.copy(), scale, resample, mode).save(p)
+            self.jobs.append((name, p))
+
+    def run(self):
+        texts = run_ocr([p for _, p in self.jobs]) if self.jobs else []
+        out = {}
+        for (name, _), t in zip(self.jobs, texts):
+            out.setdefault(name, []).append(t)
+        return out
+
+
+# ---------------------------------------------------------------- 文字解析
+
+CJK = "㐀-鿿"
+DIGIT_FIX = str.maketrans({"O": "0", "o": "0", "Ｏ": "0", "l": "1", "I": "1", "|": "1", "丨": "1", "i": "1", "Ⅰ": "1",
+                           "S": "5", "B": "8", "Z": "2"})
+
+
+def compact(text):
+    """去掉中文字之間 OCR 插入的空白;其他空白保留成單一空格。"""
+    t = re.sub(r"\s+", " ", text).strip()
+    t = re.sub(r"(?<=[%s·•‧\-]) (?=[%s·•‧\-])" % (CJK, CJK), "", t)
+    return t
+
+
+def valid_doc_no(s):
+    if not re.fullmatch(r"\d{11}", s):
+        return False
+    y, m, d = int(s[:4]), int(s[4:6]), int(s[6:8])
+    return 2000 <= y <= 2099 and 1 <= m <= 12 and 1 <= d <= 31
+
+
+def vote(cands):
+    """回傳 (最多的值, 票數);沒有候選回傳 ('', 0)。"""
+    cands = [c for c in cands if c]
+    if not cands:
+        return "", 0
+    value, n = Counter(cands).most_common(1)[0]
+    return value, n
+
+
+def digits_candidates(texts, length, validator=None):
+    out = []
+    for t in texts:
+        s = re.sub(r"\s+", "", t).translate(DIGIT_FIX)
+        for m in re.finditer(r"(?<!\d)\d{%d}(?!\d)" % length, s):
+            if validator is None or validator(m.group(0)):
+                out.append(m.group(0))
+    return out
+
+
+def parse_red_line(text):
+    """紅框內一行文字 -> dict(docType, docNo, docName, vendor) 或 None。"""
+    t = compact(text)
+    m_no = None
+    for m in re.finditer(r"(?<!\d)\d{11}(?!\d)", t):
+        if valid_doc_no(m.group(0)):
+            m_no = m
+            break
+    if not m_no:
+        return None
+    before = t[:m_no.start()]
+    after = t[m_no.end():]
+    types = re.findall(r"(?<!\d)\d{4}(?!\d)", before)
+    if not types:
+        return None
+    doc_type = types[-1]
+    tokens = [x for x in re.split(r"\s+", after.strip()) if x]
+    cjk_tokens = [re.sub(r"[「」\[\]【】()（）]", "", x) for x in tokens if re.search("[%s]" % CJK, x)]
+    cjk_tokens = [x for x in cjk_tokens if x]
+    doc_name = cjk_tokens[0] if cjk_tokens else ""
+    vendor = cjk_tokens[-1] if len(cjk_tokens) >= 2 else ""
+    vendor = re.sub(r"[·•‧・]", "-", vendor).strip("-")
+    return {"docType": doc_type, "docNo": m_no.group(0), "docName": doc_name, "vendor": vendor}
+
+
+# ---------------------------------------------------------------- 程式代碼(標題列 ( ) 內)
+
+def load_programs():
+    try:
+        with open(PROGRAMS_FILE, encoding="utf-8-sig") as f:
+            data = json.load(f)
+        return [p for p in data if p.get("code") and p.get("name")]
+    except Exception:
+        return []
+
+
+_CANON = str.maketrans({"O": "0", "Q": "0", "D": "0", "I": "1", "l": "1", "|": "1", "丨": "1", "G": "C", "Ｏ": "0"})
+
+
+def canon_code(s):
+    return re.sub(r"[^A-Z0-9]", "", s.upper().translate(_CANON))
+
+
+def parse_title(texts, programs):
+    """標題列文字 -> (程式代碼, 程式名稱, 把握度 known/guess/none)。"""
+    best = None
+    raw_codes = []
+    for t in texts:
+        s = re.sub(r"\s+", "", t)
+        m = re.search(r"^(.*?)[\(（]([^\)）】〕\]]*)", s)
+        if not m:
+            continue
+        name = re.sub(r"[^%s]" % CJK, "", m.group(1))
+        code_raw = m.group(2)
+        raw_codes.append(code_raw)
+        for p in programs:
+            name_sim = difflib.SequenceMatcher(None, name, p["name"]).ratio() if name else 0.0
+            code_sim = difflib.SequenceMatcher(None, canon_code(code_raw), canon_code(p["code"])).ratio()
+            # 程式名稱要夠像(最多掉 1~2 個字)且代碼也有點像;或代碼幾乎完全相同,才算認得
+            if (name_sim >= 0.8 and code_sim >= 0.3) or code_sim >= 0.9:
+                score = 0.7 * name_sim + 0.3 * code_sim
+                if best is None or score > best[0]:
+                    best = (score, p)
+    if best:
+        return best[1]["code"], best[1]["name"], "known"
+    # 對照表裡沒有:用 OCR 的代碼(大寫英數,補正 |→I),格式像程式代碼才採用
+    cands = []
+    for c in raw_codes:
+        c2 = re.sub(r"[^A-Za-z0-9|]", "", c).replace("|", "I").upper()
+        if re.fullmatch(r"[A-Z]{4}\d{2}", c2):
+            cands.append(c2)
+    code, _ = vote(cands)
+    if code:
+        return code, "", "guess"
+    return "", "", "none"
+
+
+# ---------------------------------------------------------------- 辨識主流程
+
+FIELD_H = 23.0   # 標準大小下,藍綠色輸入框的高度(像素)
+
+
+def normalize_scale(img):
+    """ERP 的字大小是固定像素。圖片被縮放過(或 Windows 顯示比例不是 100%)時,用藍綠色單別/單號框的高度當尺規,
+    把圖片校正成標準大小再辨識;找不到藍綠框就不調整。回傳 (圖片, 縮放倍率)。"""
+    fields = find_cyan_fields(img)
+    if not fields:
+        return img, 1.0
+    hs = sorted(f[3] - f[1] for f in fields)
+    scale = max(0.6, min(1.8, FIELD_H / hs[len(hs) // 2]))
+    if abs(scale - 1.0) <= 0.08:
+        return img, 1.0
+    return img.resize((int(round(img.size[0] * scale)), int(round(img.size[1] * scale))), Image.LANCZOS), scale
+
+
+def recognize(img, tag="img"):
+    img, norm = normalize_scale(img)
+    W, H = img.size
+    result = {"ok": True, "mode": "", "prog": "", "progName": "", "progConf": "none", "forms": [], "warnings": [], "size": [W, H], "scale": round(norm, 3)}
+    reds = find_red_boxes(img)
+    cyans = [] if reds else find_cyan_fields(img)
+    ocr = Ocr(img, tag)
+
+    title_box = (0, 0, max(120, int(W * 0.25)), max(20, int(H * 0.035)))
+    ocr.add("title", title_box, cyan=False, variants=[(s, r, "gray") for s in (2, 3, 4) for r in ("lanczos", "bicubic")])
+
+    if reds:
+        result["mode"] = "red"
+        for i, (x0, y0, x1, y1) in enumerate(reds):
+            ocr.add("red%d" % i, (x0 + 3, y0 + 3, x1 - 3, y1 - 3), cyan=False,
+                    variants=[(s, r, "gray") for s in (2, 3, 4) for r in ("lanczos", "bicubic")] + [(3, "lanczos", "bin"), (4, "bicubic", "bin")])
+    elif len(cyans) >= 2:
+        result["mode"] = "cyan"
+        v = [(s, r, m) for s in (2, 3, 4, 5) for r in ("lanczos", "bicubic") for m in ("gray", "bin")]
+        for i, (x0, y0, x1, y1) in enumerate(cyans):
+            ocr.add("cyan%d" % i, (x0 + 2, y0 + 2, x1 - 2, y1 - 2), cyan=True, variants=v)
+    else:
+        result["ok"] = False
+        result["warnings"].append("找不到紅色框框,也找不到工具列下方的藍綠色單別/單號框")
+
+    texts = ocr.run()
+
+    code, name, conf = parse_title(texts.get("title", []), load_programs())
+    result["prog"], result["progName"], result["progConf"] = code, name, conf
+    if conf == "guess":
+        result["warnings"].append("程式代碼 %s 不在 sign_programs.json 對照表中,是依 OCR 結果猜的" % code)
+    elif conf == "none":
+        result["warnings"].append("沒辨識出標題列的程式代碼")
+
+    if result["mode"] == "red":
+        for i in range(len(reds)):
+            per_line = {}
+            for t in texts.get("red%d" % i, []):
+                for line in t.split("\n"):
+                    p = parse_red_line(line)
+                    if p:
+                        per_line.setdefault((p["docType"], p["docNo"]), []).append(p)
+            if not per_line:
+                result["warnings"].append("第 %d 個紅框沒有辨識出 4 碼單別 + 11 碼單號" % (i + 1))
+            for (dtype, dno), plist in per_line.items():
+                names, _ = vote([p["docName"] for p in plist])
+                vendors, _ = vote([p["vendor"] for p in plist])
+                result["forms"].append({"docType": dtype, "docNo": dno, "docName": names, "vendor": vendors,
+                                        "conf": "high" if len(plist) >= 2 else "low", "box": list(reds[i])})
+    elif result["mode"] == "cyan":
+        types = digits_candidates(texts.get("cyan0", []), 4)
+        nos = digits_candidates(texts.get("cyan1", []), 11, valid_doc_no)
+        dtype, n1 = vote(types)
+        dno, n2 = vote(nos)
+        if dtype and dno:
+            result["forms"].append({"docType": dtype, "docNo": dno, "docName": "", "vendor": "",
+                                    "conf": "high" if n1 >= 2 and n2 >= 2 else "low", "box": list(cyans[0])})
+        else:
+            result["warnings"].append("藍綠框沒有辨識出 4 碼單別 + 11 碼單號(單別 %s、單號 %s)" % (dtype or "?", dno or "?"))
+
+    for f in result["forms"]:
+        f["prog"], f["progName"], f["src"] = result["prog"], result["progName"], "紅框" if result["mode"] == "red" else "藍綠框"
+    return result
+
+
+# ---------------------------------------------------------------- 取得畫面
+
+def grab_foreground():
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    try:
+        user32.SetProcessDPIAware()
+    except Exception:
+        pass
+    from PIL import ImageGrab
+    hwnd = user32.GetForegroundWindow()
+    rect = wintypes.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    return ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom), all_screens=True).convert("RGB")
+
+
+def grab_full():
+    import ctypes
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+    from PIL import ImageGrab
+    return ImageGrab.grab(all_screens=True).convert("RGB")
+
+
+def grab_clipboard():
+    from PIL import ImageGrab
+    im = ImageGrab.grabclipboard()
+    if isinstance(im, list):   # 複製的是檔案:取第一個圖片檔
+        for p in im:
+            if str(p).lower().endswith((".png", ".jpg", ".jpeg", ".bmp")):
+                return Image.open(p).convert("RGB")
+        return None
+    return im.convert("RGB") if im is not None else None
+
+
+# ---------------------------------------------------------------- 傳送
+
+def push(forms, extra=None):
+    with open(CONFIG, encoding="utf-8-sig") as f:
+        cfg = json.load(f)
+    payload = {"action": "signforms_push", "key": cfg["syncKey"], "forms": forms}
+    if extra:
+        payload.update(extra)
+    req = urllib.request.Request(cfg["endpoint"], data=json.dumps(payload).encode("utf-8"),
+                                 headers={"Content-Type": "text/plain;charset=utf-8"}, method="POST")
+    with urllib.request.urlopen(req, timeout=40) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(description="ERP 截圖辨識 -> WMS 待簽核表單")
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--image", help="辨識圖片檔")
+    src.add_argument("--clipboard", action="store_true", help="辨識剪貼簿裡的圖片")
+    src.add_argument("--screen", action="store_true", help="即時截圖(預設截最前面的視窗)")
+    ap.add_argument("--full", action="store_true", help="--screen 時改截整個螢幕")
+    ap.add_argument("--delay", type=float, default=0, help="--screen 截圖前等待的秒數(讓你切到 ERP)")
+    ap.add_argument("--push", action="store_true", help="把辨識出的表單傳送到網站(沒加就只顯示結果)")
+    args = ap.parse_args(argv)
+    sys.stdout.reconfigure(encoding="utf-8")
+
+    os.makedirs(WORK, exist_ok=True)
+    if args.image:
+        img, name = Image.open(args.image).convert("RGB"), os.path.basename(args.image)
+    elif args.clipboard:
+        img, name = grab_clipboard(), "clipboard"
+    else:
+        if args.delay:
+            time.sleep(args.delay)
+        img, name = (grab_full() if args.full else grab_foreground()), "screen"
+    if img is None:
+        print(json.dumps({"ok": False, "error": "剪貼簿裡沒有圖片"}, ensure_ascii=False))
+        return 1
+    last = os.path.join(WORK, "last_capture.png")
+    img.save(last)
+
+    res = recognize(img, tag="cap")
+    res["source"] = name
+    forms = res["forms"]
+    log("辨識 %s:模式=%s 程式=%s(%s) 表單=%d %s" % (name, res["mode"], res["prog"], res["progConf"], len(forms),
+                                                  " ".join("%s-%s" % (f["docType"], f["docNo"]) for f in forms)))
+    if args.push and forms:
+        try:
+            res["push"] = push(forms, {"source": name})
+        except Exception as ex:
+            res["push"] = {"ok": False, "error": str(ex)[:200]}
+            log("傳送失敗: %s" % ex)
+        else:
+            log("傳送結果: %s" % json.dumps(res["push"], ensure_ascii=False))
+    for f in forms:
+        f.pop("box", None)
+    print(json.dumps(res, ensure_ascii=False))
+    if not forms:
+        return 2
+    if args.push and not res.get("push", {}).get("ok"):
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except Exception as ex:
+        sys.stdout.reconfigure(encoding="utf-8")
+        print(json.dumps({"ok": False, "error": str(ex)[:300]}, ensure_ascii=False))
+        log("錯誤: %s" % ex)
+        sys.exit(1)

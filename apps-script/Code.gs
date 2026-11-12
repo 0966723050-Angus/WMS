@@ -90,12 +90,12 @@ function makeSession_(email) {
 }
 
 // ---------- 權限 ----------
-// admin 名單管理 / edit 儲位編輯 / receive 收料 / ret 退料 / erp_receipt 進貨單 / erp_return 退貨單 / erp_issue 製令領料單 / erp_wms WMS更新
+// admin 名單管理 / edit 儲位編輯 / receive 收料 / ret 退料 / erp_receipt 進貨單 / erp_return 退貨單 / erp_issue 製令領料單 / erp_sign 待簽核表單 / erp_wms WMS更新
 // 帳號記錄裡沒有 perms 的舊帳號 = 只有「儲位編輯」(維持原本能做的事)。主管理者(ADMIN_EMAIL)永遠全部權限。
 
-var PERM_KEYS = ['admin', 'edit', 'receive', 'ret', 'erp_receipt', 'erp_return', 'erp_issue', 'erp_wms'];
+var PERM_KEYS = ['admin', 'edit', 'receive', 'ret', 'erp_receipt', 'erp_return', 'erp_issue', 'erp_sign', 'erp_wms'];
 // 沒設定過的項目用預設值:儲位編輯、收料原本所有人都能用,所以舊帳號維持有這兩項
-var PERM_DEFAULTS = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_issue: false, erp_wms: false };
+var PERM_DEFAULTS = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_issue: false, erp_sign: false, erp_wms: false };
 
 function normPerms_(p) {
   var out = {};
@@ -461,6 +461,60 @@ function deleteReceiptRow_(body, user, kind) {
   return { ok: true, queued: true };
 }
 
+// ---------- 待簽核表單(ERP 截圖辨識程式 scripts\sign_capture.py 辨識後送上來,網站「待簽核表單」頁列出) ----------
+// 每張表單一個屬性 s_<程式代碼>_<單別>_<單號>;同一張再送上來只更新(不重複)。
+
+var SIGN_PREFIX = 's_';
+var MAX_SIGN_FORMS = 200;
+
+function signKey_(prog, dt, dn) { return SIGN_PREFIX + (prog || 'X') + '_' + dt + '_' + dn; }
+
+function listSignForms_() {
+  var out = listByPrefix_(SIGN_PREFIX);
+  out.sort(function (a, b) { return b.ts - a.ts; });   // 新的在前
+  return out;
+}
+
+function pushSignForms_(body) {
+  var forms = Array.isArray(body.forms) ? body.forms : [];
+  var now = Date.now(), added = 0, updated = 0, skipped = 0;
+  forms.slice(0, 100).forEach(function (f) {
+    if (!f) { skipped++; return; }
+    var dt = clip_(f.docType, 6), dn = clip_(f.docNo, 16);
+    if (!/^\d{3,6}$/.test(dt) || !/^\d{6,16}$/.test(dn)) { skipped++; return; }
+    var prog = clip_(f.prog, 10).toUpperCase().replace(/[^A-Z0-9]/g, '');
+    var key = signKey_(prog, dt, dn);
+    var old = readJson_(key);
+    var rec = {
+      key: key, prog: prog, progName: clip_(f.progName, 30), docType: dt, docNo: dn,
+      docName: clip_(f.docName, 20), vendor: clip_(f.vendor, 30), src: clip_(f.src, 10),
+      conf: f.conf === 'low' ? 'low' : 'high',      // low = 辨識把握度不高,網站會標示請人工核對
+      ts: old ? old.ts : now, seen: now, n: (old ? old.n || 1 : 0) + 1
+    };
+    props_().setProperty(key, JSON.stringify(rec));
+    if (old) updated++; else added++;
+  });
+  var all = listSignForms_();
+  if (all.length > MAX_SIGN_FORMS) {   // 超過上限:刪掉最舊的
+    all.slice(MAX_SIGN_FORMS).forEach(function (r) { props_().deleteProperty(r.key); });
+  }
+  return { ok: true, added: added, updated: updated, skipped: skipped, total: Math.min(all.length, MAX_SIGN_FORMS) };
+}
+
+function deleteSignForm_(body) {
+  if (body.all === true) {
+    var n = 0;
+    listSignForms_().forEach(function (r) { props_().deleteProperty(r.key); n++; });
+    return { ok: true, removed: n };
+  }
+  var key = String(body.key || '');
+  if (key.indexOf(SIGN_PREFIX) !== 0 || props_().getProperty(key) === null) {
+    return { ok: false, error: '這筆已經不存在,請重新整理' };
+  }
+  props_().deleteProperty(key);
+  return { ok: true, removed: 1 };
+}
+
 // ---------- 自動執行排程(ERP 頁「設定」;由本機排程每 5 分鐘取回並依時間啟動) ----------
 // SCHEDULES:{ <job>: { enabled, start: 'HH:MM', end: 'HH:MM', interval: 分鐘, skipSat, skipSun, updatedAt, by } }
 // 每天 start 起每 interval 分鐘執行一次,到 end 為止;skipSat / skipSun 為 true 時該天不執行。
@@ -570,6 +624,12 @@ function doPost(e) {
     }
 
     // 電腦端回報「收料」工作表內容(用同步金鑰,不是登入工作階段)
+    // 電腦端截圖辨識程式送上待簽核表單(用同步金鑰)
+    if (action === 'signforms_push') {
+      var kerr2 = checkSyncKey_(body.key);
+      if (kerr2) return json_({ ok: false, error: kerr2 });
+      return json_(pushSignForms_(body));
+    }
     if (action === 'receipts_snapshot' || action === 'returns_snapshot') {
       var kerr = checkSyncKey_(body.key);
       if (kerr) return json_({ ok: false, error: kerr });
@@ -610,6 +670,14 @@ function doPost(e) {
     if (action === 'puri09_status' || action === 'puri09_request') {
       if (!me.perms.erp_receipt) return denied_('進貨單簽核');
       return json_(action === 'puri09_request' ? requestPuri_(me, 'receipt') : puriView_('receipt'));
+    }
+    if (action === 'signforms_list') {
+      if (!me.perms.erp_sign) return denied_('待簽核表單');
+      return json_({ ok: true, forms: listSignForms_() });
+    }
+    if (action === 'signforms_delete') {
+      if (!me.perms.erp_sign) return denied_('待簽核表單');
+      return json_(deleteSignForm_(body));
     }
     if (action === 'return_list') {
       if (!me.perms.erp_return) return denied_('退貨單簽核');

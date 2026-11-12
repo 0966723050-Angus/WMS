@@ -14,3 +14,4 @@ scripts/receipt_snapshot_state.json
 scripts/return_snapshot_state.json
 scripts/return_snapshot.json
 scripts/returns_done.json
+scripts/sign_capture/

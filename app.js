@@ -120,14 +120,15 @@
     { key: "erp_receipt", label: "ERP:進貨單簽核" },
     { key: "erp_return", label: "ERP:退貨單簽核" },
     { key: "erp_issue", label: "ERP:製令領料單" },
+    { key: "erp_sign", label: "ERP:待簽核表單" },
     { key: "erp_wms", label: "ERP:WMS更新" }
   ];
-  var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_issue: false, erp_wms: false };
+  var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_issue: false, erp_sign: false, erp_wms: false };
 
   function can(perm) { return !!(session && session.perms && session.perms[perm]); }
 
   function canSeeErp() {
-    return can("admin") || can("erp_receipt") || can("erp_return") || can("erp_issue") || can("erp_wms");
+    return can("admin") || can("erp_receipt") || can("erp_return") || can("erp_issue") || can("erp_sign") || can("erp_wms");
   }
 
   // 舊版登入資料沒有 perms:管理者視為全部權限,其他人視為只有儲位編輯
@@ -702,13 +703,14 @@
     issue: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3v2h6V3M9 10h6M9 14h6M9 18h3"/></svg>',
     // 退貨:回復箭頭
     ret: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 010 11H11"/></svg>',
+    // 待簽核表單:打勾的清單
+    sign: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3v2h6V3M9 13l2 2 4-4"/></svg>',
     // 更新:循環箭頭
     wms: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 01-14.3 4.9M4 12a8 8 0 0114.3-4.9"/><path d="M18.5 3v4.2h-4.2M5.5 21v-4.2h4.2"/></svg>'
   };
 
   var ERP_PAGES = {
-    "issue-new": { title: "製令領料單新增", perm: "erp_issue" },
-    "issue-sign": { title: "製令領料單簽核", perm: "erp_issue" }
+    "issue-new": { title: "製令領料單新增", perm: "erp_issue" }
   };
 
   // 「進貨單簽核」「退貨單簽核」:列出清單、確認後送出請求,由電腦上的 Claude 啟動對應的 skill 在鼎新 ERP 建立並確認單據。
@@ -1157,9 +1159,84 @@
       });
   }
 
+  // ---------- 待簽核表單:ERP 截圖辨識程式(scripts\sign_capture.py)送上來的表單清單 ----------
+  function renderErpSign(app) {
+    if (!can("erp_sign")) { location.hash = "#/erp"; return; }
+    app.innerHTML =
+      '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/erp">ERP</a> / 待簽核表單</div>' +
+      '<h1 class="page-title page-title-row"><span>待簽核表單</span>' +
+        '<span class="sign-head-actions">' +
+          '<button type="button" class="btn btn-sm btn-secondary" id="sign-refresh">重新整理</button>' +
+          '<button type="button" class="btn btn-sm btn-secondary" id="sign-clear">全部清除</button>' +
+        '</span></h1>' +
+      '<p class="rcv-intro">由電腦上的「ERP 截圖辨識程式」送上來的表單:畫面上紅框框起來的表單,或藍綠色單別/單號框的那一張。簽核完成後可以刪除。</p>' +
+      '<div class="rcv-box sign-box" id="sign-list"><div class="skeleton">載入中…</div></div>' +
+      '<p class="modal-msg" id="sign-msg"></p>';
+
+    var box = document.getElementById("sign-list"), msg = document.getElementById("sign-msg");
+    var forms = [];
+
+    function itemHtml(f, i) {
+      var when = f.ts ? new Date(f.ts).toLocaleString("zh-TW", { hour12: false }) : "";
+      var low = f.conf === "low";
+      return '<div class="rcv-item' + (low ? ' failed' : '') + '">' +
+        '<div class="rcv-top"><span class="rcv-code">' + esc(f.docType) + '-' + esc(f.docNo) + '</span>' +
+          (f.prog ? '<span class="rcv-qty">' + esc(f.prog) + '</span>' : '') + '</div>' +
+        ((f.docName || f.progName) ? '<div class="rcv-name">' + esc(f.docName || f.progName) + (f.vendor ? ' · ' + esc(f.vendor) : '') + '</div>' : '') +
+        '<div class="rcv-sub">' + (f.docName && f.progName ? esc(f.progName) + ' · ' : '') + esc(f.src || "") + (f.src ? ' · ' : '') + esc(when) + '</div>' +
+        (low ? '<div class="rcv-fail">⚠ 辨識把握度不高,請對照 ERP 核對單別與單號</div>' : '') +
+        '<button type="button" class="rcv-del" data-i="' + i + '" aria-label="刪除這一筆">刪除</button>' +
+      '</div>';
+    }
+
+    function load() {
+      return api("signforms_list").then(function (res) {
+        if (!res.ok) throw new Error(res.error || "讀取失敗");
+        forms = res.forms || [];
+        box.innerHTML = forms.length
+          ? '<div class="rcv-count">共 ' + forms.length + ' 張待簽核</div>' + forms.map(itemHtml).join("")
+          : '<div class="empty-state">目前沒有待簽核表單</div>';
+        document.getElementById("sign-clear").disabled = !forms.length;
+      }).catch(function (err) {
+        if (!session) return;
+        box.innerHTML = '<div class="empty-state">' + esc(err.message) + '</div>';
+      });
+    }
+    load();
+
+    document.getElementById("sign-refresh").addEventListener("click", function () { msg.textContent = ""; load(); });
+    document.getElementById("sign-clear").addEventListener("click", function () {
+      if (!forms.length || !window.confirm("確定要清除全部 " + forms.length + " 張待簽核表單嗎?\n\n此動作無法復原。")) return;
+      api("signforms_delete", { all: true }).then(function (res) {
+        if (!res.ok) throw new Error(res.error || "清除失敗");
+        showToast("已清除");
+        return load();
+      }).catch(function (err) { if (session) msg.textContent = err.message; });
+    });
+    box.addEventListener("click", function (e) {
+      var b = e.target.closest ? e.target.closest(".rcv-del") : null;
+      if (!b || b.disabled) return;
+      var f = forms[parseInt(b.getAttribute("data-i"), 10)];
+      if (!f) return;
+      if (!window.confirm("確定要刪除這張待簽核表單嗎?\n\n" + f.docType + "-" + f.docNo + (f.docName ? " " + f.docName : "") + (f.vendor ? " · " + f.vendor : ""))) return;
+      b.disabled = true;
+      api("signforms_delete", { key: f.key }).then(function (res) {
+        if (!res.ok) throw new Error(res.error || "刪除失敗");
+        msg.textContent = "";
+        return load();
+      }).catch(function (err) {
+        if (!session) return;
+        msg.textContent = err.message;
+        b.disabled = false;
+        load();
+      });
+    });
+  }
+
   function renderErp(app, sub) {
     if (!canSeeErp()) { location.hash = "#/"; return; } // 沒有任何 ERP 權限
     if (sub === "settings") { renderErpSettings(app); return; }
+    if (sub === "sign") { renderErpSign(app); return; }
     var page = ERP_PAGES[sub];
     if (sub && !page) { location.hash = "#/erp"; return; }
     if (page && !can(page.perm)) { location.hash = "#/erp"; return; } // 沒有這個按鍵的權限
@@ -1187,8 +1264,12 @@
               '<span class="erp-tile-icon">' + ERP_ICONS.issue + '</span><span class="erp-tile-title">製令領料單</span>' +
               '<span class="erp-tile-actions">' +
                 '<a class="btn btn-sm" href="#/erp/issue-new">新增</a>' +
-                '<a class="btn btn-sm btn-secondary" href="#/erp/issue-sign">簽核</a>' +
               '</span></div>'
+            : '') +
+          (can("erp_sign")
+            ? '<a class="erp-tile" href="#/erp/sign">' +
+              '<span class="erp-tile-icon">' + ERP_ICONS.sign + '</span><span class="erp-tile-title">待簽核表單</span>' +
+              '<span class="erp-tile-note" id="sign-note"></span></a>'
             : '') +
           (can("erp_wms")
             ? '<button type="button" class="erp-tile erp-tile-wms" id="wms-update-btn">' +
@@ -1199,6 +1280,12 @@
         '</div>';
       if (can("erp_receipt")) setupPuri09("receipt");
       if (can("erp_return")) setupPuri09("ret");
+      if (can("erp_sign")) {
+        api("signforms_list").then(function (res) {
+          var n = document.getElementById("sign-note");
+          if (n && res.ok && res.forms && res.forms.length) n.textContent = res.forms.length + " 張待簽核";
+        }).catch(function () { /* 讀不到不影響使用 */ });
+      }
       if (can("erp_wms")) setupWmsUpdate();
       if (isAdmin && can("erp_wms")) {
         api("sched_get").then(function (res) {
