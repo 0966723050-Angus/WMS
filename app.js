@@ -2467,23 +2467,23 @@
       '<div class="toolbar">' +
         '<input type="search" id="' + ids.search + '" placeholder="搜尋 (品號 / 品名 / 規格 / 廠商 / 採購單號)" value="' + esc(f.query) + '" />' +
         '<select id="' + ids.status + '">' +
-          '<option value="">到料狀態: 全部</option>' +
+          '<option value="">到料:全部</option>' +
           '<option value="已到料"' + (f.status === "已到料" ? " selected" : "") + '>已到料</option>' +
           '<option value="未到料"' + (f.status === "未到料" ? " selected" : "") + '>未到料</option>' +
         '</select>' +
         '<select id="' + ids.issueStatus + '">' +
-          '<option value=""' + (f.issueStatus === "" ? " selected" : "") + '>領料狀態: 全部</option>' +
+          '<option value=""' + (f.issueStatus === "" ? " selected" : "") + '>領料:全部</option>' +
           '<option value="未領"' + (f.issueStatus === "未領" ? " selected" : "") + '>未領</option>' +
           '<option value="已領"' + (f.issueStatus === "已領" ? " selected" : "") + '>已領</option>' +
         '</select>' +
         '<select id="' + ids.poStatus + '">' +
-          '<option value=""' + (!f.poStatus ? " selected" : "") + '>採購單號: 全部</option>' +
+          '<option value=""' + (!f.poStatus ? " selected" : "") + '>採購單:全部</option>' +
           '<option value="已下單"' + (f.poStatus === "已下單" ? " selected" : "") + '>已下單</option>' +
           '<option value="未下單"' + (f.poStatus === "未下單" ? " selected" : "") + '>未下單</option>' +
         '</select>' +
         '<button class="btn btn-export" id="' + ids.exportBtn + '" type="button">' +
           '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>' +
-          esc(exportLabel) +
+          '<span class="lbl-long">' + esc(exportLabel) + '</span><span class="lbl-short">Excel</span>' +
         '</button>' +
       '</div>'
     );

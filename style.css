@@ -567,6 +567,24 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); width:
   padding: 13px 15px;
   transition: box-shadow 0.2s var(--ease), border-color 0.2s ease, transform 0.2s var(--ease);
 }
+.lbl-short { display: none; }
+/* 手機:搜尋欄 + Excel 鈕同一排,三個篩選欄位同一排(欄寬縮減) */
+@media (max-width: 600px) {
+  .toolbar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .toolbar input[type="search"] { grid-column: 1 / 3; grid-row: 1; flex: none; font-size: 15px; padding: 0 10px; }
+  .toolbar .btn-export { grid-column: 3; grid-row: 1; height: 42px; padding: 0 6px; gap: 4px; justify-content: center; font-size: 14px; }
+  .toolbar .btn-export .lbl-long { display: none; }
+  .toolbar .btn-export .lbl-short { display: inline; }
+  .toolbar select { grid-row: 2; flex: none; font-size: 13.5px; padding: 0 2px 0 6px; height: 40px; text-overflow: ellipsis; }
+}
+/* 手機的物料方塊:字放大一點,但用較緊的行距與內距讓方塊不變高 */
+.material-list .material-card { padding: 11px 14px; }
+.material-list .material-card-top { line-height: 1.3; }
+.material-list .material-code { font-size: 16.5px; }
+.material-list .material-name { font-size: 15px; margin-top: 1px; }
+.material-list .material-spec { font-size: 14px; margin-top: 1px; }
+.material-list .material-grid { font-size: 14px; line-height: 1.3; margin-top: 7px; padding-top: 7px; gap: 4px 10px; }
+.material-list .status-pill { font-size: 12.5px; }
 .material-card-top {
   display: flex;
   justify-content: space-between;
