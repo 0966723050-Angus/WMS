@@ -66,14 +66,14 @@
 
   function getFilterState(orderNo) {
     if (!materialFilterState[orderNo]) {
-      materialFilterState[orderNo] = { query: "", status: "", issueStatus: "" };
+      materialFilterState[orderNo] = { query: "", status: "", issueStatus: "", poStatus: "" };
     }
     return materialFilterState[orderNo];
   }
 
   function getProjectFilterState(code) {
     if (!projectFilterState[code]) {
-      projectFilterState[code] = { query: "", status: "", issueStatus: "" };
+      projectFilterState[code] = { query: "", status: "", issueStatus: "", poStatus: "" };
     }
     return projectFilterState[code];
   }
@@ -89,10 +89,17 @@
     var q = f.query.trim().toLowerCase();
     var status = f.status;
     var issueStatus = f.issueStatus;
+    var poStatus = f.poStatus || "";
     return rows.filter(function (r) {
       if (status && r.arrivalStatus !== status) return false;
       if (issueStatus === "未領" && !(r.remainQty > 0)) return false;
       if (issueStatus === "已領" && !(r.remainQty <= 0)) return false;
+      if (poStatus) {
+        // 已下單 = 採購單號欄位有值;未下單 = 庫存量 < 需求量,且採購單號欄位是空白
+        var hasPo = (r.poNos || []).some(function (x) { return String(x).trim() !== ""; });
+        if (poStatus === "已下單" && !hasPo) return false;
+        if (poStatus === "未下單" && !(!hasPo && Number(r.stockQty || 0) < Number(r.needQty || 0))) return false;
+      }
       if (!q) return true;
       var haystack = [
         r.materialCode, r.materialName, r.spec, r.materialType,
@@ -645,9 +652,9 @@
       var card = el(
         '<div class="project-card">' +
           '<div class="project-card-head">' +
-            '<div>' +
+            '<div class="project-card-main">' +
               '<a class="project-code-link" href="#/project/' + encodeURIComponent(p.code) + '">' + esc(p.code) + '</a>' +
-              '<span class="project-name">' + esc(p.name) + '</span>' +
+              '<span class="project-name" title="' + esc(p.name) + '">' + esc(p.name) + '</span>' +
             '</div>' +
             '<div class="project-meta">' +
               '<span class="badge-count">' + p.orders.length + ' 筆製令</span>' +
@@ -672,9 +679,9 @@
             var c = arrivalCounts(o.orderNo);
             return (
               '<div class="order-row">' +
-                '<div>' +
+                '<div class="order-main">' +
                   '<a class="order-link" href="#/order/' + encodeURIComponent(o.orderNo) + '">' + esc(o.orderNo) + '</a>' +
-                  '<span class="order-product">' + esc(o.productCode) + (o.productName ? " · " + esc(o.productName) : "") + '</span>' +
+                  '<span class="order-product" title="' + esc(o.productCode) + (o.productName ? " · " + esc(o.productName) : "") + '">' + esc(o.productCode) + (o.productName ? " · " + esc(o.productName) : "") + '</span>' +
                   '<span class="order-counts"><span class="cnt-ok">已到料:' + c.arrived + '項</span>' +
                     '<span class="cnt-pending">未到料:' + c.pending + '項</span></span>' +
                 '</div>' +
@@ -2469,6 +2476,11 @@
           '<option value="未領"' + (f.issueStatus === "未領" ? " selected" : "") + '>未領</option>' +
           '<option value="已領"' + (f.issueStatus === "已領" ? " selected" : "") + '>已領</option>' +
         '</select>' +
+        '<select id="' + ids.poStatus + '">' +
+          '<option value=""' + (!f.poStatus ? " selected" : "") + '>採購單號: 全部</option>' +
+          '<option value="已下單"' + (f.poStatus === "已下單" ? " selected" : "") + '>已下單</option>' +
+          '<option value="未下單"' + (f.poStatus === "未下單" ? " selected" : "") + '>未下單</option>' +
+        '</select>' +
         '<button class="btn btn-export" id="' + ids.exportBtn + '" type="button">' +
           '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>' +
           esc(exportLabel) +
@@ -2491,7 +2503,7 @@
     var html = '';
     html += '<div class="breadcrumb"><a href="#/">首頁</a> / ' + esc(project.code) + '</div>';
     html += '<h1 class="page-title">' + esc(project.code) + '<span class="sub">' + esc(project.name) + ' · 共 ' + project.orders.length + ' 筆製令</span></h1>';
-    html += toolbarHtml({ search: "project-search", status: "project-status", issueStatus: "project-issue-status", exportBtn: "project-export" }, f, "下載為 Excel (全部製令)");
+    html += toolbarHtml({ search: "project-search", status: "project-status", issueStatus: "project-issue-status", poStatus: "project-po-status", exportBtn: "project-export" }, f, "下載為 Excel (全部製令)");
     html += '<p class="result-count" id="project-result-count"></p>';
 
     project.orders.forEach(function (o) {
@@ -2521,6 +2533,10 @@
       getProjectFilterState(code).issueStatus = e.target.value;
       renderProjectMaterials(project);
     });
+    document.getElementById("project-po-status").addEventListener("change", function (e) {
+      getProjectFilterState(code).poStatus = e.target.value;
+      renderProjectMaterials(project);
+    });
     document.getElementById("project-export").addEventListener("click", function () {
       exportProjectToExcel(project);
     });
@@ -2530,7 +2546,7 @@
 
   function renderProjectMaterials(project) {
     var f = getProjectFilterState(project.code);
-    var filtering = !!(f.query.trim() || f.status || f.issueStatus);
+    var filtering = !!(f.query.trim() || f.status || f.issueStatus || f.poStatus);
     var totalAll = 0, totalMatched = 0, sectionsWithResults = 0;
 
     project.orders.forEach(function (o) {
@@ -2573,7 +2589,7 @@
     html += '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/project/' + encodeURIComponent(project.code) + '">' + esc(project.code) + '</a> / ' + esc(orderNo) + '</div>';
     html += '<h1 class="page-title">製令 ' + esc(orderNo) + '<span class="sub">物料明細</span></h1>';
     html += orderInfoPanelHtml(order, orderNo);
-    html += toolbarHtml({ search: "search-input", status: "status-select", issueStatus: "issue-status-select", exportBtn: "export-btn" }, f, "下載為 Excel");
+    html += toolbarHtml({ search: "search-input", status: "status-select", issueStatus: "issue-status-select", poStatus: "po-status-select", exportBtn: "export-btn" }, f, "下載為 Excel");
     html += '<p class="result-count" id="' + sectionIds(orderNo).count + '"></p>';
     html += '<div id="' + sectionIds(orderNo).container + '"></div>';
 
@@ -2589,6 +2605,10 @@
     });
     document.getElementById("issue-status-select").addEventListener("change", function (e) {
       getFilterState(orderNo).issueStatus = e.target.value;
+      renderOrderMaterials(orderNo, project, order);
+    });
+    document.getElementById("po-status-select").addEventListener("change", function (e) {
+      getFilterState(orderNo).poStatus = e.target.value;
       renderOrderMaterials(orderNo, project, order);
     });
     document.getElementById("export-btn").addEventListener("click", function () {

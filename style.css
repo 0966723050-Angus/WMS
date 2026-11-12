@@ -324,8 +324,11 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); width:
   line-height: 1.35;
   letter-spacing: 0.3px;
 }
+.project-card-main, .order-main { min-width: 0; flex: 1 1 auto; }
+.project-card-head { min-height: 92px; }   /* 每個專案方塊一樣高 */
 .project-name {
   display: block;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;   /* 名稱太長就用「…」,不撐高方塊 */
   font-size: 16px;
   line-height: 1.5;
   color: var(--text);
@@ -383,6 +386,20 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); width:
   margin-top: 5px;
 }
 .order-row .order-right { text-align: right; flex-shrink: 0; }
+.order-row { min-height: 100px; }
+.order-row .order-product { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 手機:專案一覽的字小一點,方塊維持一樣大 */
+@media (max-width: 600px) {
+  .project-card-head { min-height: 70px; padding: 12px 12px 12px 16px; }
+  .project-code-link { font-size: 16px; }
+  .project-name { font-size: 13.5px; margin-top: 3px; }
+  .badge-count { font-size: 12.5px; padding: 4px 10px; }
+  .chevron { width: 30px; height: 30px; padding: 6px; }
+  .order-row { min-height: 84px; padding: 12px 14px 12px 16px; font-size: 15px; }
+  .order-row .order-product { font-size: 13.5px; margin-top: 3px; }
+  .order-counts { font-size: 13px; margin-top: 5px; gap: 4px 14px; }
+  .order-row .status-pill { font-size: 12px; padding: 4px 10px; }
+}
 .order-counts { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 8px; font-size: 15px; line-height: 1.5; }
 .order-row .status-pill { font-size: 13.5px; padding: 5px 13px; }
 .order-counts span { font-weight: 700; }
