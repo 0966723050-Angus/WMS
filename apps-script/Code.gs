@@ -929,7 +929,7 @@ function doGet(e) {
 
       if (p.action === 'pull') return json_({
         ok: true, edits: listPending_(), receipts: listReceipts_('receipt'), deletes: listDeletes_('receipt'),
-        returns: listReceipts_('ret'), returnDeletes: listDeletes_('ret'), signImages: claimSignImages_(),
+        returns: listReceipts_('ret'), returnDeletes: listDeletes_('ret'), signImages: claimSignImages_(), signForms: listSignForms_(),
         wms: readJson_(WMS_REQ_KEY), schedules: getSchedules_()
       });
 

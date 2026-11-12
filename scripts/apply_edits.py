@@ -439,6 +439,14 @@ def main():
         sign_worker.process(endpoint, sync_key, res.get("signImages") or [], log)
     except Exception as ex:
         log("警告: 處理簽核截圖失敗: %s" % ex)
+    # 網站「待簽核表單」清單同步到 WMS.xlsx「待簽核清單」工作表(供 ERP 執行簽核時讀取);沒變動不動檔案
+    if isinstance(res.get("signForms"), list):
+        try:
+            import sign_sheet
+            sign_sheet.sync(args.master, args.drive_copy, res["signForms"],
+                            os.path.join(os.path.dirname(args.log) or HERE, "sign_sheet_state.json"), log)
+        except Exception as ex:
+            log("警告: 同步待簽核清單工作表失敗: %s" % ex)
     # 「收料」「退料」工作表內容有變動(例如使用者自己編輯/清除)就回報給網站,供「進貨單簽核」「退貨單簽核」清單使用;沒變動不重送
     try:
         import receipt_snapshot
