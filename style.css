@@ -1227,7 +1227,8 @@ body.scan-open .modal-backdrop { -webkit-backdrop-filter: none; backdrop-filter:
   display: grid; grid-template-columns: 34px minmax(120px, 1.3fr) minmax(86px, 0.85fr) minmax(64px, 0.6fr) minmax(120px, 1.2fr) minmax(100px, 1fr) minmax(150px, 1.6fr) minmax(46px, 0.4fr) 64px;   /* 最後一欄固定寬度,標題列與每一列的欄位才會對齊 */
   gap: 8px; align-items: center; padding: 8px 6px; border-top: 1px solid var(--border);
 }
-.sign-add { grid-template-columns: 34px minmax(120px, 1.3fr) minmax(86px, 0.85fr) minmax(64px, 0.6fr) minmax(120px, 1.2fr) minmax(100px, 1fr) 64px; }
+.sign-add { grid-template-columns: 34px minmax(120px, 1.3fr) minmax(86px, 0.85fr) minmax(64px, 0.6fr) minmax(120px, 1.2fr) minmax(100px, 1fr) auto; }
+.sign-add-btns { display: flex; gap: 6px; justify-content: flex-end; }
 .sign-by { font-size: 12.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .sign-by-l { display: none; font-style: normal; }
 .sign-img { font-size: 13px; white-space: nowrap; }
@@ -1258,6 +1259,6 @@ body.scan-open .modal-backdrop { -webkit-backdrop-filter: none; backdrop-filter:
   .sign-img { grid-column: 2 / -1; }
   .sign-img:empty { display: none; }
   .sign-img-l { display: inline; }
-  .sign-row .sign-dn, .sign-row .sign-vendor, .sign-row .sign-del, .sign-add > .btn { grid-column: 2 / -1; }
-  .sign-row .sign-del, .sign-add > .btn { justify-self: end; }
+  .sign-row .sign-dn, .sign-row .sign-vendor, .sign-row .sign-del, .sign-add-btns { grid-column: 2 / -1; }
+  .sign-row .sign-del, .sign-add-btns { justify-self: end; }
 }

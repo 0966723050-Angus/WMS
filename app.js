@@ -1223,7 +1223,10 @@
           '<input id="add-dt" class="sign-dt" placeholder="單別" inputmode="numeric" maxlength="6" autocomplete="off" />' +
           '<input id="add-dn" class="sign-dn" placeholder="單號" inputmode="numeric" maxlength="16" autocomplete="off" />' +
           '<input id="add-vendor" class="sign-vendor" placeholder="廠商" maxlength="30" autocomplete="off" />' +
-          '<button type="button" class="btn btn-sm" id="add-ok">新增</button>' +
+          '<div class="sign-add-btns">' +
+            '<button type="button" class="btn btn-sm btn-secondary" id="add-clear" title="清空這一區所有欄位">清除</button>' +
+            '<button type="button" class="btn btn-sm" id="add-ok">新增</button>' +
+          '</div>' +
         '</div>' +
       '</section>' +
 
@@ -1492,6 +1495,14 @@
     // ---- 手動新增 ----
     $("add-name").addEventListener("change", function () { linkNameAndCode($("add-name").closest(".sign-row"), $("add-name")); });
     $("add-prog").addEventListener("change", function () { linkNameAndCode($("add-prog").closest(".sign-row"), $("add-prog")); });
+    // 一鍵清除這一區所有欄位(表單名稱、程式代碼、單別、單號、廠商)
+    $("add-clear").addEventListener("click", function () {
+      $("add-name").value = "";
+      ["add-prog", "add-dt", "add-dn", "add-vendor"].forEach(function (id) { $(id).value = ""; });
+      $("add-name").closest(".sign-row").classList.remove("invalid");
+      msg("");
+      $("add-name").focus();
+    });
     $("add-ok").addEventListener("click", function () {
       var v = { name: $("add-name").value, prog: $("add-prog").value.trim().toUpperCase(), docType: $("add-dt").value.trim(), docNo: $("add-dn").value.trim(), vendor: $("add-vendor").value.trim() };
       var bad = checkFields(v);
