@@ -8,7 +8,8 @@
   2. 沒有紅框:辨識工具列下方藍綠色框框(單別、單號),加上標題列的程式代碼。
 
 文字辨識用 Windows 內建 OCR(scripts\\ocr_win.ps1,不需安裝任何套件)。標題裡的小字英文代碼 OCR 讀不準,
-所以用 sign_programs.json(程式代碼對照表:中文程式名稱 <-> 代碼)校正;表裡沒有的程式會記錄 OCR 原始結果並標記為不確定。
+所以用「表單名稱 <-> 程式代碼」對照表(C:/ATK/Project/AI Agent/ERP/表單與程式碼對照表.xlsx)校正;表裡沒有的程式會記錄 OCR 原始結果並標記為不確定。
+(對照表讀不到時退回 sign_programs.json。)
 
 用法:
     python -I sign_capture.py --image 圖片.png            辨識圖片檔(只顯示結果,加 --push 才傳送)
@@ -34,7 +35,8 @@ from PIL import Image, ImageChops, ImageFilter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.path.join(HERE, "edit_config.json")
-PROGRAMS_FILE = os.path.join(HERE, "sign_programs.json")
+PROGRAMS_FILE = os.path.join(HERE, "sign_programs.json")   # 備援;主要來源是下面的 Excel 對照表
+FORMS_XLSX = os.environ.get("SIGN_FORMS_XLSX", r"C:\ATK\Project\AI Agent\ERP\表單與程式碼對照表.xlsx")
 OCR_PS = os.path.join(HERE, "ocr_win.ps1")
 WORK = os.environ.get("SIGN_WORK", os.path.join(HERE, "sign_capture"))
 LOG_FILE = os.path.join(WORK, "sign_capture.log")
@@ -281,6 +283,21 @@ def parse_red_line(text):
 # ---------------------------------------------------------------- 程式代碼(標題列 ( ) 內)
 
 def load_programs():
+    """程式代碼對照表 -> [{'code': 'PURI07', 'name': '採購單'}, ...]。一個代碼可以對應多個表單名稱(例如 INVI05)。"""
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(FORMS_XLSX, read_only=True, data_only=True)
+        ws = wb.worksheets[0]
+        out = []
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            name, code = (str(row[0]).strip() if row[0] else ""), (str(row[1]).strip().upper() if row[1] else "")
+            if name and re.fullmatch(r"[A-Z0-9]{4,10}", code):
+                out.append({"code": code, "name": name})
+        wb.close()
+        if out:
+            return out
+    except Exception:
+        pass
     try:
         with open(PROGRAMS_FILE, encoding="utf-8-sig") as f:
             data = json.load(f)
@@ -296,8 +313,16 @@ def canon_code(s):
     return re.sub(r"[^A-Z0-9]", "", s.upper().translate(_CANON))
 
 
+def _core(name):
+    """表單/程式名稱去掉尾巴的「建立作業」「建立」「作業」,只留中文,方便和對照表的表單名稱比對。"""
+    name = re.sub(r"[^%s]" % CJK, "", name)
+    return re.sub(r"(建立作業?|建立|作業)$", "", name)
+
+
 def parse_title(texts, programs):
-    """標題列文字 -> (程式代碼, 程式名稱, 把握度 known/guess/none)。"""
+    """標題列文字 -> (程式代碼, 表單名稱, 把握度 known/guess/none)。
+    標題長得像「採購單建立作業(PURI07)[公司名]」:用「括號前的中文名稱」和「括號內的代碼」分別和對照表比對,
+    兩者綜合分數最高、且夠像的才算認得(代碼小字英文 OCR 常讀錯,所以不能只靠代碼)。"""
     best = None
     raw_codes = []
     for t in texts:
@@ -305,15 +330,14 @@ def parse_title(texts, programs):
         m = re.search(r"^(.*?)[\(（]([^\)）】〕\]]*)", s)
         if not m:
             continue
-        name = re.sub(r"[^%s]" % CJK, "", m.group(1))
+        name = _core(m.group(1))
         code_raw = m.group(2)
         raw_codes.append(code_raw)
         for p in programs:
-            name_sim = difflib.SequenceMatcher(None, name, p["name"]).ratio() if name else 0.0
+            name_sim = difflib.SequenceMatcher(None, name, _core(p["name"])).ratio() if name else 0.0
             code_sim = difflib.SequenceMatcher(None, canon_code(code_raw), canon_code(p["code"])).ratio()
-            # 程式名稱要夠像(最多掉 1~2 個字)且代碼也有點像;或代碼幾乎完全相同,才算認得
-            if (name_sim >= 0.8 and code_sim >= 0.3) or code_sim >= 0.9:
-                score = 0.7 * name_sim + 0.3 * code_sim
+            score = 0.6 * name_sim + 0.4 * code_sim
+            if (name_sim >= 0.6 or code_sim >= 0.8) and score >= 0.6:
                 if best is None or score > best[0]:
                     best = (score, p)
     if best:
@@ -378,7 +402,7 @@ def recognize(img, tag="img"):
     code, name, conf = parse_title(texts.get("title", []), load_programs())
     result["prog"], result["progName"], result["progConf"] = code, name, conf
     if conf == "guess":
-        result["warnings"].append("程式代碼 %s 不在 sign_programs.json 對照表中,是依 OCR 結果猜的" % code)
+        result["warnings"].append("程式代碼 %s 不在「表單與程式碼對照表」中,是依 OCR 結果猜的" % code)
     elif conf == "none":
         result["warnings"].append("沒辨識出標題列的程式代碼")
 
@@ -453,16 +477,20 @@ def grab_clipboard():
 
 # ---------------------------------------------------------------- 傳送
 
-def push(forms, extra=None):
-    with open(CONFIG, encoding="utf-8-sig") as f:
-        cfg = json.load(f)
-    payload = {"action": "signforms_push", "key": cfg["syncKey"], "forms": forms}
+def push_to(endpoint, key, forms, extra=None):
+    payload = {"action": "signforms_push", "key": key, "forms": forms}
     if extra:
         payload.update(extra)
-    req = urllib.request.Request(cfg["endpoint"], data=json.dumps(payload).encode("utf-8"),
+    req = urllib.request.Request(endpoint, data=json.dumps(payload).encode("utf-8"),
                                  headers={"Content-Type": "text/plain;charset=utf-8"}, method="POST")
     with urllib.request.urlopen(req, timeout=40) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def push(forms, extra=None):
+    with open(CONFIG, encoding="utf-8-sig") as f:
+        cfg = json.load(f)
+    return push_to(cfg["endpoint"], cfg["syncKey"], forms, extra)
 
 
 def main(argv):

@@ -253,9 +253,11 @@ var KINDS = {
   receipt: { prefix: 'r_', delPrefix: 'd_', snapKey: 'RECEIPT_SNAPSHOT', reqKey: 'PURI09_REQ', statusKey: 'PURI09_STATUS', label: '進貨單', what: '收料' },
   ret:     { prefix: 't_', delPrefix: 'x_', snapKey: 'RETURN_SNAPSHOT',  reqKey: 'RETURN_REQ',  statusKey: 'RETURN_STATUS',  label: '退貨單', what: '退料' }
 };
+// 待簽核表單的簽核請求也走同一套請求/狀態機制(只用到 reqKey / statusKey)
+KINDS.sign = { prefix: '__sign_', delPrefix: '__signd_', snapKey: 'SIGN_SNAPSHOT', reqKey: 'SIGN_REQ', statusKey: 'SIGN_STATUS', label: '簽核', what: '簽核' };
 var MAX_RECEIPTS = 500;
 
-function kindOf_(kind) { return kind === 'ret' ? KINDS.ret : KINDS.receipt; }
+function kindOf_(kind) { return kind === 'ret' ? KINDS.ret : kind === 'sign' ? KINDS.sign : KINDS.receipt; }
 
 function listByPrefix_(prefix) {
   var all = props_().getProperties();
@@ -461,13 +463,16 @@ function deleteReceiptRow_(body, user, kind) {
   return { ok: true, queued: true };
 }
 
-// ---------- 待簽核表單(ERP 截圖辨識程式 scripts\sign_capture.py 辨識後送上來,網站「待簽核表單」頁列出) ----------
-// 每張表單一個屬性 s_<程式代碼>_<單別>_<單號>;同一張再送上來只更新(不重複)。
+// ---------- 待簽核表單 ----------
+// 來源有兩種:(1) 同事把截圖貼到網頁上傳,電腦端辨識後送上來(signforms_push);(2) 網頁上手動輸入 / 修改(signforms_save)。
+// 每張表單一個屬性 s_<id>:{id, ts, name 表單名稱, prog 程式代碼, docType 單別, docNo 單號, docName, vendor, src, conf, by, f 失敗原因}。
+// 網頁勾選後按「確認」送出簽核請求(SIGN_REQ,同進貨單簽核的作法),由電腦上的 Claude 取走執行。
 
 var SIGN_PREFIX = 's_';
 var MAX_SIGN_FORMS = 200;
+var MAX_SIGN_ITEMS = 40;   // 一次簽核請求最多幾張(請求存在單一屬性,有 9KB 上限)
 
-function signKey_(prog, dt, dn) { return SIGN_PREFIX + (prog || 'X') + '_' + dt + '_' + dn; }
+function newId_() { return Date.now() + '_' + Math.random().toString(36).slice(2, 8); }
 
 function listSignForms_() {
   var out = listByPrefix_(SIGN_PREFIX);
@@ -475,44 +480,199 @@ function listSignForms_() {
   return out;
 }
 
-function pushSignForms_(body) {
+// 欄位檢查與清理;回傳 {error} 或 {rec 的欄位}
+function cleanSignFields_(f) {
+  var dt = clip_(f.docType, 6), dn = clip_(f.docNo, 16);
+  if (!/^\d{3,6}$/.test(dt)) return { error: '單別必須是 3~6 位數字' };
+  if (!/^\d{6,16}$/.test(dn)) return { error: '單號必須是 6~16 位數字(一般是 11 碼)' };
+  var prog = clip_(f.prog, 10).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!prog) return { error: '請選擇表單名稱或填入程式代碼' };
+  return { name: clip_(f.name, 30), prog: prog, docType: dt, docNo: dn };
+}
+
+function findSignForm_(all, prog, dt, dn, exceptId) {
+  for (var i = 0; i < all.length; i++) {
+    var r = all[i];
+    if (r.prog === prog && r.docType === dt && r.docNo === dn && r.id !== exceptId) return r;
+  }
+  return null;
+}
+
+// 辨識程式送上來的表單:同一張(程式代碼+單別+單號)再送只更新,不重複
+function pushSignForms_(body, by) {
   var forms = Array.isArray(body.forms) ? body.forms : [];
+  var all = listSignForms_();
   var now = Date.now(), added = 0, updated = 0, skipped = 0;
   forms.slice(0, 100).forEach(function (f) {
     if (!f) { skipped++; return; }
-    var dt = clip_(f.docType, 6), dn = clip_(f.docNo, 16);
-    if (!/^\d{3,6}$/.test(dt) || !/^\d{6,16}$/.test(dn)) { skipped++; return; }
-    var prog = clip_(f.prog, 10).toUpperCase().replace(/[^A-Z0-9]/g, '');
-    var key = signKey_(prog, dt, dn);
-    var old = readJson_(key);
-    var rec = {
-      key: key, prog: prog, progName: clip_(f.progName, 30), docType: dt, docNo: dn,
-      docName: clip_(f.docName, 20), vendor: clip_(f.vendor, 30), src: clip_(f.src, 10),
-      conf: f.conf === 'low' ? 'low' : 'high',      // low = 辨識把握度不高,網站會標示請人工核對
-      ts: old ? old.ts : now, seen: now, n: (old ? old.n || 1 : 0) + 1
-    };
-    props_().setProperty(key, JSON.stringify(rec));
-    if (old) updated++; else added++;
+    var c = cleanSignFields_({ docType: f.docType, docNo: f.docNo, prog: f.prog || 'UNKNOWN', name: f.progName || f.name });
+    if (c.error) { skipped++; return; }
+    var old = findSignForm_(all, c.prog, c.docType, c.docNo, '');
+    var rec = old || { id: newId_(), ts: now, n: 0, by: clip_(by, 60) };
+    rec.name = c.name || rec.name || '';
+    rec.prog = c.prog; rec.docType = c.docType; rec.docNo = c.docNo;
+    rec.docName = clip_(f.docName, 20); rec.vendor = clip_(f.vendor, 30); rec.src = clip_(f.src, 10);
+    rec.conf = f.conf === 'low' ? 'low' : 'high';      // low = 辨識把握度不高,網站會標示請人工核對
+    rec.seen = now; rec.n = (rec.n || 0) + 1;
+    props_().setProperty(SIGN_PREFIX + rec.id, JSON.stringify(rec));
+    if (old) updated++; else { added++; all.push(rec); }
   });
-  var all = listSignForms_();
+  all = listSignForms_();
   if (all.length > MAX_SIGN_FORMS) {   // 超過上限:刪掉最舊的
-    all.slice(MAX_SIGN_FORMS).forEach(function (r) { props_().deleteProperty(r.key); });
+    all.slice(MAX_SIGN_FORMS).forEach(function (r) { props_().deleteProperty(SIGN_PREFIX + r.id); });
   }
   return { ok: true, added: added, updated: updated, skipped: skipped, total: Math.min(all.length, MAX_SIGN_FORMS) };
+}
+
+// 網頁上手動新增 / 修改一張(有 id 就是修改)
+function saveSignForm_(body, user) {
+  var c = cleanSignFields_(body);
+  if (c.error) return { ok: false, error: c.error };
+  var all = listSignForms_();
+  var id = String(body.id || '');
+  var rec;
+  if (id) {
+    rec = all.filter(function (r) { return r.id === id; })[0];
+    if (!rec) return { ok: false, error: '這張已經不存在,請重新整理' };
+  } else {
+    if (all.length >= MAX_SIGN_FORMS) return { ok: false, error: '待簽核表單已達上限(' + MAX_SIGN_FORMS + ' 張),請先刪除不用的' };
+    rec = { id: newId_(), ts: Date.now(), n: 1, by: user.email, src: '手動', conf: 'high' };
+  }
+  if (findSignForm_(all, c.prog, c.docType, c.docNo, rec.id)) return { ok: false, error: '這張表單已經在清單中了' };
+  rec.name = c.name; rec.prog = c.prog; rec.docType = c.docType; rec.docNo = c.docNo;
+  if (id) { rec.conf = 'high'; rec.f = ''; }   // 人工確認過,不再標示辨識不確定 / 失敗
+  props_().setProperty(SIGN_PREFIX + rec.id, JSON.stringify(rec));
+  return { ok: true, form: rec };
 }
 
 function deleteSignForm_(body) {
   if (body.all === true) {
     var n = 0;
-    listSignForms_().forEach(function (r) { props_().deleteProperty(r.key); n++; });
+    listSignForms_().forEach(function (r) { props_().deleteProperty(SIGN_PREFIX + r.id); n++; });
     return { ok: true, removed: n };
   }
-  var key = String(body.key || '');
-  if (key.indexOf(SIGN_PREFIX) !== 0 || props_().getProperty(key) === null) {
-    return { ok: false, error: '這筆已經不存在,請重新整理' };
-  }
-  props_().deleteProperty(key);
+  var id = String(body.id || '');
+  if (!id || props_().getProperty(SIGN_PREFIX + id) === null) return { ok: false, error: '這筆已經不存在,請重新整理' };
+  props_().deleteProperty(SIGN_PREFIX + id);
   return { ok: true, removed: 1 };
+}
+
+// 送出簽核請求:body.ids = 勾選的表單 id。請求內容(單別/單號等)在送出當下存成快照,執行期間再改清單也不影響
+function requestSign_(body, user) {
+  var v = puriView_('sign');
+  if (v.queued) return { ok: false, error: '已有簽核請求排隊中,請稍候' };
+  if (v.status && v.status.state === 'running') return { ok: false, error: '簽核正在執行中' };
+  var ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+  if (!ids.length) return { ok: false, error: '請先勾選要簽核的表單' };
+  if (ids.length > MAX_SIGN_ITEMS) return { ok: false, error: '一次最多送出 ' + MAX_SIGN_ITEMS + ' 張' };
+  var byId = {};
+  listSignForms_().forEach(function (r) { byId[r.id] = r; });
+  var items = [];
+  for (var i = 0; i < ids.length; i++) {
+    var r = byId[ids[i]];
+    if (!r) return { ok: false, error: '有表單已經不存在,請重新整理後再勾選' };
+    items.push({ id: r.id, name: r.name || '', prog: r.prog, docType: r.docType, docNo: r.docNo });
+  }
+  props_().setProperty(KINDS.sign.reqKey, JSON.stringify({ ts: Date.now(), by: user.email, items: items }));
+  return { ok: true, count: items.length };
+}
+
+// 執行端(Claude)回報逐張結果:done 的從清單移除;failed 的留著並寫上失敗原因,網頁會標示
+function signResult_(body) {
+  var done = Array.isArray(body.done) ? body.done.map(String) : [];
+  var failed = Array.isArray(body.failed) ? body.failed : [];
+  var removed = 0, marked = 0;
+  done.forEach(function (id) {
+    if (props_().getProperty(SIGN_PREFIX + id) !== null) { props_().deleteProperty(SIGN_PREFIX + id); removed++; }
+  });
+  failed.forEach(function (x) {
+    if (!x) return;
+    var rec = readJson_(SIGN_PREFIX + String(x.id || ''));
+    if (!rec) return;
+    rec.f = '⚠ 失敗:' + clip_(x.reason, 60);
+    props_().setProperty(SIGN_PREFIX + rec.id, JSON.stringify(rec));
+    marked++;
+  });
+  return { ok: true, removed: removed, marked: marked };
+}
+
+// ---------- 截圖上傳(同事把截圖貼到網頁 -> 暫存 -> 電腦端取回辨識) ----------
+// 圖片(base64)切成每段 90KB 放進 CacheService(最長保留 6 小時),狀態記在屬性 si_<id>。
+// 電腦端排程約每分鐘 pull 一次,取走排隊中的圖片 -> 辨識 -> signforms_push -> signimg_report。
+
+var SIGNIMG_PREFIX = 'si_';
+var SIGNIMG_PART = 90000;
+var SIGNIMG_MAX_B64 = 2200000;      // 約 1.6 MB 的圖片
+var SIGNIMG_TTL = 21600;            // CacheService 上限 6 小時
+var SIGNIMG_CLAIM_MS = 3 * 60 * 1000;
+var MAX_SIGNIMG_PENDING = 20;
+var KEEP_SIGNIMG = 30;
+
+function signImgKey_(id, n) { return 'img_' + id + '_' + n; }
+
+function listSignImages_() {
+  var out = listByPrefix_(SIGNIMG_PREFIX);
+  out.sort(function (a, b) { return b.ts - a.ts; });
+  return out;
+}
+
+function uploadSignImage_(body, user) {
+  var data = String(body.data || '');
+  var m = data.match(/^data:[^;,]*;base64,/);
+  if (m) data = data.slice(m[0].length);
+  if (data.length < 200 || !/^[A-Za-z0-9+\/]+=*$/.test(data)) return { ok: false, error: '圖片資料不正確' };
+  if (data.length > SIGNIMG_MAX_B64) return { ok: false, error: '圖片太大(上限約 1.6 MB),請只截取 ERP 視窗,不要截整個螢幕' };
+  var all = listSignImages_();
+  var pending = all.filter(function (r) { return r.state === 'queued' || r.state === 'processing'; }).length;
+  if (pending >= MAX_SIGNIMG_PENDING) return { ok: false, error: '還有 ' + pending + ' 張圖片等待辨識,請稍後再傳' };
+  var id = newId_();
+  var parts = Math.ceil(data.length / SIGNIMG_PART);
+  var obj = {};
+  for (var i = 0; i < parts; i++) obj[signImgKey_(id, i)] = data.substr(i * SIGNIMG_PART, SIGNIMG_PART);
+  CacheService.getScriptCache().putAll(obj, SIGNIMG_TTL);
+  var rec = { id: id, ts: Date.now(), by: user.email, name: clip_(body.name, 40), parts: parts, size: data.length, state: 'queued', msg: '', n: 0 };
+  props_().setProperty(SIGNIMG_PREFIX + id, JSON.stringify(rec));
+  all.unshift(rec);
+  all.slice(KEEP_SIGNIMG).forEach(function (r) { removeSignImage_(r); });   // 只留最近的狀態紀錄
+  return { ok: true, id: id };
+}
+
+function removeSignImage_(rec) {
+  var keys = [];
+  for (var i = 0; i < (rec.parts || 0); i++) keys.push(signImgKey_(rec.id, i));
+  if (keys.length) CacheService.getScriptCache().removeAll(keys);
+  props_().deleteProperty(SIGNIMG_PREFIX + rec.id);
+}
+
+// 電腦端 pull 時呼叫:取走排隊中的圖片(標記處理中;處理中超過 3 分鐘沒回報的視為失敗重來)
+function claimSignImages_() {
+  var now = Date.now(), out = [];
+  listSignImages_().forEach(function (r) {
+    if (r.state === 'queued' || (r.state === 'processing' && now - (r.claimedAt || 0) > SIGNIMG_CLAIM_MS)) {
+      r.state = 'processing'; r.claimedAt = now;
+      props_().setProperty(SIGNIMG_PREFIX + r.id, JSON.stringify(r));
+      out.push({ id: r.id, parts: r.parts, by: r.by, ts: r.ts, name: r.name });
+    }
+  });
+  return out.reverse();   // 舊的先處理
+}
+
+function getSignImagePart_(id, n) {
+  var v = CacheService.getScriptCache().get(signImgKey_(String(id), parseInt(n, 10)));
+  if (v === null) return { ok: false, error: '圖片已過期或不存在' };
+  return { ok: true, data: v };
+}
+
+function reportSignImage_(id, state, msg, n) {
+  var rec = readJson_(SIGNIMG_PREFIX + String(id));
+  if (!rec) return { ok: false, error: '找不到這張圖片' };
+  if (['done', 'error'].indexOf(state) === -1) return { ok: false, error: '狀態不正確' };
+  var keys = [];
+  for (var i = 0; i < (rec.parts || 0); i++) keys.push(signImgKey_(rec.id, i));
+  if (keys.length) CacheService.getScriptCache().removeAll(keys);   // 辨識完就不需要圖片了
+  rec.state = state; rec.msg = clip_(msg, 120); rec.n = parseInt(n, 10) || 0; rec.doneAt = Date.now();
+  props_().setProperty(SIGNIMG_PREFIX + rec.id, JSON.stringify(rec));
+  return { ok: true };
 }
 
 // ---------- 自動執行排程(ERP 頁「設定」;由本機排程每 5 分鐘取回並依時間啟動) ----------
@@ -628,7 +788,7 @@ function doPost(e) {
     if (action === 'signforms_push') {
       var kerr2 = checkSyncKey_(body.key);
       if (kerr2) return json_({ ok: false, error: kerr2 });
-      return json_(pushSignForms_(body));
+      return json_(pushSignForms_(body, body.by || body.source || '辨識程式'));
     }
     if (action === 'receipts_snapshot' || action === 'returns_snapshot') {
       var kerr = checkSyncKey_(body.key);
@@ -671,13 +831,18 @@ function doPost(e) {
       if (!me.perms.erp_receipt) return denied_('進貨單簽核');
       return json_(action === 'puri09_request' ? requestPuri_(me, 'receipt') : puriView_('receipt'));
     }
-    if (action === 'signforms_list') {
+    if (action.indexOf('sign') === 0 && ['signforms_list', 'signforms_save', 'signforms_delete', 'sign_status', 'sign_request',
+        'signimg_upload', 'signimg_list'].indexOf(action) !== -1) {
       if (!me.perms.erp_sign) return denied_('待簽核表單');
-      return json_({ ok: true, forms: listSignForms_() });
-    }
-    if (action === 'signforms_delete') {
-      if (!me.perms.erp_sign) return denied_('待簽核表單');
-      return json_(deleteSignForm_(body));
+      if (action === 'signforms_list') return json_({ ok: true, forms: listSignForms_() });
+      if (action === 'signforms_save') return json_(saveSignForm_(body, me));
+      if (action === 'signforms_delete') return json_(deleteSignForm_(body));
+      if (action === 'sign_status') return json_(puriView_('sign'));
+      if (action === 'sign_request') return json_(requestSign_(body, me));
+      if (action === 'signimg_upload') return json_(uploadSignImage_(body, me));
+      return json_({ ok: true, images: listSignImages_().slice(0, 12).map(function (r) {
+        return { id: r.id, ts: r.ts, by: r.by, name: r.name, state: r.state, msg: r.msg, n: r.n };
+      }) });
     }
     if (action === 'return_list') {
       if (!me.perms.erp_return) return denied_('退貨單簽核');
@@ -718,7 +883,8 @@ function doGet(e) {
   lock.waitLock(15000);
   try {
     if (p.action === 'pull' || p.action === 'ack' || p.action === 'set_data_key' || p.action === 'wms_report' ||
-        p.action === 'puri09_claim' || p.action === 'puri09_report' || p.action === 'ret_claim' || p.action === 'ret_report') {
+        p.action === 'puri09_claim' || p.action === 'puri09_report' || p.action === 'ret_claim' || p.action === 'ret_report' ||
+        p.action === 'sign_claim' || p.action === 'sign_report' || p.action === 'signimg_get' || p.action === 'signimg_report') {
       var err = checkSyncKey_(p.key);
       if (err) return json_({ ok: false, error: err });
 
@@ -726,10 +892,23 @@ function doGet(e) {
       if (p.action === 'puri09_report') return json_(puriReport_(String(p.state || ''), p.msg, 'receipt'));
       if (p.action === 'ret_claim') return json_(puriClaim_('ret'));
       if (p.action === 'ret_report') return json_(puriReport_(String(p.state || ''), p.msg, 'ret'));
+      if (p.action === 'sign_claim') return json_(puriClaim_('sign'));
+      if (p.action === 'sign_report') {
+        var sres = puriReport_(String(p.state || ''), p.msg, 'sign');
+        if (sres.ok && (p.done || p.failed)) {   // 逐張結果(done=id 以逗號分隔;failed=id:原因;id:原因)
+          var failedList = String(p.failed || '').split(';').filter(String).map(function (x) {
+            var k = x.indexOf(':'); return { id: k < 0 ? x : x.slice(0, k), reason: k < 0 ? '' : x.slice(k + 1) };
+          });
+          signResult_({ done: String(p.done || '').split(',').filter(String), failed: failedList });
+        }
+        return json_(sres);
+      }
+      if (p.action === 'signimg_get') return json_(getSignImagePart_(p.id, p.n));
+      if (p.action === 'signimg_report') return json_(reportSignImage_(p.id, String(p.state || ''), p.msg, p.n));
 
       if (p.action === 'pull') return json_({
         ok: true, edits: listPending_(), receipts: listReceipts_('receipt'), deletes: listDeletes_('receipt'),
-        returns: listReceipts_('ret'), returnDeletes: listDeletes_('ret'),
+        returns: listReceipts_('ret'), returnDeletes: listDeletes_('ret'), signImages: claimSignImages_(),
         wms: readJson_(WMS_REQ_KEY), schedules: getSchedules_()
       });
 

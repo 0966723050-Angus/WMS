@@ -14,6 +14,8 @@ SRC = r"C:\Users\angus.ad\我的雲端硬碟\ATK\WMS.xlsx"
 OUT_DIR = os.path.dirname(HERE)
 # 存在此設定檔(內含 dataKey)就輸出加密的 data.enc;否則維持輸出明文 data.json
 AUTH_CONFIG = os.path.join(HERE, "auth_config.json")
+# 表單名稱 <-> 程式代碼對照表(網站「待簽核表單」頁的下拉選單用;使用者維護這個檔案)
+FORMS_XLSX = os.environ.get("SIGN_FORMS_XLSX", r"C:\ATK\Project\AI Agent\ERP\表單與程式碼對照表.xlsx")
 
 
 def load_data_key(path):
@@ -183,6 +185,17 @@ def main():
                 "qty": h_qty if isinstance(h_qty, (int, float)) else 0,
             })
 
+    sign_forms = []
+    try:
+        wbf = openpyxl.load_workbook(FORMS_XLSX, read_only=True, data_only=True)
+        for row in wbf.worksheets[0].iter_rows(min_row=2, values_only=True):
+            name, code = str(norm(row[0])), str(norm(row[1])).upper()
+            if name and code:
+                sign_forms.append({"name": name, "code": code})
+        wbf.close()
+    except Exception as ex:   # 對照表讀不到不影響其他資料
+        print("警告: 讀不到表單與程式碼對照表: %s" % ex)
+
     source_mtime = datetime.datetime.fromtimestamp(os.path.getmtime(args.src))
 
     data = {
@@ -192,6 +205,7 @@ def main():
         "materials": materials,
         "storageItems": storage_items,
         "history": history,
+        "signForms": sign_forms,
     }
 
     plain = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -203,7 +217,7 @@ def main():
 
     n_orders = sum(len(p["orders"]) for p in data["projects"])
     n_materials = sum(len(v) for v in materials.values())
-    print(f"projects={len(data['projects'])} orders={n_orders} material_rows={n_materials} storage_items={len(storage_items)} history={len(history)}")
+    print(f"projects={len(data['projects'])} orders={n_orders} material_rows={n_materials} storage_items={len(storage_items)} history={len(history)} signForms={len(sign_forms)}")
 
 
 if __name__ == "__main__":

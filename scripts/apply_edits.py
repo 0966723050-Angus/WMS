@@ -433,6 +433,13 @@ def main():
         start_wms_update(endpoint, sync_key, res["wms"])
     if res.get("schedules"):
         run_due_schedules(endpoint, sync_key, res["schedules"])
+    # 同事從網頁「待簽核表單」上傳的截圖:取回 -> 辨識 -> 把表單送回網站(獨立處理,失敗不影響後面的寫入)
+    if res.get("signImages"):
+        try:
+            import sign_worker
+            sign_worker.process(endpoint, sync_key, res["signImages"], log)
+        except Exception as ex:
+            log("警告: 處理簽核截圖失敗: %s" % ex)
     # 「收料」「退料」工作表內容有變動(例如使用者自己編輯/清除)就回報給網站,供「進貨單簽核」「退貨單簽核」清單使用;沒變動不重送
     try:
         import receipt_snapshot

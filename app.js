@@ -489,6 +489,7 @@
   }
 
   function render() {
+    signPage = null;      // 離開(或重新畫)待簽核表單頁就不再接收貼上的截圖
     if (!session) return; // 尚未登入時只顯示登入畫面
     var route = parseHash();
     var app = document.getElementById("app");
@@ -1159,78 +1160,350 @@
       });
   }
 
-  // ---------- 待簽核表單:ERP 截圖辨識程式(scripts\sign_capture.py)送上來的表單清單 ----------
+  // ---------- 待簽核表單 ----------
+  // 來源:(1) 同事把截圖貼到這一頁上傳,電腦端辨識後自動錄入;(2) 在這一頁手動輸入 / 修改。
+  // 每一列:核取方塊、表單名稱(下拉選單,連動程式代碼)、程式代碼、單別、單號;勾選後按「確認」送出簽核請求(作業方式同進貨單簽核)。
+  var signPage = null;   // 目前開著的待簽核表單頁(貼上截圖用);離開這一頁就清掉
+  var SIGN_IMG_MAX = 1600000;   // 圖片大小上限(Apps Script 端也會檢查)
+
+  // 表單名稱 <-> 程式代碼對照表(來自 ERP 資料夾的「表單與程式碼對照表.xlsx」,隨網站資料發布)
+  function signFormList() { return (state.data && state.data.signForms) || []; }
+  function signCodeOfName(name) {
+    var f = signFormList().filter(function (x) { return x.name === name; })[0];
+    return f ? f.code : "";
+  }
+  function signNameOfCode(code) {
+    var f = signFormList().filter(function (x) { return x.code === code; })[0];
+    return f ? f.name : "";
+  }
+  function signNameOptions(selected) {
+    var names = [], seen = {};
+    signFormList().forEach(function (x) { if (!seen[x.name]) { seen[x.name] = true; names.push(x.name); } });
+    if (selected && !seen[selected]) names.push(selected);   // 辨識出來但不在對照表的名稱也要能顯示
+    return '<option value="">(請選擇)</option>' + names.map(function (n) {
+      return '<option value="' + esc(n) + '"' + (n === selected ? ' selected' : '') + '>' + esc(n) + '</option>';
+    }).join("");
+  }
+
   function renderErpSign(app) {
     if (!can("erp_sign")) { location.hash = "#/erp"; return; }
     app.innerHTML =
       '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/erp">ERP</a> / 待簽核表單</div>' +
       '<h1 class="page-title page-title-row"><span>待簽核表單</span>' +
-        '<span class="sign-head-actions">' +
-          '<button type="button" class="btn btn-sm btn-secondary" id="sign-refresh">重新整理</button>' +
-          '<button type="button" class="btn btn-sm btn-secondary" id="sign-clear">全部清除</button>' +
-        '</span></h1>' +
-      '<p class="rcv-intro">由電腦上的「ERP 截圖辨識程式」送上來的表單:畫面上紅框框起來的表單,或藍綠色單別/單號框的那一張。簽核完成後可以刪除。</p>' +
-      '<div class="rcv-box sign-box" id="sign-list"><div class="skeleton">載入中…</div></div>' +
-      '<p class="modal-msg" id="sign-msg"></p>';
+        '<button type="button" class="btn btn-sm btn-secondary" id="sign-refresh">重新整理</button></h1>' +
 
-    var box = document.getElementById("sign-list"), msg = document.getElementById("sign-msg");
-    var forms = [];
+      '<section class="sign-card">' +
+        '<h2 class="sign-h">上傳截圖辨識</h2>' +
+        '<p class="rcv-intro">用截圖工具截下 ERP 畫面(要簽核的表單請用紅框框起來;沒有紅框就讀畫面上方藍綠色的單別/單號),在這一頁按 <b>Ctrl+V</b> 貼上,或選擇圖片檔,再按「上傳辨識」。辨識出的表單約 1~2 分鐘內會出現在下面的清單。</p>' +
+        '<div class="sign-drop" id="sign-drop" tabindex="0">' +
+          '<div id="sign-drop-text">在這裡按 Ctrl+V 貼上截圖,或把圖片拖進來</div>' +
+          '<img id="sign-preview" alt="" hidden />' +
+        '</div>' +
+        '<div class="sign-up-actions">' +
+          '<label class="btn btn-sm btn-secondary sign-file">選擇圖片<input type="file" id="sign-file" accept="image/*" hidden /></label>' +
+          '<button type="button" class="btn btn-sm" id="sign-upload" disabled>上傳辨識</button>' +
+        '</div>' +
+        '<div class="sign-imgs" id="sign-imgs"></div>' +
+      '</section>' +
 
-    function itemHtml(f, i) {
-      var when = f.ts ? new Date(f.ts).toLocaleString("zh-TW", { hour12: false }) : "";
-      var low = f.conf === "low";
-      return '<div class="rcv-item' + (low ? ' failed' : '') + '">' +
-        '<div class="rcv-top"><span class="rcv-code">' + esc(f.docType) + '-' + esc(f.docNo) + '</span>' +
-          (f.prog ? '<span class="rcv-qty">' + esc(f.prog) + '</span>' : '') + '</div>' +
-        ((f.docName || f.progName) ? '<div class="rcv-name">' + esc(f.docName || f.progName) + (f.vendor ? ' · ' + esc(f.vendor) : '') + '</div>' : '') +
-        '<div class="rcv-sub">' + (f.docName && f.progName ? esc(f.progName) + ' · ' : '') + esc(f.src || "") + (f.src ? ' · ' : '') + esc(when) + '</div>' +
-        (low ? '<div class="rcv-fail">⚠ 辨識把握度不高,請對照 ERP 核對單別與單號</div>' : '') +
-        '<button type="button" class="rcv-del" data-i="' + i + '" aria-label="刪除這一筆">刪除</button>' +
+      '<section class="sign-card">' +
+        '<h2 class="sign-h">手動新增</h2>' +
+        '<div class="sign-row sign-add">' +
+          '<span class="sign-chk"></span>' +
+          '<select id="add-name" aria-label="表單名稱">' + signNameOptions("") + '</select>' +
+          '<input id="add-prog" placeholder="程式代碼" maxlength="10" autocomplete="off" autocapitalize="characters" spellcheck="false" />' +
+          '<input id="add-dt" placeholder="單別" inputmode="numeric" maxlength="6" autocomplete="off" />' +
+          '<input id="add-dn" placeholder="單號" inputmode="numeric" maxlength="16" autocomplete="off" />' +
+          '<button type="button" class="btn btn-sm" id="add-ok">新增</button>' +
+        '</div>' +
+      '</section>' +
+
+      '<section class="sign-card">' +
+        '<h2 class="sign-h">待簽核清單 <span class="sign-count" id="sign-count"></span></h2>' +
+        '<div class="sign-row sign-headrow"><label class="sign-chk"><input type="checkbox" id="sign-all" aria-label="全選" /></label>' +
+          '<span>表單名稱</span><span>程式代碼</span><span>單別</span><span>單號</span><span></span></div>' +
+        '<div id="sign-list"><div class="skeleton">載入中…</div></div>' +
+        '<div class="sign-foot">' +
+          '<button type="button" class="btn btn-secondary btn-sm" id="sign-clear">全部清除</button>' +
+          '<button type="button" class="btn" id="sign-ok" disabled>確認</button>' +
+        '</div>' +
+        '<p class="sign-note" id="sign-note"></p>' +
+        '<p class="modal-msg" id="sign-msg"></p>' +
+      '</section>';
+
+    function $(id) { return document.getElementById(id); }
+    var forms = [], imgs = [], picked = {}, pendingBlob = null, previewUrl = "", busy = false;
+    var pollTimer = null, statusTimer = null;
+    var alive = function () { return document.body.contains($("sign-list")); };
+    function msg(t) { $("sign-msg").textContent = t || ""; }
+
+    // ---- 清單 ----
+    function metaHtml(f) {
+      var m = [];
+      if (f.docName) m.push(esc(f.docName));
+      if (f.vendor) m.push(esc(f.vendor));
+      if (f.src) m.push(esc(f.src));
+      if (f.ts) m.push(esc(new Date(f.ts).toLocaleString("zh-TW", { hour12: false })));
+      var html = m.join(" · ");
+      if (f.f) html += ' <span class="sign-bad">' + esc(f.f) + '</span>';
+      else if (f.conf === "low") html += ' <span class="sign-bad">⚠ 辨識把握度不高,請對照 ERP 核對</span>';
+      return html;
+    }
+
+    function rowHtml(f, i) {
+      return '<div class="sign-row' + (f.f ? ' failed' : f.conf === "low" ? ' low' : '') + '" data-i="' + i + '">' +
+        '<label class="sign-chk"><input type="checkbox" class="sign-pick" aria-label="勾選"' + (picked[f.id] ? ' checked' : '') + ' /></label>' +
+        '<select class="sign-name" aria-label="表單名稱">' + signNameOptions(f.name) + '</select>' +
+        '<input class="sign-prog" value="' + esc(f.prog) + '" maxlength="10" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="程式代碼" />' +
+        '<input class="sign-dt" value="' + esc(f.docType) + '" inputmode="numeric" maxlength="6" autocomplete="off" aria-label="單別" />' +
+        '<input class="sign-dn" value="' + esc(f.docNo) + '" inputmode="numeric" maxlength="16" autocomplete="off" aria-label="單號" />' +
+        '<button type="button" class="rcv-del sign-del" aria-label="刪除這一張">刪除</button>' +
+        '<div class="sign-meta">' + metaHtml(f) + '</div>' +
       '</div>';
     }
 
-    function load() {
+    function updateButtons() {
+      var n = forms.filter(function (f) { return picked[f.id]; }).length;
+      $("sign-ok").disabled = busy || n < 1;
+      $("sign-ok").textContent = n ? "確認(" + n + " 張)" : "確認";
+      $("sign-clear").disabled = !forms.length;
+      $("sign-all").checked = forms.length > 0 && n === forms.length;
+      $("sign-count").textContent = forms.length ? "共 " + forms.length + " 張" : "";
+    }
+
+    function loadForms() {
       return api("signforms_list").then(function (res) {
         if (!res.ok) throw new Error(res.error || "讀取失敗");
         forms = res.forms || [];
-        box.innerHTML = forms.length
-          ? '<div class="rcv-count">共 ' + forms.length + ' 張待簽核</div>' + forms.map(itemHtml).join("")
-          : '<div class="empty-state">目前沒有待簽核表單</div>';
-        document.getElementById("sign-clear").disabled = !forms.length;
+        var ids = {};
+        forms.forEach(function (f) { ids[f.id] = true; });
+        Object.keys(picked).forEach(function (k) { if (!ids[k]) delete picked[k]; });
+        $("sign-list").innerHTML = forms.length ? forms.map(rowHtml).join("") : '<div class="empty-state">目前沒有待簽核表單</div>';
+        updateButtons();
       }).catch(function (err) {
-        if (!session) return;
-        box.innerHTML = '<div class="empty-state">' + esc(err.message) + '</div>';
+        if (session && alive()) $("sign-list").innerHTML = '<div class="empty-state">' + esc(err.message) + '</div>';
       });
     }
-    load();
 
-    document.getElementById("sign-refresh").addEventListener("click", function () { msg.textContent = ""; load(); });
-    document.getElementById("sign-clear").addEventListener("click", function () {
+    function readRow(row) {
+      return {
+        name: row.querySelector(".sign-name").value,
+        prog: row.querySelector(".sign-prog").value.trim().toUpperCase(),
+        docType: row.querySelector(".sign-dt").value.trim(),
+        docNo: row.querySelector(".sign-dn").value.trim()
+      };
+    }
+    function checkFields(v) {
+      if (!v.prog) return "請選擇表單名稱或填入程式代碼";
+      if (!/^\d{3,6}$/.test(v.docType)) return "單別必須是 3~6 位數字";
+      if (!/^\d{6,16}$/.test(v.docNo)) return "單號必須是 6~16 位數字(一般是 11 碼)";
+      return "";
+    }
+
+    // 欄位修改後自動儲存(離開欄位 / 選了下拉選單時);表單名稱與程式代碼互相連動
+    $("sign-list").addEventListener("change", function (e) {
+      var t = e.target, row = t.closest ? t.closest(".sign-row") : null;
+      if (!row || row.classList.contains("sign-headrow")) return;
+      var f = forms[parseInt(row.getAttribute("data-i"), 10)];
+      if (!f) return;
+      if (t.classList.contains("sign-pick")) {
+        if (t.checked) picked[f.id] = true; else delete picked[f.id];
+        updateButtons();
+        return;
+      }
+      linkNameAndCode(row, t);
+      var v = readRow(row), bad = checkFields(v);
+      row.classList.toggle("invalid", !!bad);
+      if (bad) { msg(bad); return; }
+      msg("");
+      api("signforms_save", { id: f.id, name: v.name, prog: v.prog, docType: v.docType, docNo: v.docNo }).then(function (res) {
+        if (!res.ok) throw new Error(res.error || "儲存失敗");
+        forms[forms.indexOf(f)] = res.form;
+        row.classList.remove("failed", "low", "invalid");
+        row.querySelector(".sign-meta").innerHTML = metaHtml(res.form);
+      }).catch(function (err) {
+        if (!session) return;
+        msg(err.message);
+        loadForms();   // 存不進去(例如重複)就還原成伺服器上的內容
+      });
+    });
+
+    function linkNameAndCode(row, changed) {
+      var sel = row.querySelector(".sign-name, #add-name"), prog = row.querySelector(".sign-prog, #add-prog");
+      if (changed === sel) {
+        var code = signCodeOfName(sel.value);
+        if (code) prog.value = code;
+      } else if (changed === prog) {
+        prog.value = prog.value.trim().toUpperCase();
+        var nm = signNameOfCode(prog.value);
+        if (nm && sel.value !== nm) {
+          // 一個代碼可能對應多個表單名稱(例如 INVI05):目前選的名稱本來就屬於這個代碼就不動
+          if (signCodeOfName(sel.value) !== prog.value) sel.value = nm;
+        } else if (!nm) {
+          sel.value = "";
+        }
+      }
+    }
+
+    $("sign-list").addEventListener("click", function (e) {
+      var b = e.target.closest ? e.target.closest(".sign-del") : null;
+      if (!b) return;
+      var row = b.closest(".sign-row"), f = forms[parseInt(row.getAttribute("data-i"), 10)];
+      if (!f) return;
+      if (!window.confirm("確定要刪除這張待簽核表單嗎?\n\n" + (f.name || f.prog) + " " + f.docType + "-" + f.docNo)) return;
+      b.disabled = true;
+      api("signforms_delete", { id: f.id }).then(function (res) {
+        if (!res.ok) throw new Error(res.error || "刪除失敗");
+        delete picked[f.id];
+        msg("");
+        return loadForms();
+      }).catch(function (err) { if (session) { msg(err.message); loadForms(); } });
+    });
+
+    $("sign-all").addEventListener("change", function () {
+      picked = {};
+      if ($("sign-all").checked) forms.forEach(function (f) { picked[f.id] = true; });
+      Array.prototype.forEach.call(document.querySelectorAll("#sign-list .sign-pick"), function (c) { c.checked = $("sign-all").checked; });
+      updateButtons();
+    });
+
+    $("sign-clear").addEventListener("click", function () {
       if (!forms.length || !window.confirm("確定要清除全部 " + forms.length + " 張待簽核表單嗎?\n\n此動作無法復原。")) return;
       api("signforms_delete", { all: true }).then(function (res) {
         if (!res.ok) throw new Error(res.error || "清除失敗");
+        picked = {};
         showToast("已清除");
-        return load();
-      }).catch(function (err) { if (session) msg.textContent = err.message; });
+        return loadForms();
+      }).catch(function (err) { if (session) msg(err.message); });
     });
-    box.addEventListener("click", function (e) {
-      var b = e.target.closest ? e.target.closest(".rcv-del") : null;
-      if (!b || b.disabled) return;
-      var f = forms[parseInt(b.getAttribute("data-i"), 10)];
-      if (!f) return;
-      if (!window.confirm("確定要刪除這張待簽核表單嗎?\n\n" + f.docType + "-" + f.docNo + (f.docName ? " " + f.docName : "") + (f.vendor ? " · " + f.vendor : ""))) return;
-      b.disabled = true;
-      api("signforms_delete", { key: f.key }).then(function (res) {
-        if (!res.ok) throw new Error(res.error || "刪除失敗");
-        msg.textContent = "";
-        return load();
-      }).catch(function (err) {
-        if (!session) return;
-        msg.textContent = err.message;
-        b.disabled = false;
-        load();
-      });
+
+    // ---- 手動新增 ----
+    $("add-name").addEventListener("change", function () { linkNameAndCode($("add-name").closest(".sign-row"), $("add-name")); });
+    $("add-prog").addEventListener("change", function () { linkNameAndCode($("add-prog").closest(".sign-row"), $("add-prog")); });
+    $("add-ok").addEventListener("click", function () {
+      var v = { name: $("add-name").value, prog: $("add-prog").value.trim().toUpperCase(), docType: $("add-dt").value.trim(), docNo: $("add-dn").value.trim() };
+      var bad = checkFields(v);
+      if (bad) { msg(bad); return; }
+      $("add-ok").disabled = true;
+      api("signforms_save", v).then(function (res) {
+        if (!res.ok) throw new Error(res.error || "新增失敗");
+        msg("");
+        $("add-dn").value = "";   // 表單名稱 / 單別留著,方便連續輸入同一種表單
+        showToast("已新增");
+        return loadForms();
+      }).catch(function (err) { if (session) msg(err.message); }).then(function () { $("add-ok").disabled = false; });
     });
+
+    // ---- 截圖上傳 ----
+    function setImage(blob) {
+      if (!blob) return;
+      if (!/^image\//.test(blob.type || "")) { msg("這不是圖片檔"); return; }
+      if (blob.size > SIGN_IMG_MAX) { msg("圖片太大(" + Math.round(blob.size / 1024) + " KB,上限約 1.6 MB),請只截取 ERP 視窗,不要截整個螢幕"); return; }
+      msg("");
+      pendingBlob = blob;
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      previewUrl = URL.createObjectURL(blob);
+      $("sign-preview").src = previewUrl;
+      $("sign-preview").hidden = false;
+      $("sign-drop-text").textContent = "已選擇圖片(" + Math.round(blob.size / 1024) + " KB),按「上傳辨識」送出;要換圖請再貼上一次";
+      $("sign-upload").disabled = false;
+    }
+    signPage = { setImage: setImage };
+
+    $("sign-file").addEventListener("change", function () { setImage($("sign-file").files[0]); $("sign-file").value = ""; });
+    $("sign-drop").addEventListener("dragover", function (e) { e.preventDefault(); });
+    $("sign-drop").addEventListener("drop", function (e) {
+      e.preventDefault();
+      var fl = e.dataTransfer && e.dataTransfer.files;
+      if (fl && fl.length) setImage(fl[0]);
+    });
+    $("sign-upload").addEventListener("click", function () {
+      if (!pendingBlob) return;
+      var blob = pendingBlob;
+      $("sign-upload").disabled = true;
+      msg("上傳中…");
+      var reader = new FileReader();
+      reader.onload = function () {
+        api("signimg_upload", { name: blob.name || "貼上的截圖", data: reader.result }).then(function (res) {
+          if (!res.ok) throw new Error(res.error || "上傳失敗");
+          msg("");
+          showToast("已上傳,約 1~2 分鐘內辨識完成");
+          pendingBlob = null;
+          $("sign-preview").hidden = true;
+          $("sign-drop-text").textContent = "在這裡按 Ctrl+V 貼上截圖,或把圖片拖進來";
+          return loadImgs();
+        }).catch(function (err) {
+          if (!session) return;
+          msg(err.message);
+          $("sign-upload").disabled = false;
+        });
+      };
+      reader.onerror = function () { msg("讀取圖片失敗"); $("sign-upload").disabled = false; };
+      reader.readAsDataURL(blob);
+    });
+
+    function whoShort(by) { return String(by || "").split("@")[0]; }
+    function imgText(r) {
+      if (r.state === "queued") return "等待電腦取圖…";
+      if (r.state === "processing") return "辨識中…";
+      if (r.state === "done") return "✓ " + (r.msg || "完成");
+      return "⚠ " + (r.msg || "失敗");
+    }
+    function loadImgs() {
+      return api("signimg_list").then(function (res) {
+        if (!res.ok || !alive()) return;
+        var prevBusy = {};
+        imgs.forEach(function (r) { if (r.state === "queued" || r.state === "processing") prevBusy[r.id] = true; });
+        imgs = res.images || [];
+        $("sign-imgs").innerHTML = imgs.slice(0, 6).map(function (r) {
+          var cls = r.state === "error" ? " bad" : r.state === "done" ? " ok" : "";
+          return '<div class="sign-img-row' + cls + '"><span class="t">' + esc(new Date(r.ts).toLocaleTimeString("zh-TW", { hour12: false })) +
+            ' · ' + esc(whoShort(r.by)) + '</span><span>' + esc(imgText(r)) + '</span></div>';
+        }).join("");
+        var finished = imgs.some(function (r) { return prevBusy[r.id] && (r.state === "done" || r.state === "error"); });
+        if (finished) loadForms();   // 剛辨識完:清單重新讀一次
+        var stillBusy = imgs.some(function (r) { return r.state === "queued" || r.state === "processing"; });
+        clearTimeout(pollTimer);
+        if (stillBusy) pollTimer = setTimeout(function () { if (alive()) loadImgs(); }, 6000);
+      }).catch(function () { /* 讀不到不影響使用 */ });
+    }
+
+    // ---- 確認:送出簽核請求(同進貨單簽核) ----
+    function loadStatus() {
+      return api("sign_status").then(function (res) {
+        if (!res.ok || !alive()) return;
+        var s = puriStatusText(res);
+        $("sign-note").textContent = s.text;
+        var wasBusy = busy;
+        busy = s.busy;
+        updateButtons();
+        clearTimeout(statusTimer);
+        if (s.busy) statusTimer = setTimeout(function () { if (alive()) loadStatus(); }, 15000);
+        else if (wasBusy) loadForms();   // 簽核剛結束:成功的已從清單移除,失敗的有標示
+      }).catch(function () { /* 讀不到狀態不影響使用 */ });
+    }
+
+    $("sign-ok").addEventListener("click", function () {
+      var sel = forms.filter(function (f) { return picked[f.id]; });
+      if (!sel.length) return;
+      var lines = sel.slice(0, 12).map(function (f) { return (f.name || f.prog) + " " + f.docType + "-" + f.docNo; }).join("\n");
+      if (!window.confirm("確定要簽核勾選的 " + sel.length + " 張表單嗎?\n\n" + lines + (sel.length > 12 ? "\n…" : "") +
+        "\n\n按確認後,電腦上的 Claude 會在鼎新 ERP 逐張簽核,執行期間該電腦的畫面會被自動操作。")) return;
+      $("sign-ok").disabled = true;
+      msg("送出中…");
+      api("sign_request", { ids: sel.map(function (f) { return f.id; }) }).then(function (res) {
+        if (!res.ok) throw new Error(res.error || "送出失敗");
+        msg("");
+        showToast("已送出簽核請求");
+        return loadStatus();
+      }).catch(function (err) { if (session) { msg(err.message); updateButtons(); } });
+    });
+
+    $("sign-refresh").addEventListener("click", function () { msg(""); loadForms(); loadImgs(); loadStatus(); });
+
+    loadForms();
+    loadImgs();
+    loadStatus();
   }
 
   function renderErp(app, sub) {
@@ -2566,6 +2839,19 @@
 
     var scanBtn = document.getElementById("scan-btn");
     if (scanBtn) scanBtn.addEventListener("click", openScanner);
+
+    // 待簽核表單頁:按 Ctrl+V 貼上截圖(只攔截剪貼簿裡的圖片,貼文字照常)
+    document.addEventListener("paste", function (e) {
+      if (!signPage) return;
+      var items = (e.clipboardData && e.clipboardData.items) || [];
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].type && items[i].type.indexOf("image/") === 0) {
+          signPage.setImage(items[i].getAsFile());
+          e.preventDefault();
+          return;
+        }
+      }
+    });
 
     var appEl = document.getElementById("app");
     if (appEl) {
