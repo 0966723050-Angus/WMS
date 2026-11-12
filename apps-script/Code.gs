@@ -868,7 +868,8 @@ function doPost(e) {
     }
     if (action.indexOf('sign') === 0 && ['signforms_list', 'signforms_save', 'signforms_delete', 'sign_status', 'sign_request',
         'signimg_upload', 'signimg_list'].indexOf(action) !== -1) {
-      if (!me.perms.erp_sign) return denied_('待簽核表單');
+      // 待簽核表單頁面所有登入同仁都能用(看清單、上傳截圖、編輯、刪除);erp_sign 權限只管「確認」鍵(sign_request)
+      if (action === 'sign_request' && !me.perms.erp_sign) return denied_('待簽核表單確認');
       if (action === 'signforms_list') return json_({ ok: true, forms: listSignForms_() });
       if (action === 'signforms_save') return json_(saveSignForm_(body, me));
       if (action === 'signforms_delete') return json_(deleteSignForm_(body));

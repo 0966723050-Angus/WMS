@@ -119,16 +119,15 @@
     { key: "ret", label: "退料" },
     { key: "erp_receipt", label: "ERP:進貨單簽核" },
     { key: "erp_return", label: "ERP:退貨單簽核" },
-    { key: "erp_sign", label: "ERP:待簽核表單" },
+    { key: "erp_sign", label: "ERP:待簽核表單確認" },
     { key: "erp_wms", label: "ERP:WMS更新" }
   ];
   var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_sign: false, erp_wms: false };
 
   function can(perm) { return !!(session && session.perms && session.perms[perm]); }
 
-  function canSeeErp() {
-    return can("admin") || can("erp_receipt") || can("erp_return") || can("erp_sign") || can("erp_wms");
-  }
+  // 「待簽核表單」頁所有登入同仁都能進(權限 erp_sign 只管該頁的「確認」鍵),所以 ERP 頁一律可進
+  function canSeeErp() { return !!session; }
 
   // 舊版登入資料沒有 perms:管理者視為全部權限,其他人視為只有儲位編輯
   function withPerms(s) {
@@ -1183,7 +1182,7 @@
   }
 
   function renderErpSign(app) {
-    if (!can("erp_sign")) { location.hash = "#/erp"; return; }
+    var canConfirm = can("erp_sign");   // 只有「確認」鍵需要權限
     app.innerHTML =
       '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/erp">ERP</a> / 待簽核表單</div>' +
       '<h1 class="page-title page-title-row"><span>待簽核表單</span>' +
@@ -1262,7 +1261,8 @@
 
     function updateButtons() {
       var n = forms.filter(function (f) { return picked[f.id]; }).length;
-      $("sign-ok").disabled = busy || n < 1;
+      $("sign-ok").disabled = busy || n < 1 || !canConfirm;
+      $("sign-ok").title = canConfirm ? "" : "需要「ERP:待簽核表單確認」權限,請聯絡管理者";
       $("sign-ok").textContent = n ? "確認(" + n + " 張)" : "確認";
       $("sign-clear").disabled = !forms.length;
       $("sign-all").checked = forms.length > 0 && n === forms.length;
@@ -1522,6 +1522,7 @@
       if (alive() && document.visibilityState === "visible") tick();
     });
 
+    if (!canConfirm) msg("您沒有「確認」的權限(其他功能都可以使用),需要送出簽核請管理者開通「ERP:待簽核表單確認」。");
     loadForms();
     loadImgs();
     loadStatus();
@@ -1554,11 +1555,9 @@
               '<span class="erp-tile-icon">' + ERP_ICONS.ret + '</span><span class="erp-tile-title">退貨單簽核</span>' +
               '<span class="erp-tile-note" id="ret-note"></span></button>'
             : '') +
-          (can("erp_sign")
-            ? '<a class="erp-tile" href="#/erp/sign">' +
-              '<span class="erp-tile-icon">' + ERP_ICONS.sign + '</span><span class="erp-tile-title">待簽核表單</span>' +
-              '<span class="erp-tile-note" id="sign-note"></span></a>'
-            : '') +
+          '<a class="erp-tile" href="#/erp/sign">' +
+            '<span class="erp-tile-icon">' + ERP_ICONS.sign + '</span><span class="erp-tile-title">待簽核表單</span>' +
+            '<span class="erp-tile-note" id="sign-note"></span></a>' +
           (can("erp_wms")
             ? '<button type="button" class="erp-tile erp-tile-wms" id="wms-update-btn">' +
               '<span class="erp-tile-icon">' + ERP_ICONS.wms + '</span><span class="erp-tile-title">WMS更新</span>' +
@@ -1568,12 +1567,10 @@
         '</div>';
       if (can("erp_receipt")) setupPuri09("receipt");
       if (can("erp_return")) setupPuri09("ret");
-      if (can("erp_sign")) {
-        api("signforms_list").then(function (res) {
-          var n = document.getElementById("sign-note");
-          if (n && res.ok && res.forms && res.forms.length) n.textContent = res.forms.length + " 張待簽核";
-        }).catch(function () { /* 讀不到不影響使用 */ });
-      }
+      api("signforms_list").then(function (res) {
+        var n = document.getElementById("sign-note");
+        if (n && res.ok && res.forms && res.forms.length) n.textContent = res.forms.length + " 張待簽核";
+      }).catch(function () { /* 讀不到不影響使用 */ });
       if (can("erp_wms")) setupWmsUpdate();
       if (isAdmin && can("erp_wms")) {
         api("sched_get").then(function (res) {
