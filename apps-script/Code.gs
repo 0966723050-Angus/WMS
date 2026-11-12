@@ -577,6 +577,20 @@ function requestSign_(body, user) {
   return { ok: true, count: items.length };
 }
 
+// 電腦端已把請求裡的表單寫進 WMS.xlsx「待簽核清單」:從網站清單移除這幾張、清掉請求、狀態記為完成
+function signAck_(ts, msg) {
+  var req = readJson_(KINDS.sign.reqKey);
+  if (!req) return { ok: true, removed: 0 };
+  if (ts && String(req.ts) !== String(ts)) return { ok: false, error: '請求已變更' };
+  var removed = 0;
+  (req.items || []).forEach(function (it) {
+    if (props_().getProperty(SIGN_PREFIX + it.id) !== null) { props_().deleteProperty(SIGN_PREFIX + it.id); removed++; }
+  });
+  props_().deleteProperty(KINDS.sign.reqKey);
+  props_().setProperty(KINDS.sign.statusKey, JSON.stringify({ state: 'done', msg: clip_(msg, 300), ts: Date.now(), by: req.by || '' }));
+  return { ok: true, removed: removed };
+}
+
 // 執行端(Claude)回報逐張結果:done 的從清單移除;failed 的留著並寫上失敗原因,網頁會標示
 function signResult_(body) {
   var done = Array.isArray(body.done) ? body.done.map(String) : [];
@@ -905,7 +919,7 @@ function doGet(e) {
   try {
     if (p.action === 'pull' || p.action === 'ack' || p.action === 'set_data_key' || p.action === 'wms_report' ||
         p.action === 'puri09_claim' || p.action === 'puri09_report' || p.action === 'ret_claim' || p.action === 'ret_report' ||
-        p.action === 'sign_claim' || p.action === 'sign_report' || p.action === 'signimg_get' || p.action === 'signimg_report') {
+        p.action === 'sign_claim' || p.action === 'sign_report' || p.action === 'sign_ack' || p.action === 'signimg_get' || p.action === 'signimg_report') {
       var err = checkSyncKey_(p.key);
       if (err) return json_({ ok: false, error: err });
 
@@ -914,6 +928,7 @@ function doGet(e) {
       if (p.action === 'ret_claim') return json_(puriClaim_('ret'));
       if (p.action === 'ret_report') return json_(puriReport_(String(p.state || ''), p.msg, 'ret'));
       if (p.action === 'sign_claim') return json_(puriClaim_('sign'));
+      if (p.action === 'sign_ack') return json_(signAck_(p.ts, p.msg));
       if (p.action === 'sign_report') {
         var sres = puriReport_(String(p.state || ''), p.msg, 'sign');
         if (sres.ok && (p.done || p.failed)) {   // 逐張結果(done=id 以逗號分隔;failed=id:原因;id:原因)
@@ -929,7 +944,7 @@ function doGet(e) {
 
       if (p.action === 'pull') return json_({
         ok: true, edits: listPending_(), receipts: listReceipts_('receipt'), deletes: listDeletes_('receipt'),
-        returns: listReceipts_('ret'), returnDeletes: listDeletes_('ret'), signImages: claimSignImages_(), signForms: listSignForms_(),
+        returns: listReceipts_('ret'), returnDeletes: listDeletes_('ret'), signImages: claimSignImages_(), signRequest: readJson_(KINDS.sign.reqKey),
         wms: readJson_(WMS_REQ_KEY), schedules: getSchedules_()
       });
 

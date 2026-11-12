@@ -1,16 +1,16 @@
-"""WMS.xlsx「待簽核清單」工作表:網站「待簽核表單」清單的鏡像,供 ERP 執行表單簽核時讀取。
+"""WMS.xlsx「待簽核清單」工作表:同事在網站「待簽核表單」頁按下「確認」的表單,供 ERP 執行表單簽核時讀取。
 
-欄位:日期(加入時間)、表單名稱、程式代碼、單別、單號、廠商、來源、上傳者、狀態、ID
-- 網站清單是唯一來源:每次(排程約每分鐘)依 pull 回來的 signForms 同步 ——
-  新的表單接在最後、改過的欄位更新、網站已刪除或簽核完成的就從工作表移除。
-- 「ID」是網站表單的識別碼,簽核結果回報(sign_report)要靠它對應;請不要改動。
-- 「狀態」空白 = 待簽核;簽核失敗時會顯示失敗原因。
-- ID 欄是空的列(使用者自己手動加的)不會被動到。
+欄位:日期(按下確認的時間)、表單名稱、程式代碼、單別、單號、廠商、來源、上傳者、狀態、ID
+- 只有在網站按「確認」時才寫入(apply_edits 約每分鐘取一次請求):勾選的表單依序接在工作表最後,
+  寫入成功後網站才把這幾張從待簽核清單移除。
+- 同一張(程式代碼+單別+單號)已經在工作表裡就不重複寫入,但網站清單照樣移除。
+- 簽核完成的列由執行端清除;簽核失敗的列留著,「狀態」寫失敗原因。
+- 「ID」是網站表單的識別碼,請不要改動。
 """
 import datetime
-import json
 import os
 import shutil
+import time
 
 import openpyxl
 from openpyxl.styles import Alignment, Font
@@ -83,90 +83,61 @@ def _set(ws, r, values):
             cell.font = Font(name=ref.font.name, size=ref.font.sz)
 
 
-def sync_workbook(wb, forms):
-    """把 forms(網站清單)同步到工作表。回傳 (新增, 更新, 移除) 筆數。"""
-    ws, _ = ensure_sheet(wb)
-    want = {}
-    for f in sorted(forms, key=lambda x: x.get("ts", 0)):
-        if f.get("id"):
-            want[str(f["id"])] = f
-    id_col = HEADERS.index("ID") + 1
-    existing = {}          # id -> row
-    drop = []
+def _existing_keys(ws):
+    keys = set()
     for r in range(2, ws.max_row + 1):
-        rid = ws.cell(r, id_col).value
-        rid = str(rid).strip() if rid is not None else ""
-        if not rid:
-            continue   # 使用者手動加的列,不動
-        if rid in want and rid not in existing:
-            existing[rid] = r
-        else:
-            drop.append(r)   # 網站已經沒有這張(或重複列)
-    added = updated = 0
-    for rid, r in existing.items():
-        vals = _row_values(want[rid])
-        cur = [ws.cell(r, c).value for c in range(1, len(HEADERS) + 1)]
-        cur = ["" if v is None else str(v) for v in cur]
-        if cur != vals:
-            _set(ws, r, vals)
-            updated += 1
-    for r in sorted(drop, reverse=True):
-        ws.delete_rows(r)
-    for rid, f in want.items():
-        if rid in existing:
+        k = (str(ws.cell(r, 3).value or "").strip(), str(ws.cell(r, 4).value or "").strip(), str(ws.cell(r, 5).value or "").strip())
+        if k[2]:
+            keys.add(k)
+    return keys
+
+
+def append_workbook(wb, items, ts):
+    """把 items 接在工作表最後(已存在的略過)。回傳 (寫入, 略過) 筆數。"""
+    ws, _ = ensure_sheet(wb)
+    have = _existing_keys(ws)
+    added = skipped = 0
+    for f in items:
+        key = (str(f.get("prog") or "").strip(), str(f.get("docType") or "").strip(), str(f.get("docNo") or "").strip())
+        if key in have:
+            skipped += 1
             continue
         r = ws.max_row + 1
-        # 找最後一個有內容的列再接下去(避免被格式撐大的空白列)
         while r > 2 and all(ws.cell(r - 1, c).value is None for c in range(1, len(HEADERS) + 1)):
-            r -= 1
-        _set(ws, r, _row_values(f))
+            r -= 1   # 避免被格式撐大的空白列
+        row = dict(f)
+        row["ts"] = ts
+        _set(ws, r, _row_values(row))
+        have.add(key)
         added += 1
-    return added, updated, len(drop)
+    return added, skipped
 
 
-def _mtime(path):
-    try:
-        return os.path.getmtime(path)
-    except OSError:
-        return None
-
-
-def _signature(forms):
-    return json.dumps([_row_values(f) for f in sorted(forms, key=lambda x: (x.get("ts", 0), str(x.get("id"))))],
-                      ensure_ascii=False)
-
-
-def sync(master, drive_copy, forms, state_path, log=print, force=False):
-    """與上次同步內容相同就不動檔案。回傳 True 表示有寫入。檔案被鎖住時回傳 False 留待下次。"""
-    sig = _signature(forms)
-    try:
-        with open(state_path, encoding="utf-8") as f:
-            st = json.load(f)
-    except Exception:
-        st = {}
-    last = st.get("sig")
-    # 清單沒變、主檔也沒被別人(例如 WMS 一鍵更新、ERP 清除)動過就不用重寫
-    if last == sig and st.get("mtime") == _mtime(master) and not force:
-        return False
+def append(master, drive_copy, items, ts, log=print):
+    """寫入 WMS.xlsx 並複製到雲端硬碟。成功回傳 (寫入, 略過);檔案被 Excel 開著/鎖住回傳 None(留待下次)。"""
     master_dir, master_name = os.path.split(master)
     if os.path.exists(os.path.join(master_dir, "~$" + master_name)):
-        log("待簽核清單:主檔目前被 Excel 開啟,留待下次同步")
-        return False
+        log("待簽核清單:主檔目前被 Excel 開啟,留待下次")
+        return None
     try:
         wb = openpyxl.load_workbook(master)
-        added, updated, removed = sync_workbook(wb, forms)
-        if added or updated or removed or SHEET not in wb.sheetnames or last is None:
-            tmp = master + ".signtmp"
-            wb.save(tmp)
-            os.replace(tmp, master)   # 先存暫存檔再換掉,寫到一半中斷也不會弄壞主檔
+        added, skipped = append_workbook(wb, items, ts)
+        tmp = master + ".signtmp"
+        wb.save(tmp)
+        for attempt in range(6):   # 防毒 / 雲端硬碟剛好在讀檔時會短暫拒絕取代,等一下再試
             try:
-                shutil.copy2(master, drive_copy)
-            except Exception as ex:
-                log("警告: 待簽核清單已寫入主檔,但複製到雲端硬碟失敗(下次 WMS 更新時會一併複製): %s" % ex)
-            log("待簽核清單:新增 %d、更新 %d、移除 %d(目前共 %d 張)" % (added, updated, removed, len(forms)))
+                os.replace(tmp, master)   # 先存暫存檔再換掉,寫到一半中斷也不會弄壞主檔
+                break
+            except PermissionError:
+                if attempt == 5:
+                    raise
+                time.sleep(1.5)
     except PermissionError as ex:
         log("待簽核清單:主檔無法寫入(可能被開啟),留待下次: %s" % ex)
-        return False
-    with open(state_path, "w", encoding="utf-8") as f:
-        json.dump({"sig": sig, "mtime": _mtime(master)}, f, ensure_ascii=False)
-    return True
+        return None
+    try:
+        shutil.copy2(master, drive_copy)
+    except Exception as ex:
+        log("警告: 待簽核清單已寫入主檔,但複製到雲端硬碟失敗(下次 WMS 更新時會一併複製): %s" % ex)
+    log("待簽核清單:寫入 %d 張,已在清單中略過 %d 張" % (added, skipped))
+    return added, skipped

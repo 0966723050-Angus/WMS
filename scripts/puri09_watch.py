@@ -3,7 +3,7 @@
 每 10 秒向中繼服務取一次請求(puri09_claim:取走即標記為執行中)。
 取到進貨單請求時,在標準輸出印一行 "PURI09_REQUEST by=<帳號>",Monitor 會把這一行當成通知喚醒 Claude 去執行 puri09 skill;
 同時也檢查「退貨單簽核」的佇列(ret_claim),取到時印 "RETURN_REQUEST by=<帳號>";
-以及「待簽核表單」的簽核請求(sign_claim),取到時印 "SIGN_REQUEST by=<帳號> count=<張數>"。
+(「待簽核表單」按確認後是由 apply_edits 寫進 WMS.xlsx「待簽核清單」,不經過這個監看器。)
 連續讀取失敗時,每次失敗串只印一行 "PURI09_WATCH_ERROR ..." 提醒。沒有請求時不輸出任何東西。
 
 用法: python -I scripts\\puri09_watch.py            (一直執行,由 Monitor 到期時結束它)
@@ -52,14 +52,6 @@ def main(argv):
                 res2 = claim(endpoint, key, "ret_claim")
                 if res2.get("ok") and res2.get("pending"):
                     print("RETURN_REQUEST by=%s" % (res2.get("request") or {}).get("by", ""), flush=True)
-            except Exception:
-                pass
-            # 待簽核表單的簽核請求(sign_claim);請求內容在 request.items
-            try:
-                res3 = claim(endpoint, key, "sign_claim")
-                if res3.get("ok") and res3.get("pending"):
-                    req = res3.get("request") or {}
-                    print("SIGN_REQUEST by=%s count=%d" % (req.get("by", ""), len(req.get("items") or [])), flush=True)
             except Exception:
                 pass
         except Exception as ex:

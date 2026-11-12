@@ -1483,6 +1483,7 @@
       return api("sign_status").then(function (res) {
         if (!res.ok || !alive()) return;
         var s = puriStatusText(res);
+        if (res.queued) s.text = "已送出,約 1 分鐘內寫入待簽核清單";
         $("sign-note").textContent = s.text;
         var wasBusy = busy;
         busy = s.busy;
@@ -1495,14 +1496,14 @@
       var sel = forms.filter(function (f) { return picked[f.id]; });
       if (!sel.length) return;
       var lines = sel.slice(0, 12).map(function (f) { return (f.name || f.prog) + " " + f.docType + "-" + f.docNo + (f.vendor ? " · " + f.vendor : ""); }).join("\n");
-      if (!window.confirm("確定要簽核勾選的 " + sel.length + " 張表單嗎?\n\n" + lines + (sel.length > 12 ? "\n…" : "") +
-        "\n\n按確認後,電腦上的 Claude 會在鼎新 ERP 逐張簽核,執行期間該電腦的畫面會被自動操作。")) return;
+      if (!window.confirm("確定要把勾選的 " + sel.length + " 張表單送去簽核嗎?\n\n" + lines + (sel.length > 12 ? "\n…" : "") +
+        "\n\n按確認後會寫入 WMS.xlsx「待簽核清單」,並從這個清單移除。")) return;
       $("sign-ok").disabled = true;
       msg("送出中…");
       api("sign_request", { ids: sel.map(function (f) { return f.id; }) }).then(function (res) {
         if (!res.ok) throw new Error(res.error || "送出失敗");
         msg("");
-        showToast("已送出簽核請求");
+        showToast("已送出,稍後寫入待簽核清單");
         return loadStatus();
       }).catch(function (err) { if (session) { msg(err.message); updateButtons(); } });
     });
