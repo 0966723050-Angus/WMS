@@ -301,7 +301,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); width:
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 13px 14px 13px 18px;
+  padding: 18px 16px 18px 20px;
   cursor: pointer;
   user-select: none;
 }
@@ -320,14 +320,16 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); width:
 .project-card.open .project-card-head::before { opacity: 1; }
 .project-code-link {
   font-weight: 800;
-  font-size: 15.5px;
+  font-size: 19px;
+  line-height: 1.35;
   letter-spacing: 0.3px;
 }
 .project-name {
   display: block;
-  font-size: 13px;
+  font-size: 16px;
+  line-height: 1.5;
   color: var(--text);
-  margin-top: 3px;
+  margin-top: 6px;
   font-weight: 600;
 }
 .project-meta { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
@@ -335,14 +337,14 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); width:
   background: var(--brand-soft);
   color: var(--brand);
   border-radius: 999px;
-  padding: 3px 10px;
-  font-size: 12px;
+  padding: 5px 13px;
+  font-size: 14px;
   font-weight: 700;
   white-space: nowrap;
 }
 .chevron {
-  width: 28px; height: 28px;
-  padding: 5px;
+  width: 34px; height: 34px;
+  padding: 7px;
   border-radius: 50%;
   background: var(--surface-alt);
   transition: transform 0.2s var(--ease), background 0.15s ease, color 0.15s ease;
@@ -362,10 +364,11 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); width:
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 11px 16px 11px 18px;
+  gap: 10px;
+  padding: 18px 18px 18px 20px;
   border-top: 1px solid var(--border);
-  font-size: 13.5px;
+  font-size: 17px;
+  line-height: 1.5;
   transition: background 0.15s ease;
 }
 .order-row:first-child { border-top: none; }
@@ -373,13 +376,15 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); width:
 .order-row .order-link { font-weight: 700; color: var(--blue); }
 .order-row .order-product {
   color: var(--text);
-  font-size: 12.5px;
+  font-size: 15.5px;
+  line-height: 1.55;
   font-weight: 600;
   display: block;
-  margin-top: 2px;
+  margin-top: 5px;
 }
 .order-row .order-right { text-align: right; flex-shrink: 0; }
-.order-counts { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; font-size: 12.5px; }
+.order-counts { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 8px; font-size: 15px; line-height: 1.5; }
+.order-row .status-pill { font-size: 13.5px; padding: 5px 13px; }
 .order-counts span { font-weight: 700; }
 .cnt-ok { color: var(--ok-text); }
 .cnt-pending { color: var(--warn-text); }
