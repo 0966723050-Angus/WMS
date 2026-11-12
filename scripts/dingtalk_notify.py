@@ -63,6 +63,8 @@ def build_text(items, total=None):
         if by:
             s += "(%s)" % by
         lines.append(s)
+        if it.get("img"):
+            lines.append("   圖片: " + it["img"])
     if len(items) > MAX_LISTED:
         lines.append("…另有 %d 張" % (len(items) - MAX_LISTED))
     if total:

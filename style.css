@@ -1216,12 +1216,14 @@ body.scan-open .modal-backdrop { -webkit-backdrop-filter: none; backdrop-filter:
 .sign-img-row.ok { color: var(--brand); }
 .sign-img-row.bad { color: var(--warn-text); font-weight: 700; }
 .sign-row {
-  display: grid; grid-template-columns: 34px minmax(120px, 1.3fr) minmax(86px, 0.85fr) minmax(64px, 0.6fr) minmax(120px, 1.2fr) minmax(100px, 1fr) minmax(150px, 1.6fr) auto;
+  display: grid; grid-template-columns: 34px minmax(120px, 1.3fr) minmax(86px, 0.85fr) minmax(64px, 0.6fr) minmax(120px, 1.2fr) minmax(100px, 1fr) minmax(150px, 1.6fr) minmax(46px, 0.4fr) 64px;   /* 最後一欄固定寬度,標題列與每一列的欄位才會對齊 */
   gap: 8px; align-items: center; padding: 8px 6px; border-top: 1px solid var(--border);
 }
-.sign-add { grid-template-columns: 34px minmax(120px, 1.3fr) minmax(86px, 0.85fr) minmax(64px, 0.6fr) minmax(120px, 1.2fr) minmax(100px, 1fr) auto; }
+.sign-add { grid-template-columns: 34px minmax(120px, 1.3fr) minmax(86px, 0.85fr) minmax(64px, 0.6fr) minmax(120px, 1.2fr) minmax(100px, 1fr) 64px; }
 .sign-by { font-size: 12.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .sign-by-l { display: none; font-style: normal; }
+.sign-img { font-size: 13px; white-space: nowrap; }
+.sign-img-l { display: none; font-style: normal; color: var(--text-muted); }
 .sign-headrow { font-size: 12.5px; font-weight: 700; color: var(--text-muted); border-top: none; padding-bottom: 2px; }
 .sign-chk { display: flex; align-items: center; justify-content: center; }
 .sign-row input:not([type="checkbox"]), .sign-row select {
@@ -1245,6 +1247,9 @@ body.scan-open .modal-backdrop { -webkit-backdrop-filter: none; backdrop-filter:
   .sign-add { grid-template-columns: 34px 1fr 1fr; }
   .sign-by { grid-column: 2 / -1; white-space: normal; word-break: break-all; }
   .sign-by-l { display: inline; }
+  .sign-img { grid-column: 2 / -1; }
+  .sign-img:empty { display: none; }
+  .sign-img-l { display: inline; }
   .sign-row .sign-dn, .sign-row .sign-vendor, .sign-row .sign-del, .sign-add > .btn { grid-column: 2 / -1; }
   .sign-row .sign-del, .sign-add > .btn { justify-self: end; }
 }

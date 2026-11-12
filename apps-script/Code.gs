@@ -502,6 +502,7 @@ function findSignForm_(all, prog, dt, dn, exceptId) {
 function pushSignForms_(body, by) {
   var forms = Array.isArray(body.forms) ? body.forms : [];
   var all = listSignForms_();
+  var imgRec = body.img ? readJson_(SIGNFILE_PREFIX + String(body.img)) : null;
   var now = Date.now(), added = 0, updated = 0, skipped = 0;
   forms.slice(0, 100).forEach(function (f) {
     if (!f) { skipped++; return; }
@@ -514,6 +515,7 @@ function pushSignForms_(body, by) {
     rec.docName = clip_(f.docName, 20); rec.vendor = c.vendor || rec.vendor || ''; rec.src = clip_(f.src, 10);
     rec.conf = f.conf === 'low' ? 'low' : 'high';      // low = 辨識把握度不高,網站會標示請人工核對
     rec.seen = now; rec.n = (rec.n || 0) + 1;
+    if (imgRec && !rec.imgUrl) { rec.imgId = imgRec.id; rec.imgUrl = imgRec.url; }   // 這張表單是從哪張截圖辨識出來的
     props_().setProperty(SIGN_PREFIX + rec.id, JSON.stringify(rec));
     if (old) updated++; else { added++; all.push(rec); queueSignNotify_(rec); }
   });
@@ -529,7 +531,7 @@ function pushSignForms_(body, by) {
 var SIGN_NOTIFY_KEY = 'SIGN_NOTIFY';
 function queueSignNotify_(rec) {
   var q = readJson_(SIGN_NOTIFY_KEY) || [];
-  q.push({ id: rec.id, ts: rec.ts, name: rec.name || '', prog: rec.prog, docType: rec.docType, docNo: rec.docNo, vendor: rec.vendor || '', by: rec.by || '', src: rec.src || '' });
+  q.push({ id: rec.id, ts: rec.ts, name: rec.name || '', prog: rec.prog, docType: rec.docType, docNo: rec.docNo, vendor: rec.vendor || '', by: rec.by || '', src: rec.src || '', img: rec.imgUrl || '' });
   if (q.length > 100) q = q.slice(q.length - 100);
   props_().setProperty(SIGN_NOTIFY_KEY, JSON.stringify(q));
 }
@@ -590,7 +592,7 @@ function requestSign_(body, user) {
   for (var i = 0; i < ids.length; i++) {
     var r = byId[ids[i]];
     if (!r) return { ok: false, error: '有表單已經不存在,請重新整理後再勾選' };
-    items.push({ id: r.id, name: r.name || '', prog: r.prog, docType: r.docType, docNo: r.docNo, vendor: r.vendor || '' });
+    items.push({ id: r.id, name: r.name || '', prog: r.prog, docType: r.docType, docNo: r.docNo, vendor: r.vendor || '', img: r.imgUrl || '' });
   }
   props_().setProperty(KINDS.sign.reqKey, JSON.stringify({ ts: Date.now(), by: user.email, items: items }));
   return { ok: true, count: items.length };
@@ -686,9 +688,67 @@ function uploadSignImage_(body, user) {
   CacheService.getScriptCache().putAll(obj, SIGNIMG_TTL);
   var rec = { id: id, ts: Date.now(), by: user.email, name: clip_(body.name, 40), parts: parts, size: data.length, state: 'queued', msg: '', n: 0 };
   props_().setProperty(SIGNIMG_PREFIX + id, JSON.stringify(rec));
+  saveSignImageFile_(id, data, rec.ts, user.email);   // 另存一份到雲端硬碟(7 天),讓待簽核清單有圖片連結;失敗不影響辨識
   all.unshift(rec);
   all.slice(KEEP_SIGNIMG).forEach(function (r) { removeSignImage_(r); });   // 只留最近的狀態紀錄
   return { ok: true, id: id };
+}
+
+// ---------- 截圖存檔(Google 雲端硬碟「ATK/待簽核截圖」,保留 7 天,到期移到垃圾桶並清掉清單上的連結) ----------
+// 需要雲端硬碟授權:第一次請在 Apps Script 編輯器執行 authorizeDrive() 並同意授權;沒授權時只是沒有圖片連結,其他功能照常。
+var SIGNFILE_PREFIX = 'sf_';
+var SIGNFILE_DAYS = 7;
+var SIGNFILE_FOLDER = '待簽核截圖';
+var SIGNFILE_PURGE_KEY = 'SIGNFILE_LAST_PURGE';
+
+function signFolder_() {
+  var it = DriveApp.getFoldersByName(SIGNFILE_FOLDER);
+  if (it.hasNext()) return it.next();
+  var p = DriveApp.getFoldersByName('ATK');
+  var f = (p.hasNext() ? p.next() : DriveApp.getRootFolder()).createFolder(SIGNFILE_FOLDER);
+  try { f.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) { /* 網域不允許就只有擁有者能開 */ }
+  return f;
+}
+
+// 在編輯器手動執行一次,取得雲端硬碟授權並建立資料夾
+function authorizeDrive() { return signFolder_().getUrl(); }
+
+function imageMime_(b64) {
+  return b64.indexOf('/9j/') === 0 ? 'image/jpeg' : b64.indexOf('UklGR') === 0 ? 'image/webp' : 'image/png';
+}
+
+function saveSignImageFile_(id, b64, ts, email) {
+  try {
+    var mime = imageMime_(b64), ext = mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : 'png';
+    var who = String(email || '').split('@')[0].replace(/[^A-Za-z0-9_.-]/g, '');
+    var name = Utilities.formatDate(new Date(ts), 'Asia/Taipei', 'yyyyMMdd-HHmmss') + '_' + who + '_' + id + '.' + ext;
+    var file = signFolder_().createFile(Utilities.newBlob(Utilities.base64Decode(b64), mime, name));
+    try { file.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) { /* 同上 */ }
+    var rec = { id: id, fileId: file.getId(), url: file.getUrl(), ts: ts, by: email };
+    props_().setProperty(SIGNFILE_PREFIX + id, JSON.stringify(rec));
+    return rec;
+  } catch (e) {
+    return null;
+  }
+}
+
+// 超過保留天數的截圖:檔案移到垃圾桶、紀錄刪除、清單上對應的連結清空。每小時最多做一次(由 pull 帶動)
+function purgeSignFiles_() {
+  var now = Date.now(), last = Number(props_().getProperty(SIGNFILE_PURGE_KEY) || 0);
+  if (now - last < 3600 * 1000) return 0;
+  props_().setProperty(SIGNFILE_PURGE_KEY, String(now));
+  var old = listByPrefix_(SIGNFILE_PREFIX).filter(function (r) { return now - r.ts > SIGNFILE_DAYS * 24 * 3600 * 1000; });
+  if (!old.length) return 0;
+  var gone = {};
+  old.forEach(function (r) {
+    try { DriveApp.getFileById(r.fileId).setTrashed(true); } catch (e) { /* 檔案已被刪除或沒授權 */ }
+    props_().deleteProperty(SIGNFILE_PREFIX + r.id);
+    gone[r.id] = true;
+  });
+  listSignForms_().forEach(function (f) {
+    if (f.imgId && gone[f.imgId]) { delete f.imgId; delete f.imgUrl; props_().setProperty(SIGN_PREFIX + f.id, JSON.stringify(f)); }
+  });
+  return old.length;
 }
 
 function removeSignImage_(rec) {
@@ -965,7 +1025,7 @@ function doGet(e) {
 
       if (p.action === 'pull') return json_({
         ok: true, edits: listPending_(), receipts: listReceipts_('receipt'), deletes: listDeletes_('receipt'),
-        returns: listReceipts_('ret'), returnDeletes: listDeletes_('ret'), signImages: claimSignImages_(), signRequest: readJson_(KINDS.sign.reqKey),
+        returns: listReceipts_('ret'), returnDeletes: listDeletes_('ret'), signImages: claimSignImages_(), signFilesPurged: purgeSignFiles_(), signRequest: readJson_(KINDS.sign.reqKey),
         signNotify: readJson_(SIGN_NOTIFY_KEY) || [], signTotal: listSignForms_().length,
         wms: readJson_(WMS_REQ_KEY), schedules: getSchedules_()
       });

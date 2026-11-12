@@ -1225,7 +1225,7 @@
       '<section class="sign-card">' +
         '<h2 class="sign-h">待簽核清單 <span class="sign-count" id="sign-count"></span></h2>' +
         '<div class="sign-row sign-headrow"><label class="sign-chk"><input type="checkbox" id="sign-all" aria-label="全選" /></label>' +
-          '<span>表單名稱</span><span>程式代碼</span><span>單別</span><span>單號</span><span>廠商</span><span>上傳者</span><span></span></div>' +
+          '<span>表單名稱</span><span>程式代碼</span><span>單別</span><span>單號</span><span>廠商</span><span>上傳者</span><span>圖片</span><span></span></div>' +
         '<div id="sign-list"><div class="skeleton">載入中…</div></div>' +
         '<div class="sign-foot">' +
           '<button type="button" class="btn btn-secondary btn-sm" id="sign-clear">全部清除</button>' +
@@ -1262,6 +1262,7 @@
         '<input class="sign-dn" value="' + esc(f.docNo) + '" inputmode="numeric" maxlength="16" autocomplete="off" aria-label="單號" />' +
         '<input class="sign-vendor" value="' + esc(f.vendor) + '" maxlength="30" autocomplete="off" placeholder="廠商" aria-label="廠商" />' +
         '<span class="sign-by" title="' + esc(f.by || "") + '"><i class="sign-by-l">上傳者:</i>' + esc(f.by || "—") + '</span>' +
+        '<span class="sign-img">' + (f.imgUrl && /^https:\/\//.test(f.imgUrl) ? '<a href="' + esc(f.imgUrl) + '" target="_blank" rel="noopener noreferrer" title="開啟這張表單的來源截圖"><i class="sign-img-l">圖片:</i>查看</a>' : '') + '</span>' +
         '<button type="button" class="rcv-del sign-del" aria-label="刪除這一張">刪除</button>' +
         '<div class="sign-meta">' + metaHtml(f) + '</div>' +
       '</div>';

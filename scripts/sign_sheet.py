@@ -1,6 +1,6 @@
 """WMS.xlsx「待簽核清單」工作表:同事在網站「待簽核表單」頁按下「確認」的表單,供 ERP 執行表單簽核時讀取。
 
-欄位:日期(按下確認的時間)、表單名稱、程式代碼、單別、單號、廠商、來源、上傳者、狀態、ID
+欄位:日期(按下確認的時間)、表單名稱、程式代碼、單別、單號、廠商、來源、上傳者、圖片連結(截圖在雲端硬碟,保留 7 天;沒有圖片就空白)、狀態、ID
 - 只有在網站按「確認」時才寫入(apply_edits 約每分鐘取一次請求):勾選的表單依序接在工作表最後,
   寫入成功後網站才把這幾張從待簽核清單移除。
 - 同一張(程式代碼+單別+單號)已經在工作表裡就不重複寫入,但網站清單照樣移除。
@@ -16,8 +16,9 @@ import openpyxl
 from openpyxl.styles import Alignment, Font
 
 SHEET = "待簽核清單"
-HEADERS = ["日期", "表單名稱", "程式代碼", "單別", "單號", "廠商", "來源", "上傳者", "狀態", "ID"]
-WIDTHS = {"A": 17.5, "B": 20, "C": 11, "D": 8, "E": 18, "F": 22, "G": 8, "H": 28, "I": 34, "J": 24}
+HEADERS = ["日期", "表單名稱", "程式代碼", "單別", "單號", "廠商", "來源", "上傳者", "圖片連結", "狀態", "ID"]
+WIDTHS = {"A": 17.5, "B": 20, "C": 11, "D": 8, "E": 18, "F": 22, "G": 8, "H": 28, "I": 40, "J": 34, "K": 24}
+IMG_COL = 9
 TEXT_COLS = (4, 5)   # 單別 / 單號一律存成文字,避免前導 0 或長數字被轉成數值
 
 
@@ -42,6 +43,7 @@ def _row_values(f):
         str(f.get("vendor") or ""),
         str(f.get("src") or ""),
         str(f.get("by") or ""),
+        str(f.get("img") or ""),
         _status(f),
         str(f.get("id") or ""),
     ]
@@ -53,6 +55,9 @@ def ensure_sheet(wb):
         ws = wb[SHEET]
         # 標題列被改過/缺欄時補齊(只補在最後面,不動使用者已有的內容)
         have = [str(ws.cell(1, c).value or "").strip() for c in range(1, len(HEADERS) + 1)]
+        if have[:8] == HEADERS[:8] and have[8] == "狀態" and have[9] == "ID":
+            ws.insert_cols(IMG_COL)   # 舊版沒有「圖片連結」欄:在「狀態」前插入一欄,原有資料不動
+            have = [str(ws.cell(1, c).value or "").strip() for c in range(1, len(HEADERS) + 1)]
         if have != HEADERS:
             for i, h in enumerate(HEADERS, start=1):
                 ws.cell(1, i).value = h
@@ -81,6 +86,9 @@ def _set(ws, r, values):
             cell.number_format = "@"
         if ref is not None and cell.font.name != ref.font.name:
             cell.font = Font(name=ref.font.name, size=ref.font.sz)
+        if c == IMG_COL and v:
+            cell.hyperlink = v   # 點一下開啟截圖
+            cell.font = Font(name=cell.font.name, size=cell.font.sz, color="0563C1", underline="single")
 
 
 def _existing_keys(ws):

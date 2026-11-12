@@ -102,7 +102,7 @@ def process(endpoint, key, images, log=print):
             for f in forms:
                 f.pop("box", None)
             if forms:
-                r = sc.push_to(endpoint, key, forms, {"by": img.get("by", "")})
+                r = sc.push_to(endpoint, key, forms, {"by": img.get("by", ""), "img": iid})
                 if not r.get("ok"):
                     raise RuntimeError("送出表單失敗:%s" % (r.get("error") or r))
             state, msg = summary(res)
