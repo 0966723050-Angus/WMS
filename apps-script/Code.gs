@@ -465,7 +465,7 @@ function deleteReceiptRow_(body, user, kind) {
 
 // ---------- 待簽核表單 ----------
 // 來源有兩種:(1) 同事把截圖貼到網頁上傳,電腦端辨識後送上來(signforms_push);(2) 網頁上手動輸入 / 修改(signforms_save)。
-// 每張表單一個屬性 s_<id>:{id, ts, name 表單名稱, prog 程式代碼, docType 單別, docNo 單號, docName, vendor, src, conf, by, f 失敗原因}。
+// 每張表單一個屬性 s_<id>:{id, ts, name 表單名稱, prog 程式代碼, docType 單別, docNo 單號, vendor 廠商, docName, src, conf, by, f 失敗原因}。
 // 網頁勾選後按「確認」送出簽核請求(SIGN_REQ,同進貨單簽核的作法),由電腦上的 Claude 取走執行。
 
 var SIGN_PREFIX = 's_';
@@ -487,7 +487,7 @@ function cleanSignFields_(f) {
   if (!/^\d{6,16}$/.test(dn)) return { error: '單號必須是 6~16 位數字(一般是 11 碼)' };
   var prog = clip_(f.prog, 10).toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (!prog) return { error: '請選擇表單名稱或填入程式代碼' };
-  return { name: clip_(f.name, 30), prog: prog, docType: dt, docNo: dn };
+  return { name: clip_(f.name, 30), prog: prog, docType: dt, docNo: dn, vendor: clip_(f.vendor, 30) };
 }
 
 function findSignForm_(all, prog, dt, dn, exceptId) {
@@ -505,13 +505,13 @@ function pushSignForms_(body, by) {
   var now = Date.now(), added = 0, updated = 0, skipped = 0;
   forms.slice(0, 100).forEach(function (f) {
     if (!f) { skipped++; return; }
-    var c = cleanSignFields_({ docType: f.docType, docNo: f.docNo, prog: f.prog || 'UNKNOWN', name: f.progName || f.name });
+    var c = cleanSignFields_({ docType: f.docType, docNo: f.docNo, prog: f.prog || 'UNKNOWN', name: f.progName || f.name, vendor: f.vendor });
     if (c.error) { skipped++; return; }
     var old = findSignForm_(all, c.prog, c.docType, c.docNo, '');
     var rec = old || { id: newId_(), ts: now, n: 0, by: clip_(by, 60) };
     rec.name = c.name || rec.name || '';
     rec.prog = c.prog; rec.docType = c.docType; rec.docNo = c.docNo;
-    rec.docName = clip_(f.docName, 20); rec.vendor = clip_(f.vendor, 30); rec.src = clip_(f.src, 10);
+    rec.docName = clip_(f.docName, 20); rec.vendor = c.vendor || rec.vendor || ''; rec.src = clip_(f.src, 10);
     rec.conf = f.conf === 'low' ? 'low' : 'high';      // low = 辨識把握度不高,網站會標示請人工核對
     rec.seen = now; rec.n = (rec.n || 0) + 1;
     props_().setProperty(SIGN_PREFIX + rec.id, JSON.stringify(rec));
@@ -539,7 +539,7 @@ function saveSignForm_(body, user) {
     rec = { id: newId_(), ts: Date.now(), n: 1, by: user.email, src: '手動', conf: 'high' };
   }
   if (findSignForm_(all, c.prog, c.docType, c.docNo, rec.id)) return { ok: false, error: '這張表單已經在清單中了' };
-  rec.name = c.name; rec.prog = c.prog; rec.docType = c.docType; rec.docNo = c.docNo;
+  rec.name = c.name; rec.prog = c.prog; rec.docType = c.docType; rec.docNo = c.docNo; rec.vendor = c.vendor;
   if (id) { rec.conf = 'high'; rec.f = ''; }   // 人工確認過,不再標示辨識不確定 / 失敗
   props_().setProperty(SIGN_PREFIX + rec.id, JSON.stringify(rec));
   return { ok: true, form: rec };
@@ -571,7 +571,7 @@ function requestSign_(body, user) {
   for (var i = 0; i < ids.length; i++) {
     var r = byId[ids[i]];
     if (!r) return { ok: false, error: '有表單已經不存在,請重新整理後再勾選' };
-    items.push({ id: r.id, name: r.name || '', prog: r.prog, docType: r.docType, docNo: r.docNo });
+    items.push({ id: r.id, name: r.name || '', prog: r.prog, docType: r.docType, docNo: r.docNo, vendor: r.vendor || '' });
   }
   props_().setProperty(KINDS.sign.reqKey, JSON.stringify({ ts: Date.now(), by: user.email, items: items }));
   return { ok: true, count: items.length };
@@ -610,10 +610,31 @@ var KEEP_SIGNIMG = 30;
 
 function signImgKey_(id, n) { return 'img_' + id + '_' + n; }
 
+// 圖片暫存最長 6 小時(CacheService 到期會自動刪除)。超過這個時間還沒辨識完的,狀態改成「逾時」並確實清掉暫存;
+// 狀態紀錄(很小,沒有圖片)保留 3 天後刪除。
+function expireSignImages_(list) {
+  var now = Date.now();
+  list.forEach(function (r) {
+    if ((r.state === 'queued' || r.state === 'processing') && now - r.ts > SIGNIMG_TTL * 1000) {
+      var keys = [];
+      for (var i = 0; i < (r.parts || 0); i++) keys.push(signImgKey_(r.id, i));
+      if (keys.length) CacheService.getScriptCache().removeAll(keys);
+      r.state = 'error'; r.msg = '逾時:超過 6 小時沒有辨識,圖片已自動刪除,請重新上傳'; r.doneAt = now;
+      props_().setProperty(SIGNIMG_PREFIX + r.id, JSON.stringify(r));
+    }
+  });
+  return list;
+}
+
 function listSignImages_() {
   var out = listByPrefix_(SIGNIMG_PREFIX);
   out.sort(function (a, b) { return b.ts - a.ts; });
-  return out;
+  var now = Date.now();
+  out = out.filter(function (r) {
+    if (now - r.ts > 3 * 24 * 3600 * 1000) { props_().deleteProperty(SIGNIMG_PREFIX + r.id); return false; }   // 3 天前的狀態紀錄
+    return true;
+  });
+  return expireSignImages_(out);
 }
 
 function uploadSignImage_(body, user) {

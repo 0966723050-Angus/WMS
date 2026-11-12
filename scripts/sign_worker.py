@@ -20,7 +20,8 @@ sys.path.insert(0, HERE)
 import sign_capture as sc  # noqa: E402
 
 UPLOAD_DIR = os.path.join(sc.WORK, "uploads")
-KEEP_UPLOADS = 20          # 留最近幾張原圖,辨識錯誤時可以回頭檢查
+KEEP_UPLOADS = 20          # 本機最多留幾張原圖(辨識錯誤時可以回頭檢查)
+KEEP_HOURS = 24            # 本機原圖超過這麼多小時自動刪除
 TIME_BUDGET_S = 100        # 單次最多處理多久;沒處理完的 3 分鐘後會重新排入
 
 
@@ -38,6 +39,22 @@ def _get(endpoint, key, params):
     raise last
 
 
+def cleanup_uploads():
+    """本機留的上傳原圖:超過 KEEP_HOURS 小時的刪除,最多只留最近 KEEP_UPLOADS 張。"""
+    try:
+        files = sorted((os.path.join(UPLOAD_DIR, x) for x in os.listdir(UPLOAD_DIR)), key=os.path.getmtime)
+    except OSError:
+        return
+    cutoff = time.time() - KEEP_HOURS * 3600
+    keep = files[-KEEP_UPLOADS:]
+    for f in files:
+        try:
+            if f not in keep or os.path.getmtime(f) < cutoff:
+                os.remove(f)
+        except OSError:
+            pass
+
+
 def fetch_image(endpoint, key, img):
     parts = []
     for n in range(int(img.get("parts") or 0)):
@@ -50,12 +67,7 @@ def fetch_image(endpoint, key, img):
     path = os.path.join(UPLOAD_DIR, "%s.img" % img["id"])
     with open(path, "wb") as f:
         f.write(raw)
-    files = sorted((os.path.join(UPLOAD_DIR, x) for x in os.listdir(UPLOAD_DIR)), key=os.path.getmtime)
-    for old in files[:-KEEP_UPLOADS]:
-        try:
-            os.remove(old)
-        except OSError:
-            pass
+    cleanup_uploads()
     return Image.open(io.BytesIO(raw)).convert("RGB")
 
 
@@ -77,6 +89,7 @@ def process(endpoint, key, images, log=print):
     """images: pull 回來的 signImages 清單。回傳處理完的張數。"""
     start = time.time()
     done = 0
+    cleanup_uploads()   # 沒有新圖片的時候也會定期清掉過期的舊檔
     for img in images:
         if time.time() - start > TIME_BUDGET_S:
             log("簽核截圖:本輪時間用完,剩下的下一輪再處理")

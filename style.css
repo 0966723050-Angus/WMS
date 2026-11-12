@@ -1171,7 +1171,7 @@ body.scan-open .modal-backdrop { -webkit-backdrop-filter: none; backdrop-filter:
 .sign-img-row.ok { color: var(--brand); }
 .sign-img-row.bad { color: var(--warn-text); font-weight: 700; }
 .sign-row {
-  display: grid; grid-template-columns: 34px minmax(130px, 1.4fr) minmax(90px, 0.9fr) minmax(70px, 0.7fr) minmax(130px, 1.3fr) auto;
+  display: grid; grid-template-columns: 34px minmax(120px, 1.3fr) minmax(86px, 0.85fr) minmax(64px, 0.6fr) minmax(120px, 1.2fr) minmax(100px, 1fr) auto;
   gap: 8px; align-items: center; padding: 8px 6px; border-top: 1px solid var(--border);
 }
 .sign-headrow { font-size: 12.5px; font-weight: 700; color: var(--text-muted); border-top: none; padding-bottom: 2px; }
@@ -1194,6 +1194,6 @@ body.scan-open .modal-backdrop { -webkit-backdrop-filter: none; backdrop-filter:
   .sign-row .sign-name { grid-column: 2 / -1; }
   .sign-row .sign-prog { grid-column: 2; }
   .sign-row .sign-dt { grid-column: 3; }
-  .sign-row .sign-dn, .sign-row .sign-del, .sign-add > .btn { grid-column: 2 / -1; }
+  .sign-row .sign-dn, .sign-row .sign-vendor, .sign-row .sign-del, .sign-add > .btn { grid-column: 2 / -1; }
   .sign-row .sign-del, .sign-add > .btn { justify-self: end; }
 }

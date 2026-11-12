@@ -119,16 +119,15 @@
     { key: "ret", label: "退料" },
     { key: "erp_receipt", label: "ERP:進貨單簽核" },
     { key: "erp_return", label: "ERP:退貨單簽核" },
-    { key: "erp_issue", label: "ERP:製令領料單" },
     { key: "erp_sign", label: "ERP:待簽核表單" },
     { key: "erp_wms", label: "ERP:WMS更新" }
   ];
-  var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_issue: false, erp_sign: false, erp_wms: false };
+  var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_sign: false, erp_wms: false };
 
   function can(perm) { return !!(session && session.perms && session.perms[perm]); }
 
   function canSeeErp() {
-    return can("admin") || can("erp_receipt") || can("erp_return") || can("erp_issue") || can("erp_sign") || can("erp_wms");
+    return can("admin") || can("erp_receipt") || can("erp_return") || can("erp_sign") || can("erp_wms");
   }
 
   // 舊版登入資料沒有 perms:管理者視為全部權限,其他人視為只有儲位編輯
@@ -710,9 +709,7 @@
     wms: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 01-14.3 4.9M4 12a8 8 0 0114.3-4.9"/><path d="M18.5 3v4.2h-4.2M5.5 21v-4.2h4.2"/></svg>'
   };
 
-  var ERP_PAGES = {
-    "issue-new": { title: "製令領料單新增", perm: "erp_issue" }
-  };
+  var ERP_PAGES = {};   // 目前沒有「建置中」的空白頁
 
   // 「進貨單簽核」「退貨單簽核」:列出清單、確認後送出請求,由電腦上的 Claude 啟動對應的 skill 在鼎新 ERP 建立並確認單據。
   // 狀態(排隊中 / 執行中 / 完成 / 失敗)由電腦端回報,顯示在按鈕下方。兩者共用同一套畫面,依 kind 切換文字與 API。
@@ -1210,10 +1207,11 @@
         '<h2 class="sign-h">手動新增</h2>' +
         '<div class="sign-row sign-add">' +
           '<span class="sign-chk"></span>' +
-          '<select id="add-name" aria-label="表單名稱">' + signNameOptions("") + '</select>' +
-          '<input id="add-prog" placeholder="程式代碼" maxlength="10" autocomplete="off" autocapitalize="characters" spellcheck="false" />' +
-          '<input id="add-dt" placeholder="單別" inputmode="numeric" maxlength="6" autocomplete="off" />' +
-          '<input id="add-dn" placeholder="單號" inputmode="numeric" maxlength="16" autocomplete="off" />' +
+          '<select id="add-name" class="sign-name" aria-label="表單名稱">' + signNameOptions("") + '</select>' +
+          '<input id="add-prog" class="sign-prog" placeholder="程式代碼" maxlength="10" autocomplete="off" autocapitalize="characters" spellcheck="false" />' +
+          '<input id="add-dt" class="sign-dt" placeholder="單別" inputmode="numeric" maxlength="6" autocomplete="off" />' +
+          '<input id="add-dn" class="sign-dn" placeholder="單號" inputmode="numeric" maxlength="16" autocomplete="off" />' +
+          '<input id="add-vendor" class="sign-vendor" placeholder="廠商" maxlength="30" autocomplete="off" />' +
           '<button type="button" class="btn btn-sm" id="add-ok">新增</button>' +
         '</div>' +
       '</section>' +
@@ -1221,7 +1219,7 @@
       '<section class="sign-card">' +
         '<h2 class="sign-h">待簽核清單 <span class="sign-count" id="sign-count"></span></h2>' +
         '<div class="sign-row sign-headrow"><label class="sign-chk"><input type="checkbox" id="sign-all" aria-label="全選" /></label>' +
-          '<span>表單名稱</span><span>程式代碼</span><span>單別</span><span>單號</span><span></span></div>' +
+          '<span>表單名稱</span><span>程式代碼</span><span>單別</span><span>單號</span><span>廠商</span><span></span></div>' +
         '<div id="sign-list"><div class="skeleton">載入中…</div></div>' +
         '<div class="sign-foot">' +
           '<button type="button" class="btn btn-secondary btn-sm" id="sign-clear">全部清除</button>' +
@@ -1232,8 +1230,8 @@
       '</section>';
 
     function $(id) { return document.getElementById(id); }
-    var forms = [], imgs = [], picked = {}, pendingBlob = null, previewUrl = "", busy = false;
-    var pollTimer = null, statusTimer = null;
+    var forms = [], imgs = [], picked = {}, pendingBlob = null, previewUrl = "", busy = false, lastSig = "";
+    var tickTimer = null;
     var alive = function () { return document.body.contains($("sign-list")); };
     function msg(t) { $("sign-msg").textContent = t || ""; }
 
@@ -1241,7 +1239,6 @@
     function metaHtml(f) {
       var m = [];
       if (f.docName) m.push(esc(f.docName));
-      if (f.vendor) m.push(esc(f.vendor));
       if (f.src) m.push(esc(f.src));
       if (f.ts) m.push(esc(new Date(f.ts).toLocaleString("zh-TW", { hour12: false })));
       var html = m.join(" · ");
@@ -1257,6 +1254,7 @@
         '<input class="sign-prog" value="' + esc(f.prog) + '" maxlength="10" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="程式代碼" />' +
         '<input class="sign-dt" value="' + esc(f.docType) + '" inputmode="numeric" maxlength="6" autocomplete="off" aria-label="單別" />' +
         '<input class="sign-dn" value="' + esc(f.docNo) + '" inputmode="numeric" maxlength="16" autocomplete="off" aria-label="單號" />' +
+        '<input class="sign-vendor" value="' + esc(f.vendor) + '" maxlength="30" autocomplete="off" placeholder="廠商" aria-label="廠商" />' +
         '<button type="button" class="rcv-del sign-del" aria-label="刪除這一張">刪除</button>' +
         '<div class="sign-meta">' + metaHtml(f) + '</div>' +
       '</div>';
@@ -1271,16 +1269,29 @@
       $("sign-count").textContent = forms.length ? "共 " + forms.length + " 張" : "";
     }
 
-    function loadForms() {
+    function formsSig(list) {
+      return JSON.stringify(list.map(function (f) { return [f.id, f.name, f.prog, f.docType, f.docNo, f.vendor, f.conf, f.f]; }));
+    }
+    function editingInList() {
+      var a = document.activeElement;
+      return !!(a && $("sign-list").contains(a) && /^(INPUT|SELECT)$/.test(a.tagName) && a.type !== "checkbox");
+    }
+
+    // silent=true:背景自動更新。內容沒變就不重畫;使用者正在編輯欄位時先不重畫(下一輪再更新),避免打字被打斷
+    function loadForms(silent) {
       return api("signforms_list").then(function (res) {
         if (!res.ok) throw new Error(res.error || "讀取失敗");
-        forms = res.forms || [];
+        var list = res.forms || [], sig = formsSig(list);
+        if (silent === true && (sig === lastSig || editingInList())) return;
+        lastSig = sig;
+        forms = list;
         var ids = {};
         forms.forEach(function (f) { ids[f.id] = true; });
         Object.keys(picked).forEach(function (k) { if (!ids[k]) delete picked[k]; });
         $("sign-list").innerHTML = forms.length ? forms.map(rowHtml).join("") : '<div class="empty-state">目前沒有待簽核表單</div>';
         updateButtons();
       }).catch(function (err) {
+        if (silent === true) return;   // 背景更新失敗就等下一輪,不要把清單換成錯誤訊息
         if (session && alive()) $("sign-list").innerHTML = '<div class="empty-state">' + esc(err.message) + '</div>';
       });
     }
@@ -1290,7 +1301,8 @@
         name: row.querySelector(".sign-name").value,
         prog: row.querySelector(".sign-prog").value.trim().toUpperCase(),
         docType: row.querySelector(".sign-dt").value.trim(),
-        docNo: row.querySelector(".sign-dn").value.trim()
+        docNo: row.querySelector(".sign-dn").value.trim(),
+        vendor: row.querySelector(".sign-vendor").value.trim()
       };
     }
     function checkFields(v) {
@@ -1316,7 +1328,7 @@
       row.classList.toggle("invalid", !!bad);
       if (bad) { msg(bad); return; }
       msg("");
-      api("signforms_save", { id: f.id, name: v.name, prog: v.prog, docType: v.docType, docNo: v.docNo }).then(function (res) {
+      api("signforms_save", { id: f.id, name: v.name, prog: v.prog, docType: v.docType, docNo: v.docNo, vendor: v.vendor }).then(function (res) {
         if (!res.ok) throw new Error(res.error || "儲存失敗");
         forms[forms.indexOf(f)] = res.form;
         row.classList.remove("failed", "low", "invalid");
@@ -1381,7 +1393,7 @@
     $("add-name").addEventListener("change", function () { linkNameAndCode($("add-name").closest(".sign-row"), $("add-name")); });
     $("add-prog").addEventListener("change", function () { linkNameAndCode($("add-prog").closest(".sign-row"), $("add-prog")); });
     $("add-ok").addEventListener("click", function () {
-      var v = { name: $("add-name").value, prog: $("add-prog").value.trim().toUpperCase(), docType: $("add-dt").value.trim(), docNo: $("add-dn").value.trim() };
+      var v = { name: $("add-name").value, prog: $("add-prog").value.trim().toUpperCase(), docType: $("add-dt").value.trim(), docNo: $("add-dn").value.trim(), vendor: $("add-vendor").value.trim() };
       var bad = checkFields(v);
       if (bad) { msg(bad); return; }
       $("add-ok").disabled = true;
@@ -1389,6 +1401,7 @@
         if (!res.ok) throw new Error(res.error || "新增失敗");
         msg("");
         $("add-dn").value = "";   // 表單名稱 / 單別留著,方便連續輸入同一種表單
+        $("add-vendor").value = "";
         showToast("已新增");
         return loadForms();
       }).catch(function (err) { if (session) msg(err.message); }).then(function () { $("add-ok").disabled = false; });
@@ -1461,11 +1474,8 @@
             ' · ' + esc(whoShort(r.by)) + '</span><span>' + esc(imgText(r)) + '</span></div>';
         }).join("");
         var finished = imgs.some(function (r) { return prevBusy[r.id] && (r.state === "done" || r.state === "error"); });
-        if (finished) loadForms();   // 剛辨識完:清單重新讀一次
-        var stillBusy = imgs.some(function (r) { return r.state === "queued" || r.state === "processing"; });
-        clearTimeout(pollTimer);
-        if (stillBusy) pollTimer = setTimeout(function () { if (alive()) loadImgs(); }, 6000);
-      }).catch(function () { /* 讀不到不影響使用 */ });
+        if (finished) loadForms(true);   // 剛辨識完:清單馬上更新
+      }).catch(function () { /* 讀不到不影響使用,下一輪背景更新再試 */ });
     }
 
     // ---- 確認:送出簽核請求(同進貨單簽核) ----
@@ -1477,16 +1487,14 @@
         var wasBusy = busy;
         busy = s.busy;
         updateButtons();
-        clearTimeout(statusTimer);
-        if (s.busy) statusTimer = setTimeout(function () { if (alive()) loadStatus(); }, 15000);
-        else if (wasBusy) loadForms();   // 簽核剛結束:成功的已從清單移除,失敗的有標示
+        if (!s.busy && wasBusy) loadForms(true);   // 簽核剛結束:成功的已從清單移除,失敗的有標示
       }).catch(function () { /* 讀不到狀態不影響使用 */ });
     }
 
     $("sign-ok").addEventListener("click", function () {
       var sel = forms.filter(function (f) { return picked[f.id]; });
       if (!sel.length) return;
-      var lines = sel.slice(0, 12).map(function (f) { return (f.name || f.prog) + " " + f.docType + "-" + f.docNo; }).join("\n");
+      var lines = sel.slice(0, 12).map(function (f) { return (f.name || f.prog) + " " + f.docType + "-" + f.docNo + (f.vendor ? " · " + f.vendor : ""); }).join("\n");
       if (!window.confirm("確定要簽核勾選的 " + sel.length + " 張表單嗎?\n\n" + lines + (sel.length > 12 ? "\n…" : "") +
         "\n\n按確認後,電腦上的 Claude 會在鼎新 ERP 逐張簽核,執行期間該電腦的畫面會被自動操作。")) return;
       $("sign-ok").disabled = true;
@@ -1501,9 +1509,22 @@
 
     $("sign-refresh").addEventListener("click", function () { msg(""); loadForms(); loadImgs(); loadStatus(); });
 
+    // 背景自動更新:每 10 秒更新一次(辨識完成的表單、簽核結果會自動出現,不用按重新整理)。
+    // 任何一次連線失敗都不會讓它停掉;離開這一頁就停止。回到分頁時馬上更新一次。
+    function tick() {
+      clearTimeout(tickTimer);
+      if (!alive()) return;
+      if (!document.hidden) { loadImgs(); loadForms(true); loadStatus(); }
+      tickTimer = setTimeout(tick, 10000);
+    }
+    document.addEventListener("visibilitychange", function () {
+      if (alive() && document.visibilityState === "visible") tick();
+    });
+
     loadForms();
     loadImgs();
     loadStatus();
+    tickTimer = setTimeout(tick, 10000);
   }
 
   function renderErp(app, sub) {
@@ -1531,13 +1552,6 @@
             ? '<button type="button" class="erp-tile erp-tile-wms" id="ret-btn">' +
               '<span class="erp-tile-icon">' + ERP_ICONS.ret + '</span><span class="erp-tile-title">退貨單簽核</span>' +
               '<span class="erp-tile-note" id="ret-note"></span></button>'
-            : '') +
-          (can("erp_issue")
-            ? '<div class="erp-tile erp-tile-group">' +
-              '<span class="erp-tile-icon">' + ERP_ICONS.issue + '</span><span class="erp-tile-title">製令領料單</span>' +
-              '<span class="erp-tile-actions">' +
-                '<a class="btn btn-sm" href="#/erp/issue-new">新增</a>' +
-              '</span></div>'
             : '') +
           (can("erp_sign")
             ? '<a class="erp-tile" href="#/erp/sign">' +

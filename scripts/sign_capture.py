@@ -208,7 +208,15 @@ class Ocr:
             self.jobs.append((name, p))
 
     def run(self):
-        texts = run_ocr([p for _, p in self.jobs]) if self.jobs else []
+        try:
+            texts = run_ocr([p for _, p in self.jobs]) if self.jobs else []
+        finally:
+            if not os.environ.get("SIGN_KEEP_CROPS"):   # 裁切圖只是辨識用的暫存,用完就刪(除錯時設 SIGN_KEEP_CROPS=1 保留)
+                for _, p in self.jobs:
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
         out = {}
         for (name, _), t in zip(self.jobs, texts):
             out.setdefault(name, []).append(t)
