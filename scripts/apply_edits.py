@@ -451,6 +451,12 @@ def main():
                 call(endpoint, {"action": "sign_ack", "key": sync_key, "ts": sreq.get("ts"), "msg": msg})
         except Exception as ex:
             log("警告: 寫入待簽核清單失敗: %s" % ex)
+    # 待簽核清單有新增項目:用釘釘機器人通知(網址放在 edit_config.json 的 dingtalkWebhook;沒設定就不通知)
+    try:
+        import dingtalk_notify
+        dingtalk_notify.process(endpoint, sync_key, cfg, res.get("signNotify") or [], res.get("signTotal"), call, log)
+    except Exception as ex:
+        log("警告: 釘釘通知處理失敗: %s" % ex)
     # 「收料」「退料」工作表內容有變動(例如使用者自己編輯/清除)就回報給網站,供「進貨單簽核」「退貨單簽核」清單使用;沒變動不重送
     try:
         import receipt_snapshot

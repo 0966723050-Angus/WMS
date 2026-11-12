@@ -515,13 +515,31 @@ function pushSignForms_(body, by) {
     rec.conf = f.conf === 'low' ? 'low' : 'high';      // low = 辨識把握度不高,網站會標示請人工核對
     rec.seen = now; rec.n = (rec.n || 0) + 1;
     props_().setProperty(SIGN_PREFIX + rec.id, JSON.stringify(rec));
-    if (old) updated++; else { added++; all.push(rec); }
+    if (old) updated++; else { added++; all.push(rec); queueSignNotify_(rec); }
   });
   all = listSignForms_();
   if (all.length > MAX_SIGN_FORMS) {   // 超過上限:刪掉最舊的
     all.slice(MAX_SIGN_FORMS).forEach(function (r) { props_().deleteProperty(SIGN_PREFIX + r.id); });
   }
   return { ok: true, added: added, updated: updated, skipped: skipped, total: Math.min(all.length, MAX_SIGN_FORMS) };
+}
+
+// 待簽核清單有新增項目時,先記在通知佇列(SIGN_NOTIFY);電腦端排程 pull 時取走,用釘釘機器人發通知(網址 / 金鑰只放在電腦端設定檔),
+// 發送成功後呼叫 sign_notify_ack 清掉。佇列最多留 100 筆,超過就丟掉最舊的。
+var SIGN_NOTIFY_KEY = 'SIGN_NOTIFY';
+function queueSignNotify_(rec) {
+  var q = readJson_(SIGN_NOTIFY_KEY) || [];
+  q.push({ id: rec.id, ts: rec.ts, name: rec.name || '', prog: rec.prog, docType: rec.docType, docNo: rec.docNo, vendor: rec.vendor || '', by: rec.by || '', src: rec.src || '' });
+  if (q.length > 100) q = q.slice(q.length - 100);
+  props_().setProperty(SIGN_NOTIFY_KEY, JSON.stringify(q));
+}
+
+function signNotifyAck_(idsCsv) {
+  var ids = String(idsCsv || '').split(',').filter(String);
+  var q = readJson_(SIGN_NOTIFY_KEY) || [];
+  var left = q.filter(function (x) { return ids.indexOf(x.id) === -1; });
+  if (left.length) props_().setProperty(SIGN_NOTIFY_KEY, JSON.stringify(left)); else props_().deleteProperty(SIGN_NOTIFY_KEY);
+  return { ok: true, removed: q.length - left.length };
 }
 
 // 網頁上手動新增 / 修改一張(有 id 就是修改)
@@ -542,6 +560,7 @@ function saveSignForm_(body, user) {
   rec.name = c.name; rec.prog = c.prog; rec.docType = c.docType; rec.docNo = c.docNo; rec.vendor = c.vendor;
   if (id) { rec.conf = 'high'; rec.f = ''; }   // 人工確認過,不再標示辨識不確定 / 失敗
   props_().setProperty(SIGN_PREFIX + rec.id, JSON.stringify(rec));
+  if (!id) queueSignNotify_(rec);   // 新增(不是修改)才通知
   return { ok: true, form: rec };
 }
 
@@ -920,7 +939,7 @@ function doGet(e) {
   try {
     if (p.action === 'pull' || p.action === 'ack' || p.action === 'set_data_key' || p.action === 'wms_report' ||
         p.action === 'puri09_claim' || p.action === 'puri09_report' || p.action === 'ret_claim' || p.action === 'ret_report' ||
-        p.action === 'sign_claim' || p.action === 'sign_report' || p.action === 'sign_ack' || p.action === 'signimg_get' || p.action === 'signimg_report') {
+        p.action === 'sign_claim' || p.action === 'sign_report' || p.action === 'sign_ack' || p.action === 'sign_notify_ack' || p.action === 'signimg_get' || p.action === 'signimg_report') {
       var err = checkSyncKey_(p.key);
       if (err) return json_({ ok: false, error: err });
 
@@ -930,6 +949,7 @@ function doGet(e) {
       if (p.action === 'ret_report') return json_(puriReport_(String(p.state || ''), p.msg, 'ret'));
       if (p.action === 'sign_claim') return json_(puriClaim_('sign'));
       if (p.action === 'sign_ack') return json_(signAck_(p.ts, p.msg));
+      if (p.action === 'sign_notify_ack') return json_(signNotifyAck_(p.ids));
       if (p.action === 'sign_report') {
         var sres = puriReport_(String(p.state || ''), p.msg, 'sign');
         if (sres.ok && (p.done || p.failed)) {   // 逐張結果(done=id 以逗號分隔;failed=id:原因;id:原因)
@@ -946,6 +966,7 @@ function doGet(e) {
       if (p.action === 'pull') return json_({
         ok: true, edits: listPending_(), receipts: listReceipts_('receipt'), deletes: listDeletes_('receipt'),
         returns: listReceipts_('ret'), returnDeletes: listDeletes_('ret'), signImages: claimSignImages_(), signRequest: readJson_(KINDS.sign.reqKey),
+        signNotify: readJson_(SIGN_NOTIFY_KEY) || [], signTotal: listSignForms_().length,
         wms: readJson_(WMS_REQ_KEY), schedules: getSchedules_()
       });
 
