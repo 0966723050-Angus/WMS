@@ -1298,7 +1298,15 @@
     function loadForms(silent) {
       return api("signforms_list").then(function (res) {
         if (!res.ok) throw new Error(res.error || "讀取失敗");
-        var list = res.forms || [], sig = formsSig(list);
+        // 同一張截圖辨識出的幾筆建立時間相同,伺服器回傳的先後不固定 -> 每 10 秒更新時順序會跳動。
+        // 這裡固定排序:新的在前,同時間的依單別、單號,最後用 id
+        var list = (res.forms || []).slice().sort(function (a, b) {
+          return (b.ts || 0) - (a.ts || 0) ||
+            String(a.docType).localeCompare(String(b.docType)) ||
+            String(a.docNo).localeCompare(String(b.docNo)) ||
+            String(a.id).localeCompare(String(b.id));
+        });
+        var sig = formsSig(list);
         if (silent === true && (sig === lastSig || editingInList())) return;
         lastSig = sig;
         forms = list;

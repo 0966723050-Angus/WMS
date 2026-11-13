@@ -148,4 +148,9 @@ def append(master, drive_copy, items, ts, log=print):
     except Exception as ex:
         log("警告: 待簽核清單已寫入主檔,但複製到雲端硬碟失敗(下次 WMS 更新時會一併複製): %s" % ex)
     log("待簽核清單:寫入 %d 張,已在清單中略過 %d 張" % (added, skipped))
+    try:   # 同事確認過的廠商名稱加進辨識程式的廠商名單,下次 OCR 讀錯時可以校正
+        import sign_capture
+        sign_capture.learn_vendors([f.get("vendor") for f in items])
+    except Exception as ex:
+        log("更新廠商名單失敗: %s" % ex)
     return added, skipped

@@ -42,6 +42,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.path.join(HERE, "edit_config.json")
 PROGRAMS_FILE = os.path.join(HERE, "sign_programs.json")   # 備援;主要來源是下面的 Excel 對照表
 SITE_PROGRAMS_FILE = os.path.join(HERE, "sign_programs_site.json")   # 網頁上「編輯表單清單」存的清單(apply_edits 同步下來);有的話優先使用
+VENDORS_FILE = os.path.join(HERE, "sign_vendors.json")   # 累積的廠商名單(代號 -> 簡稱、所有看過的簡稱),校正 OCR 讀錯的廠商名稱
+WMS_XLSX = os.environ.get("SIGN_WMS_XLSX", r"C:\ATK\Project\AI Agent\WMS\WMS.xlsx")
+ERP_EXPORT_DIR = os.environ.get("SIGN_ERP_EXPORT_DIR", r"C:\My Documents")
 FORMS_XLSX = os.environ.get("SIGN_FORMS_XLSX", r"C:\ATK\Project\AI Agent\ERP\表單與程式碼對照表.xlsx")
 OCR_PS = os.path.join(HERE, "ocr_win.ps1")
 WORK = os.environ.get("SIGN_WORK", os.path.join(HERE, "sign_capture"))
@@ -324,7 +327,148 @@ def parse_red_line(text):
     doc_name = cjk_tokens[0] if cjk_tokens else ""
     vendor = cjk_tokens[-1] if len(cjk_tokens) >= 2 else ""
     vendor = re.sub(r"[·•‧・]", "-", vendor).strip("-")
-    return {"docType": doc_type, "docNo": m_no.group(0), "docName": doc_name, "vendor": vendor}
+    # 廠商名稱前面 8 碼左右的數字是「供應廠商」代號,可以直接查廠商簡稱
+    codes = re.findall(r"(?<!\d)\d{6,10}(?!\d)", after)
+    return {"docType": doc_type, "docNo": m_no.group(0), "docName": doc_name, "vendor": vendor,
+            "vendorCode": codes[-1] if codes else ""}
+
+
+# ---------------------------------------------------------------- 廠商名稱校正
+# Windows OCR 有些字幾乎讀不出來(例「誠睿科技」常讀成「睿科技」「訁成睿科技」),「-」常讀成「一」。
+# 用已知的廠商名單校正:ERP 匯出的 PURR25(廠商代號 + 簡稱)、WMS.xlsx 各工作表的廠商欄位,
+# 以及網站上確認過的表單廠商(sign_sheet 寫入時呼叫 learn_vendors)。名單累積存在 sign_vendors.json。
+
+def _read_vendor_file():
+    try:
+        with open(VENDORS_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+        return {"names": list(d.get("names") or []), "codes": dict(d.get("codes") or {})}
+    except Exception:
+        return {"names": [], "codes": {}}
+
+
+def _write_vendor_file(d):
+    try:
+        tmp = VENDORS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"names": sorted(set(d["names"])), "codes": d["codes"]}, f, ensure_ascii=False, indent=0)
+        os.replace(tmp, VENDORS_FILE)
+    except Exception as ex:
+        log("寫入廠商名單失敗: %s" % ex)
+
+
+def _clean_vendor(v):
+    v = str(v or "").strip()
+    if not v or re.fullmatch(r"[\d\s.]+", v) or v in ("其他",):
+        return ""
+    return v
+
+
+def learn_vendors(names=(), codes=None):
+    """把確認過的廠商名稱(及代號)加進名單。"""
+    d = _read_vendor_file()
+    before = (len(set(d["names"])), len(d["codes"]))
+    for n in names:
+        for part in str(n or "").split("\n"):
+            part = _clean_vendor(part)
+            if part:
+                d["names"].append(part)
+    for c, n in (codes or {}).items():
+        n = _clean_vendor(n)
+        if n and re.fullmatch(r"[A-Za-z0-9]{4,12}", str(c).strip()):
+            d["codes"][str(c).strip()] = n
+            d["names"].append(n)
+    if (len(set(d["names"])), len(d["codes"])) != before:
+        _write_vendor_file(d)
+
+
+def _cell_str(v):
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    return str(v).strip() if v not in (None, "") else ""
+
+
+def _scan_vendor_sources():
+    """從 ERP 匯出檔(PURR25)與 WMS.xlsx 收集廠商名稱 / 代號(用 calamine 讀,快)。"""
+    names, codes = [], {}
+    try:
+        from python_calamine import CalamineWorkbook
+    except Exception:
+        return names, codes
+    import glob
+    for path in sorted(glob.glob(os.path.join(ERP_EXPORT_DIR, "PURR25*.xls*"))):
+        try:
+            rows = CalamineWorkbook.from_path(path).get_sheet_by_index(0).to_python()
+            for hi, hdr in enumerate(rows[:15]):
+                hdr = [_cell_str(h) for h in hdr]
+                if "廠商簡稱" in hdr:
+                    ni = hdr.index("廠商簡稱")
+                    ci = hdr.index("廠商代號") if "廠商代號" in hdr else -1
+                    for r in rows[hi + 1:]:
+                        n = _clean_vendor(r[ni] if ni < len(r) else "")
+                        if n:
+                            names.append(n)
+                            c = _cell_str(r[ci]) if 0 <= ci < len(r) else ""
+                            if c:
+                                codes[c] = n
+                    break
+        except Exception:
+            pass
+    try:
+        wb = CalamineWorkbook.from_path(WMS_XLSX)
+        for sheet in wb.sheet_names:
+            rows = wb.get_sheet_by_name(sheet).to_python()
+            if not rows:
+                continue
+            cols = [i for i, h in enumerate(rows[0]) if _cell_str(h) in ("廠商", "廠商名稱", "廠商簡稱")]
+            for r in rows[1:]:
+                for i in cols:
+                    if i < len(r):
+                        for part in _cell_str(r[i]).split("\n"):
+                            part = _clean_vendor(part)
+                            if part:
+                                names.append(part)
+    except Exception:
+        pass
+    return names, codes
+
+
+def load_vendors():
+    """回傳 (廠商名稱集合, 代號 -> 名稱)。順便把新看到的寫回 sign_vendors.json 累積起來。"""
+    names, codes = _scan_vendor_sources()
+    learn_vendors(names, codes)
+    d = _read_vendor_file()
+    return set(d["names"]), d["codes"]
+
+
+def correct_vendor(v, code, vendors):
+    """OCR 讀到的廠商名稱 -> 名單中的正確名稱;對不到就回傳原值。"""
+    names, codes = vendors
+    if code and code in codes:
+        return codes[code]
+    v = (v or "").strip()
+    if not v or not names:
+        return v
+    if v in names:
+        return v
+    alt = re.sub(r"(?<=[%s])[一_](?=[%s])" % (CJK, CJK), "-", v)   # 「東佑一台南」-> 「東佑-台南」
+    if alt in names:
+        return alt
+    if len(v) >= 3:   # 開頭一個字沒讀到(「睿科技」-> 「誠睿科技」):名單中只有一個以此結尾、只差一個字
+        tail = [n for n in names if n.endswith(v) and len(n) - len(v) == 1]
+        if len(tail) == 1:
+            return tail[0]
+    best, second = (0.0, ""), 0.0
+    for n in names:
+        r = difflib.SequenceMatcher(None, alt, n).ratio()
+        if r > best[0]:
+            best, second = (r, n), best[0]
+        elif r > second:
+            second = r
+    # 「訁成睿科技」(一個字被拆成兩半)和「誠睿科技」相似度約 0.67:門檻 0.66,但要明顯勝過第二像的
+    if len(alt) >= 3 and best[0] >= 0.66 and best[0] - second >= 0.15:
+        return best[1]
+    return v
 
 
 # ---------------------------------------------------------------- 程式代碼(標題列 ( ) 內)
@@ -557,20 +701,32 @@ def recognize(img, tag="img"):
     result["prog"], result["progName"], result["progConf"] = code, name, conf
 
     if result["mode"] == "red":
+        try:
+            vendor_list = load_vendors()
+        except Exception as ex:
+            log("讀取廠商名單失敗: %s" % ex)
+            vendor_list = (set(), {})
         for i in range(len(reds)):
-            per_line = {}
+            # 同一個紅框裡以「單號」分組:不同影像版本可能把單別讀錯(3303 讀成 1303),投票決定,不要變成另一張表單
+            per_no = {}
             for t in texts.get("red%d" % i, []):
                 for line in t.split("\n"):
                     p = parse_red_line(line)
                     if p:
-                        per_line.setdefault((p["docType"], p["docNo"]), []).append(p)
-            if not per_line:
+                        per_no.setdefault(p["docNo"], []).append(p)
+            if not per_no:
                 result["warnings"].append("第 %d 個紅框沒有辨識出 4 碼單別 + 11 碼單號" % (i + 1))
-            for (dtype, dno), plist in per_line.items():
-                names, _ = vote([p["docName"] for p in plist])
-                vendors, _ = vote([p["vendor"] for p in plist])
+            for dno, plist in per_no.items():
+                dtype, nt = vote([p["docType"] for p in plist])
+                names, _ = vote([re.sub(r"一+$", "", p["docName"]) for p in plist])   # 表格格線常被讀成結尾的「一」
+                vcode, _ = vote([p["vendorCode"] for p in plist])
+                if vcode and vcode in vendor_list[1]:
+                    vendors = vendor_list[1][vcode]
+                else:
+                    vendors, _ = vote([correct_vendor(p["vendor"], p["vendorCode"], vendor_list) for p in plist])
                 result["forms"].append({"docType": dtype, "docNo": dno, "docName": names, "vendor": vendors,
-                                        "conf": "high" if len(plist) >= 2 else "low", "box": list(reds[i])})
+                                        "conf": "high" if len(plist) >= 2 and nt * 2 > len(plist) else "low",
+                                        "box": list(reds[i])})
     elif result["mode"] == "cyan":
         types = digits_candidates(texts.get("cyan0", []), 4)
         nos = digits_candidates(texts.get("cyan1", []), 11, valid_doc_no)
