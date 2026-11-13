@@ -370,6 +370,25 @@ def cmd_clear(argv):
         synced = receipt_snapshot.report(cfg["endpoint"], cfg["syncKey"], MASTER, force=True, kind=prof["key"])
     except Exception:
         synced = False
+    # 同時回報網站「進貨單簽核 / 退貨單簽核」按鈕的執行結果(原本要另外跑 puri09_queue.py report,漏掉時按鈕會卡在「執行中」)
+    status_reported = False
+    if "--no-report" not in argv and "PURI09_MASTER" not in os.environ:
+        docs = sorted({d for d in doc_of.values() if d} | ({default_doc} if default_doc else set()))
+        msg = "已建立並確認 %d 張%s單" % (len(docs), kind) + (":" + "、".join(docs) if docs else "")
+        if fail_items:
+            msg += ";%d 筆失敗(收料表已標 ⚠):" % len(fail_items) + ";".join("%s %s" % (k, v) for k, v in list(fail_items.items())[:5])
+        try:
+            cfg_path = os.path.join(HERE, "edit_config.json")
+            with open(cfg_path, encoding="utf-8-sig") as f:
+                cfg = json.load(f)
+            import urllib.parse, urllib.request
+            params = {"action": ("ret" if prof["key"] == "ret" else "puri09") + "_report", "key": cfg["syncKey"],
+                      "state": "error" if fail_items else "done", "msg": msg[:300]}
+            ep = cfg["endpoint"]
+            with urllib.request.urlopen(ep + ("&" if "?" in ep else "?") + urllib.parse.urlencode(params), timeout=30) as resp:
+                status_reported = bool(json.loads(resp.read().decode("utf-8")).get("ok"))
+        except Exception:
+            status_reported = False
     published = False
     if recorded and "PURI09_MASTER" not in os.environ:   # 履歷有新增:重新產生網站資料(網站退料鈕要查履歷),背景執行不等待
         try:
@@ -380,7 +399,7 @@ def cmd_clear(argv):
         except Exception:
             published = False
     res = {"ok": True, "deleted": len(del_rows), "requested": len(targets), "remaining": left, "backup": bak,
-           "history": recorded, "marked": marked, "driveCopied": drive_ok, "snapshotSynced": synced, "sitePublishStarted": published}
+           "history": recorded, "marked": marked, "driveCopied": drive_ok, "snapshotSynced": synced, "statusReported": status_reported, "sitePublishStarted": published}
     if no_doc:
         res["warning"] = "這些項目沒有指定單據號,履歷的單別/單號是空白: " + ",".join(no_doc)
     return out(res)
