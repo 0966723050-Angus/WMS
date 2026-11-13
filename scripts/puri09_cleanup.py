@@ -11,6 +11,10 @@
         採購單號是空白、或同一張採購單有多列時,項目寫成「採購單別-單號-序號|品號=單據號」(沒有採購單就是「|品號=單據號」)。
         退貨單用同一個指令,加上 --kind 退貨(讀的是「退料」工作表,履歷的單據=退貨)。
         快照之後才新增的列(網站又送了新的)不會被動到。清除前會先備份 WMS.xlsx。
+    python -I puri09_cleanup.py clear [--done "..."] --fail "3303-20261102004-0001=查無採購序號;|EL-A001=沒有採購單號"
+        --fail:建立失敗/略過的列,在「狀態」欄寫「⚠ 失敗:原因」(紅字),列保留;格式「採購單別-單號-序號=原因」,
+        分號分隔;採購單號空白的列寫「|品號=原因」。可以和 --done 同時使用(成功的清除並寫履歷,失敗的標記),也可以只給 --fail。
+        不論有沒有刪列,結束時都會自動把 WMS.xlsx 複製到雲端硬碟同步資料夾(不必再手動跑 Run_Sync)。
     python -I puri09_cleanup.py clear --all --doc 3402-20261110002 [--kind 退貨]
         清除快照內所有列(全部都成功、且同一張單時使用),一樣會寫進「進退貨履歷」。
     python -I puri09_cleanup.py sync
@@ -269,6 +273,14 @@ def cmd_clear(argv):
     def doc_for(t):
         return doc_of.get(t["po"] + "|" + t["code"]) or doc_of.get(t["po"]) or default_doc
 
+    fail_items = {}   # 「採購單」或「採購單|品號」 -> 失敗原因
+    if "--fail" in argv:
+        for item in argv[argv.index("--fail") + 1].split(";"):
+            if not norm(item):
+                continue
+            key, _, reason = item.partition("=")
+            fail_items[norm(key)] = norm(reason) or "原因不明"
+
     if "--all" in argv:
         targets = snap
     elif "--done" in argv:
@@ -278,8 +290,10 @@ def cmd_clear(argv):
             key, _, doc = item.partition("=")
             doc_of[norm(key)] = norm(doc)
         targets = [r for r in snap if (r["po"] + "|" + r["code"]) in doc_of or (r["po"] and r["po"] in doc_of)]
+    elif fail_items:
+        targets = []   # 只標記失敗,沒有成功要清除的
     else:
-        return out({"ok": False, "error": "請指定 --done <採購單=單據號,...> 或 --all --doc <單據號>"}, 1)
+        return out({"ok": False, "error": "請指定 --done <採購單=單據號,...> 或 --all --doc <單據號> 或 --fail <採購單=原因;...>"}, 1)
 
     wb = openpyxl.load_workbook(MASTER)
     if prof["sheet"] not in wb.sheetnames:
@@ -303,17 +317,46 @@ def cmd_clear(argv):
                 entries.append({"vendor": r["vendor"], "po": r["po"], "code": r["code"], "name": r["name"],
                                 "qty": r["qty"], "doc": doc_for(t)})
                 break
-    if HISTORY_SHEET not in wb.sheetnames:
+    if entries and HISTORY_SHEET not in wb.sheetnames:
         return out({"ok": False, "error": "WMS.xlsx 沒有工作表「%s」,未清除資料" % HISTORY_SHEET}, 1)
     no_doc = [e["po"] or e["code"] for e in entries if not e["doc"]]
     bak = backup()
-    try:
-        recorded = append_history(wb, entries, kind)   # 先寫履歷;標題對不上就整個中止,清單資料不動
-    except ValueError as ex:
-        return out({"ok": False, "error": "%s,未清除資料" % ex}, 1)
+    recorded = 0
+    if entries:
+        try:
+            recorded = append_history(wb, entries, kind)   # 先寫履歷;標題對不上就整個中止,清單資料不動
+        except ValueError as ex:
+            return out({"ok": False, "error": "%s,未清除資料" % ex}, 1)
+    # 失敗 / 略過的列:在「狀態」欄寫「⚠ 失敗:原因」(紅字),列保留(要在刪列之前用目前的列號標記)
+    marked = 0
+    if fail_items:
+        from openpyxl.styles import Font
+        st = cols.get("status")
+        if not st:
+            st = ws.max_column + 1
+            ws.cell(1, st).value = "狀態"
+        for t in snap:
+            reason = fail_items.get(t["po"] + "|" + t["code"]) or (fail_items.get(t["po"]) if t["po"] else None)
+            if reason is None:
+                continue
+            for r in cur:
+                if r["row"] in used:
+                    continue   # 這一列是成功要清除的,不標記
+                if row_identity(r) == row_identity(t):
+                    c = ws.cell(r["row"], st)
+                    c.value = "⚠ 失敗:" + reason
+                    c.font = Font(color="FFFF0000")
+                    marked += 1
+                    break
     for r in sorted(del_rows, reverse=True):
         ws.delete_rows(r)
     wb.save(MASTER)
+    drive_ok = True   # 一律複製到雲端硬碟同步資料夾(不必再手動跑 Run_Sync)
+    try:
+        os.makedirs(os.path.dirname(DRIVE), exist_ok=True)
+        shutil.copy2(MASTER, DRIVE)
+    except Exception:
+        drive_ok = False
     left = len(read_rows(openpyxl.load_workbook(MASTER)[prof["sheet"]], cols))
     # 清除後立刻把最新(通常是空的)清單回報給網站,「簽核」清單才不會還顯示已處理的資料
     synced = False
@@ -337,7 +380,7 @@ def cmd_clear(argv):
         except Exception:
             published = False
     res = {"ok": True, "deleted": len(del_rows), "requested": len(targets), "remaining": left, "backup": bak,
-           "history": recorded, "snapshotSynced": synced, "sitePublishStarted": published}
+           "history": recorded, "marked": marked, "driveCopied": drive_ok, "snapshotSynced": synced, "sitePublishStarted": published}
     if no_doc:
         res["warning"] = "這些項目沒有指定單據號,履歷的單別/單號是空白: " + ",".join(no_doc)
     return out(res)
@@ -356,7 +399,7 @@ def cmd_sync():
 
 def main(argv):
     if len(argv) < 2 or argv[1] not in ("read", "clear", "sync"):
-        return out({"ok": False, "error": "用法: puri09_cleanup.py read | clear --done <採購單=單據號,...> | clear --all --doc <單據號> | sync  (退貨加 --kind 退貨)"}, 2)
+        return out({"ok": False, "error": "用法: puri09_cleanup.py read | clear [--done <採購單=單據號,...>] [--fail <採購單=原因;...>] | clear --all --doc <單據號> | sync  (退貨加 --kind 退貨)"}, 2)
     try:
         if argv[1] == "read":
             return cmd_read(argv)
