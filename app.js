@@ -1168,6 +1168,7 @@
   // 來源:(1) 同事把截圖貼到這一頁上傳,電腦端辨識後自動錄入;(2) 在這一頁手動輸入 / 修改。
   // 每一列:核取方塊、表單名稱(下拉選單,連動程式代碼)、程式代碼、單別、單號;勾選後按「確認」送出簽核請求(作業方式同進貨單簽核)。
   var signPage = null;   // 目前開著的待簽核表單頁(貼上截圖用);離開這一頁就清掉
+  var SIGN_DROP_HINT = "Ctrl+V 貼上,或選擇圖片檔,再按「上傳辨識」。辨識出的表單約 1~2 分鐘內會出現在下面的清單。";
   var signInstance = 0;  // 待簽核表單頁的實例編號(每次進入 +1,舊實例的背景更新靠它判斷自己已過期)
   var SIGN_IMG_MAX = 1600000;   // 圖片大小上限(Apps Script 端也會檢查)
 
@@ -1197,14 +1198,16 @@
     var canConfirm = can("erp_sign");   // 只有「確認」鍵需要權限
     app.innerHTML =
       '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/erp">ERP</a> / 待簽核表單</div>' +
-      '<h1 class="page-title page-title-row"><span>待簽核表單</span>' +
-        '<button type="button" class="btn btn-sm btn-secondary" id="sign-refresh">重新整理</button></h1>' +
+      '<h1 class="page-title">待簽核表單</h1>' +
 
       '<section class="sign-card">' +
-        '<h2 class="sign-h">上傳截圖辨識</h2>' +
-        '<p class="rcv-intro">用截圖工具截下 ERP 畫面(要簽核的表單請用紅框框起來;沒有紅框就讀畫面上方藍綠色的單別/單號),在這一頁按 <b>Ctrl+V</b> 貼上,或選擇圖片檔,再按「上傳辨識」。辨識出的表單約 1~2 分鐘內會出現在下面的清單。</p>' +
+        '<div class="sign-h sign-title-row"><h2 class="sign-h-t">上傳截圖辨識</h2>' +
+          '<details class="sign-help"><summary>使用說明</summary>' +
+            '<div class="sign-help-body">用截圖工具截下 ERP 表單整個畫面,如一張圖內有多筆要簽核的表單請用紅框各別框起來,只有一筆(單身),不用框。</div>' +
+          '</details>' +
+        '</div>' +
         '<div class="sign-drop" id="sign-drop" tabindex="0">' +
-          '<div id="sign-drop-text">在這裡按 Ctrl+V 貼上截圖,或把圖片拖進來</div>' +
+          '<div id="sign-drop-text">' + SIGN_DROP_HINT + '</div>' +
           '<div class="sign-preview-wrap" id="sign-preview-wrap" hidden>' +
             '<img id="sign-preview" alt="貼上的截圖預覽" />' +
             '<button type="button" class="sign-preview-clear" id="sign-preview-clear" title="移除這張圖片(可重新貼上別張)" aria-label="移除這張圖片">' +
@@ -1558,7 +1561,7 @@
       if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
       $("sign-preview").removeAttribute("src");
       $("sign-preview-wrap").hidden = true;
-      $("sign-drop-text").textContent = "在這裡按 Ctrl+V 貼上截圖,或把圖片拖進來";
+      $("sign-drop-text").textContent = SIGN_DROP_HINT;
       $("sign-upload").disabled = true;
     }
     $("sign-preview-clear").addEventListener("click", function (e) {
@@ -1612,11 +1615,13 @@
         var prevBusy = {};
         imgs.forEach(function (r) { if (r.state === "queued" || r.state === "processing") prevBusy[r.id] = true; });
         imgs = res.images || [];
-        $("sign-imgs").innerHTML = imgs.slice(0, 6).map(function (r) {
+        var todayStr = new Date().toDateString();   // 只顯示當天的紀錄,超過 5 筆用捲動看
+        var todayImgs = imgs.filter(function (r) { return new Date(r.ts).toDateString() === todayStr; });
+        $("sign-imgs").innerHTML = todayImgs.length ? todayImgs.map(function (r) {
           var cls = r.state === "error" ? " bad" : r.state === "done" ? " ok" : "";
           return '<div class="sign-img-row' + cls + '"><span class="t">' + esc(new Date(r.ts).toLocaleTimeString("zh-TW", { hour12: false })) +
             ' · ' + esc(whoShort(r.by)) + '</span><span>' + esc(imgText(r)) + '</span></div>';
-        }).join("");
+        }).join("") : '<div class="sign-img-empty">今天還沒有上傳紀錄</div>';
         var finished = imgs.some(function (r) { return prevBusy[r.id] && (r.state === "done" || r.state === "error"); });
         if (finished) loadForms(true);   // 剛辨識完:清單馬上更新
       }).catch(function () { /* 讀不到不影響使用,下一輪背景更新再試 */ });
@@ -1652,7 +1657,6 @@
       }).catch(function (err) { if (session) { msg(err.message); updateButtons(); } });
     });
 
-    $("sign-refresh").addEventListener("click", function () { msg(""); loadForms(); loadImgs(); loadStatus(); });
 
     // 背景自動更新:每 10 秒更新一次(辨識完成的表單、簽核結果會自動出現,不用按重新整理)。
     // 任何一次連線失敗都不會讓它停掉;離開這一頁就停止。回到分頁時馬上更新一次。

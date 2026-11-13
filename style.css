@@ -1236,8 +1236,13 @@ body.scan-open .modal-backdrop { -webkit-backdrop-filter: none; backdrop-filter:
 .sign-preview-clear svg { width: 14px; height: 14px; }
 .sign-up-actions { display: flex; gap: 10px; margin-top: 10px; }
 .sign-file { cursor: pointer; }
-.sign-imgs { margin-top: 8px; font-size: 12.5px; }
-.sign-img-row { display: flex; gap: 10px; padding: 4px 0; border-top: 1px solid var(--border); }
+.sign-imgs { margin-top: 8px; font-size: 12.5px; max-height: 130px; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.sign-img-empty { padding: 4px 0; color: var(--text-muted); }
+.sign-title-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sign-title-row .sign-h-t { margin: 0; font-size: inherit; font-weight: inherit; }
+.sign-help summary { cursor: pointer; font-size: 13px; font-weight: 400; color: var(--brand); user-select: none; }
+.sign-help-body { margin-top: 6px; font-size: 13px; font-weight: 400; line-height: 1.6; color: var(--text-muted); }
+.sign-img-row { display: flex; gap: 10px; padding: 4px 0; min-height: 26px; box-sizing: border-box; border-top: 1px solid var(--border); }
 .sign-img-row .t { color: var(--text-muted); flex: 0 0 auto; }
 .sign-img-row.ok { color: var(--brand); }
 .sign-img-row.bad { color: var(--warn-text); font-weight: 700; }
