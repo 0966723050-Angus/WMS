@@ -1167,6 +1167,7 @@
   // 來源:(1) 同事把截圖貼到這一頁上傳,電腦端辨識後自動錄入;(2) 在這一頁手動輸入 / 修改。
   // 每一列:核取方塊、表單名稱(下拉選單,連動程式代碼)、程式代碼、單別、單號;勾選後按「確認」送出簽核請求(作業方式同進貨單簽核)。
   var signPage = null;   // 目前開著的待簽核表單頁(貼上截圖用);離開這一頁就清掉
+  var signInstance = 0;  // 待簽核表單頁的實例編號(每次進入 +1,舊實例的背景更新靠它判斷自己已過期)
   var SIGN_IMG_MAX = 1600000;   // 圖片大小上限(Apps Script 端也會檢查)
 
   // 表單名稱 <-> 程式代碼對照表(來自 ERP 資料夾的「表單與程式碼對照表.xlsx」,隨網站資料發布)
@@ -1237,7 +1238,7 @@
 
       '<section class="sign-card">' +
         '<h2 class="sign-h">待簽核清單 <span class="sign-count" id="sign-count"></span></h2>' +
-        '<div class="sign-row sign-headrow"><label class="sign-chk"><input type="checkbox" id="sign-all" aria-label="全選" /></label>' +
+        '<div class="sign-row sign-headrow"><label class="sign-chk"><input type="checkbox" id="sign-all" aria-label="全選" /><span class="sign-all-l">全選</span></label>' +
           '<span>表單名稱</span><span>程式代碼</span><span>單別</span><span>單號</span><span>廠商</span><span>上傳者</span><span>圖片</span><span></span></div>' +
         '<div id="sign-list"><div class="skeleton">載入中…</div></div>' +
         '<div class="sign-foot">' +
@@ -1251,7 +1252,11 @@
     function $(id) { return document.getElementById(id); }
     var forms = [], imgs = [], picked = {}, pendingBlob = null, previewUrl = "", busy = false, lastSig = "";
     var tickTimer = null;
-    var alive = function () { return document.body.contains($("sign-list")); };
+    // 每次進入這一頁都換一個編號:舊的頁面實例(之前離開又回來留下的更新迴圈)看到編號不同就立刻停止。
+    // 以前只檢查畫面上有沒有 #sign-list,結果舊實例會用自己「沒勾選」的狀態把新頁面的清單重畫,
+    // 確認鍵就在「確認」和「確認(1 張)」之間跳來跳去。
+    var myInst = ++signInstance;
+    var alive = function () { return myInst === signInstance && document.body.contains($("sign-list")); };
     function msg(t) { $("sign-msg").textContent = t || ""; }
 
     // ---- 清單 ----
@@ -1302,6 +1307,7 @@
     // silent=true:背景自動更新。內容沒變就不重畫;使用者正在編輯欄位時先不重畫(下一輪再更新),避免打字被打斷
     function loadForms(silent) {
       return api("signforms_list").then(function (res) {
+        if (!alive()) return;   // 這個頁面實例已過期(使用者離開又回來了),不要動新頁面的畫面
         if (!res.ok) throw new Error(res.error || "讀取失敗");
         // 同一張截圖辨識出的幾筆建立時間相同,伺服器回傳的先後不固定 -> 每 10 秒更新時順序會跳動。
         // 這裡固定排序:新的在前,同時間的依單別、單號,最後用 id
@@ -1655,9 +1661,11 @@
       if (!document.hidden) { loadImgs(); loadForms(true); loadStatus(); }
       tickTimer = setTimeout(tick, 10000);
     }
-    document.addEventListener("visibilitychange", function () {
-      if (alive() && document.visibilityState === "visible") tick();
-    });
+    function onVisible() {
+      if (!alive()) { document.removeEventListener("visibilitychange", onVisible); return; }   // 舊實例:自己拆掉
+      if (document.visibilityState === "visible") tick();
+    }
+    document.addEventListener("visibilitychange", onVisible);
 
     if (!canConfirm) msg("您沒有「確認」的權限(其他功能都可以使用),需要送出簽核請管理者開通「ERP:待簽核表單確認」。");
     loadForms();

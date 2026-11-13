@@ -1249,6 +1249,7 @@ body.scan-open .modal-backdrop { -webkit-backdrop-filter: none; backdrop-filter:
 .sign-img { font-size: 13px; white-space: nowrap; }
 .sign-img-l { display: none; font-style: normal; color: var(--text-muted); }
 .sign-headrow { font-size: 12.5px; font-weight: 700; color: var(--text-muted); border-top: none; padding-bottom: 2px; }
+.sign-all-l { display: none; }
 .sign-chk { display: flex; align-items: center; justify-content: center; }
 .sign-row input:not([type="checkbox"]), .sign-row select {
   width: 100%; min-width: 0; height: 36px; padding: 0 10px; font: inherit; font-size: 14px;
@@ -1264,7 +1265,11 @@ body.scan-open .modal-backdrop { -webkit-backdrop-filter: none; backdrop-filter:
 .sign-note { margin: 8px 0 0; font-size: 12.5px; color: var(--text-muted); }
 @media (max-width: 720px) {
   .sign-row { grid-template-columns: 34px 1fr 1fr; }
-  .sign-headrow { display: none; }
+  /* 手機:標題列只留「全選」核取方塊 */
+  .sign-headrow { display: flex; padding: 4px 6px 6px; }
+  .sign-headrow > span { display: none; }
+  .sign-headrow .sign-chk { justify-content: flex-start; gap: 8px; width: auto; font-size: 14px; font-weight: 700; }
+  .sign-all-l { display: inline; }
   .sign-row .sign-name { grid-column: 2 / -1; }
   .sign-row .sign-prog { grid-column: 2; }
   .sign-row .sign-dt { grid-column: 3; }

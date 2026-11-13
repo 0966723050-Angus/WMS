@@ -254,6 +254,50 @@ def cmd_read(argv):
     return out({"ok": True, "count": len(rows), "rows": rows})
 
 
+def build_notice(kind, entries, fail_rows):
+    """進貨單 / 退貨單簽核完成後的釘釘訊息(格式和待簽核表單的簽核結果一致:標題一行 + ✓ 成功 / ✗ 失敗明細)。"""
+    label = "進貨單" if kind == "進貨" else "退貨單"
+    docs = {}   # ERP 單據號 -> [entry]
+    for e in entries:
+        docs.setdefault(e["doc"] or "(單據號未記錄)", []).append(e)
+    lines = ["【ERP %s簽核結果】成功 %d 張%s(%d 列)、失敗 %d 列" % (label, len(docs), label, len(entries), len(fail_rows))]
+
+    def item(e):
+        q = e["qty"]
+        q = int(q) if q == int(q) else q
+        return "%s ×%s" % (e["code"], q)
+
+    for doc, es in list(docs.items())[:15]:
+        vendors = "、".join(sorted({e["vendor"] for e in es if e["vendor"]}))
+        detail = "、".join(item(e) for e in es[:4]) + ("…等 %d 列" % len(es) if len(es) > 4 else "")
+        lines.append("✓ %s %s%s" % (doc, vendors, ":" + detail if detail else ""))
+    if len(docs) > 15:
+        lines.append("…另有 %d 張成功" % (len(docs) - 15))
+    for f in fail_rows[:15]:
+        q = f["qty"]
+        q = int(q) if q == int(q) else q
+        lines.append("✗ %s %s %s ×%s\n   原因:%s" % (f["vendor"], f["po"] or "(無採購單號)", f["code"], q, f["reason"]))
+    if len(fail_rows) > 15:
+        lines.append("…另有 %d 列失敗" % (len(fail_rows) - 15))
+    if fail_rows:
+        lines.append("失敗的列仍留在 WMS.xlsx「%s」,狀態欄有原因,處理後可再按確認重跑。" % ("收料" if kind == "進貨" else "退料"))
+    return "\n".join(lines)
+
+
+def notify_dingtalk(kind, entries, fail_rows):
+    """把結果發到釘釘機器人(網址放在 edit_config.json 的 dingtalkWebhook;沒設定就不發)。回傳 True / False / None(沒設定)。"""
+    try:
+        with open(os.environ.get("PURI09_CONFIG") or os.path.join(HERE, "edit_config.json"), encoding="utf-8-sig") as f:   # PURI09_CONFIG 只在測試時用
+            cfg = json.load(f)
+        if not (cfg.get("dingtalkWebhook") or "").strip():
+            return None
+        import dingtalk_notify
+        ok, _ = dingtalk_notify.send_text(cfg, build_notice(kind, entries, fail_rows))
+        return ok
+    except Exception:
+        return False
+
+
 def cmd_clear(argv):
     kind = kind_arg(argv)
     if not kind:
@@ -329,6 +373,7 @@ def cmd_clear(argv):
             return out({"ok": False, "error": "%s,未清除資料" % ex}, 1)
     # 失敗 / 略過的列:在「狀態」欄寫「⚠ 失敗:原因」(紅字),列保留(要在刪列之前用目前的列號標記)
     marked = 0
+    fail_rows = []   # 釘釘通知用:失敗的列與原因
     if fail_items:
         from openpyxl.styles import Font
         st = cols.get("status")
@@ -347,6 +392,7 @@ def cmd_clear(argv):
                     c.value = "⚠ 失敗:" + reason
                     c.font = Font(color="FFFF0000")
                     marked += 1
+                    fail_rows.append({"vendor": r["vendor"], "po": r["po"], "code": r["code"], "qty": r["qty"], "reason": reason})
                     break
     for r in sorted(del_rows, reverse=True):
         ws.delete_rows(r)
@@ -398,8 +444,11 @@ def cmd_clear(argv):
             published = True
         except Exception:
             published = False
+    notified = None
+    if (entries or fail_rows) and ("PURI09_MASTER" not in os.environ or "PURI09_CONFIG" in os.environ):   # 測試用副本不發正式通知(除非明確指定測試用的設定檔)
+        notified = notify_dingtalk(kind, entries, fail_rows)
     res = {"ok": True, "deleted": len(del_rows), "requested": len(targets), "remaining": left, "backup": bak,
-           "history": recorded, "marked": marked, "driveCopied": drive_ok, "snapshotSynced": synced, "statusReported": status_reported, "sitePublishStarted": published}
+           "history": recorded, "marked": marked, "dingtalk": notified, "driveCopied": drive_ok, "snapshotSynced": synced, "statusReported": status_reported, "sitePublishStarted": published}
     if no_doc:
         res["warning"] = "這些項目沒有指定單據號,履歷的單別/單號是空白: " + ",".join(no_doc)
     return out(res)
