@@ -1203,7 +1203,12 @@
         '<p class="rcv-intro">用截圖工具截下 ERP 畫面(要簽核的表單請用紅框框起來;沒有紅框就讀畫面上方藍綠色的單別/單號),在這一頁按 <b>Ctrl+V</b> 貼上,或選擇圖片檔,再按「上傳辨識」。辨識出的表單約 1~2 分鐘內會出現在下面的清單。</p>' +
         '<div class="sign-drop" id="sign-drop" tabindex="0">' +
           '<div id="sign-drop-text">在這裡按 Ctrl+V 貼上截圖,或把圖片拖進來</div>' +
-          '<img id="sign-preview" alt="" hidden />' +
+          '<div class="sign-preview-wrap" id="sign-preview-wrap" hidden>' +
+            '<img id="sign-preview" alt="貼上的截圖預覽" />' +
+            '<button type="button" class="sign-preview-clear" id="sign-preview-clear" title="移除這張圖片(可重新貼上別張)" aria-label="移除這張圖片">' +
+              '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>' +
+            '</button>' +
+          '</div>' +
         '</div>' +
         '<div class="sign-up-actions">' +
           '<label class="btn btn-sm btn-secondary sign-file">選擇圖片<input type="file" id="sign-file" accept="image/*" hidden /></label>' +
@@ -1536,10 +1541,25 @@
       if (previewUrl) URL.revokeObjectURL(previewUrl);
       previewUrl = URL.createObjectURL(blob);
       $("sign-preview").src = previewUrl;
-      $("sign-preview").hidden = false;
-      $("sign-drop-text").textContent = "已選擇圖片(" + Math.round(blob.size / 1024) + " KB),按「上傳辨識」送出;要換圖請再貼上一次";
+      $("sign-preview-wrap").hidden = false;
+      $("sign-drop-text").textContent = "已選擇圖片(" + Math.round(blob.size / 1024) + " KB),按「上傳辨識」送出;要換圖請按圖片右上角的 X 移除,或直接再貼上一次";
       $("sign-upload").disabled = false;
     }
+    // 移除貼上的圖片(還沒上傳的),回到可以重新貼上的狀態
+    function clearImage() {
+      pendingBlob = null;
+      if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
+      $("sign-preview").removeAttribute("src");
+      $("sign-preview-wrap").hidden = true;
+      $("sign-drop-text").textContent = "在這裡按 Ctrl+V 貼上截圖,或把圖片拖進來";
+      $("sign-upload").disabled = true;
+    }
+    $("sign-preview-clear").addEventListener("click", function (e) {
+      e.stopPropagation();
+      clearImage();
+      msg("");
+      $("sign-drop").focus();   // 游標回到貼上區,直接按 Ctrl+V 就能貼新的
+    });
     signPage = { setImage: setImage };
 
     $("sign-file").addEventListener("change", function () { setImage($("sign-file").files[0]); $("sign-file").value = ""; });
@@ -1560,9 +1580,7 @@
           if (!res.ok) throw new Error(res.error || "上傳失敗");
           msg("");
           showToast("已上傳,約 1~2 分鐘內辨識完成");
-          pendingBlob = null;
-          $("sign-preview").hidden = true;
-          $("sign-drop-text").textContent = "在這裡按 Ctrl+V 貼上截圖,或把圖片拖進來";
+          clearImage();
           return loadImgs();
         }).catch(function (err) {
           if (!session) return;
