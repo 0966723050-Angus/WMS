@@ -126,15 +126,24 @@ def components(mask, min_pixels=6):
 def find_red_boxes(img):
     """紅色空心矩形(使用者畫的框)。排除工具列上的紅色小圖示、標題列的紅色箭頭。"""
     W, H = img.size
+    mask = red_mask(img)
     boxes = []
-    for c in components(red_mask(img)):
+    for c in components(mask):
         x0, y0, x1, y1 = c["box"]
         w, h = x1 - x0, y1 - y0
         if w < max(60, W * 0.04) or not (10 <= h <= H * 0.25):
             continue
         if y1 < H * 0.05:            # 標題列(箭頭)
             continue
-        if c["n"] / float(w * h) > 0.35:   # 實心的不是框
+        # 實心的不是框:看「框內部」是不是空的。不能用整體填滿率判斷 —— 只框一列的細長框,
+        # 粗紅線本身就佔了 4 成以上面積(2026-11-13 PURI07 截圖就是這樣被誤排除)。
+        t = max(4, min(8, h // 4))
+        if w > 2 * t and h > 2 * t:
+            inner = mask.crop((x0 + t, y0 + t, x1 - t, y1 - t))
+            iw, ih = inner.size
+            if sum(1 for v in inner.tobytes() if v) / float(iw * ih) > 0.2:
+                continue
+        elif c["n"] / float(w * h) > 0.6:
             continue
         boxes.append((x0, y0, x1, y1))
     boxes.sort(key=lambda b: (b[1], b[0]))
@@ -170,6 +179,8 @@ def whiten(c, cyan, red=True):
 def finish(c, scale, resample, mode):
     if mode == "bin":
         c = c.point(lambda v: 0 if v < 150 else 255)
+    elif mode == "bin170":   # 標題列小字:門檻高一點,筆畫比較不會斷
+        c = c.convert("L").point(lambda v: 0 if v < 170 else 255).convert("RGB")
     c = c.resize((c.size[0] * scale, c.size[1] * scale), RESAMPLE[resample])
     pad = 10 * scale
     out = Image.new("RGB", (c.size[0] + 2 * pad, c.size[1] + 2 * pad), (255, 255, 255))
@@ -201,8 +212,8 @@ class Ocr:
         self.dir = os.path.join(WORK, "crops")
         os.makedirs(self.dir, exist_ok=True)
 
-    def add(self, name, box, cyan, variants):
-        base = whiten(self.img.crop(box), cyan=cyan)
+    def add(self, name, box, cyan, variants, src=None):
+        base = whiten((src or self.img).crop(box), cyan=cyan)
         for scale, resample, mode in variants:
             p = os.path.join(self.dir, "%s_%s_s%d_%s_%s.png" % (self.tag, name, scale, resample, mode))
             finish(base.copy(), scale, resample, mode).save(p)
@@ -337,10 +348,11 @@ def _core(name):
 
 
 def parse_title(texts, programs):
-    """標題列文字 -> (程式代碼, 表單名稱, 把握度 known/guess/none)。
+    """標題列文字 -> (程式代碼, 表單名稱, 把握度 known/code/guess/none)。
+    known = 名稱和代碼都對得上;code = 主要靠代碼對上(名稱沒讀清楚),紅框單據名稱對得到別的程式時以單據名稱為準。
     標題長得像「採購單建立作業(PURI07)[公司名]」:用「括號前的中文名稱」和「括號內的代碼」分別和對照表比對,
     兩者綜合分數最高、且夠像的才算認得(代碼小字英文 OCR 常讀錯,所以不能只靠代碼)。"""
-    best = None
+    scores = {}   # 程式代碼 -> (分數, 名稱相似度, 對照表項目)
     raw_codes = []
     for t in texts:
         s = re.sub(r"\s+", "", t)
@@ -355,10 +367,13 @@ def parse_title(texts, programs):
             code_sim = difflib.SequenceMatcher(None, canon_code(code_raw), canon_code(p["code"])).ratio()
             score = 0.6 * name_sim + 0.4 * code_sim
             if (name_sim >= 0.6 or code_sim >= 0.8) and score >= 0.6:
-                if best is None or score > best[0]:
-                    best = (score, p)
-    if best:
-        return best[1]["code"], best[1]["name"], "known"
+                if p["code"] not in scores or score > scores[p["code"]][0]:
+                    scores[p["code"]] = (score, name_sim, p)
+    ranked = sorted(scores.values(), key=lambda v: -v[0])
+    # 第一名要明顯領先其他代碼才算認得:只讀到「PURI0」時 PURI07 和 PURI09 一樣像,不能隨便挑一個
+    if ranked and (len(ranked) == 1 or ranked[0][0] - ranked[1][0] >= 0.05):
+        best = ranked[0]
+        return best[2]["code"], best[2]["name"], "known" if best[1] >= 0.8 else "code"
     # 對照表裡沒有:用 OCR 的代碼(大寫英數,補正 |→I),格式像程式代碼才採用
     cands = []
     for c in raw_codes:
@@ -389,7 +404,20 @@ def normalize_scale(img):
     return img.resize((int(round(img.size[0] * scale)), int(round(img.size[1] * scale))), Image.LANCZOS), scale
 
 
+def program_from_doc_name(doc_name, programs):
+    """標題列讀不出程式代碼時的備援:用紅框裡的單據名稱(例「工程採購單」)找對照表中包含在內、最長的表單名稱
+    (「採購單」-> PURI07;「工程採購變更單」會對到較長的「採購變更單」而不是「採購單」)。"""
+    name = re.sub(r"[^%s]" % CJK, "", doc_name or "")
+    best = None
+    for p in programs:
+        core = _core(p["name"])
+        if len(core) >= 2 and core in name and (best is None or len(core) > len(_core(best["name"]))):
+            best = p
+    return best
+
+
 def recognize(img, tag="img"):
+    orig = img
     img, norm = normalize_scale(img)
     W, H = img.size
     result = {"ok": True, "mode": "", "prog": "", "progName": "", "progConf": "none", "forms": [], "warnings": [], "size": [W, H], "scale": round(norm, 3)}
@@ -397,8 +425,11 @@ def recognize(img, tag="img"):
     cyans = [] if reds else find_cyan_fields(img)
     ocr = Ocr(img, tag)
 
-    title_box = (0, 0, max(120, int(W * 0.25)), max(20, int(H * 0.035)))
-    ocr.add("title", title_box, cyan=False, variants=[(s, r, "gray") for s in (2, 3, 4) for r in ("lanczos", "bicubic")])
+    # 標題列從「原始圖片」裁切:整張圖先縮放校正會讓標題小字更糊,OCR 幾乎讀不出來
+    OW, OH = orig.size
+    title_box = (0, 0, max(120, int(OW * 0.25)), max(20, int(OH * 0.035)))
+    ocr.add("title", title_box, cyan=False, src=orig,
+            variants=[(s, r, "gray") for s in (2, 3, 4) for r in ("lanczos", "bicubic")] + [(s, "lanczos", "bin170") for s in (3, 4, 6)])
 
     if reds:
         result["mode"] = "red"
@@ -416,12 +447,9 @@ def recognize(img, tag="img"):
 
     texts = ocr.run()
 
-    code, name, conf = parse_title(texts.get("title", []), load_programs())
+    programs = load_programs()
+    code, name, conf = parse_title(texts.get("title", []), programs)
     result["prog"], result["progName"], result["progConf"] = code, name, conf
-    if conf == "guess":
-        result["warnings"].append("程式代碼 %s 不在「表單與程式碼對照表」中,是依 OCR 結果猜的" % code)
-    elif conf == "none":
-        result["warnings"].append("沒辨識出標題列的程式代碼")
 
     if result["mode"] == "red":
         for i in range(len(reds)):
@@ -451,6 +479,21 @@ def recognize(img, tag="img"):
 
     for f in result["forms"]:
         f["prog"], f["progName"], f["src"] = result["prog"], result["progName"], "紅框" if result["mode"] == "red" else "藍綠框"
+        if conf != "known":   # 標題列沒有完全認出來:紅框裡的單據名稱對得到程式時,以單據名稱為準
+            p = program_from_doc_name(f.get("docName"), programs)
+            if p:
+                f["prog"], f["progName"] = p["code"], p["name"]
+    if conf == "code" and all(f["prog"] == code for f in result["forms"]):
+        pass   # 代碼認得、單據名稱沒有不同意見
+    elif conf != "known":
+        by_name = {(f["prog"], f["progName"]) for f in result["forms"] if f["prog"]}
+        if result["forms"] and len(by_name) == 1 and all(f["prog"] for f in result["forms"]):
+            result["prog"], result["progName"] = by_name.pop()
+            result["progConf"] = "docName"
+        elif conf == "guess":
+            result["warnings"].append("程式代碼 %s 不在「表單與程式碼對照表」中,是依 OCR 結果猜的" % code)
+        else:
+            result["warnings"].append("沒辨識出標題列的程式代碼")
     return result
 
 
