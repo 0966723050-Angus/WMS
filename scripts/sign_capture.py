@@ -575,6 +575,46 @@ def normalize_scale(img):
     return img.resize((int(round(img.size[0] * scale)), int(round(img.size[1] * scale))), Image.LANCZOS), scale
 
 
+def split_rows(img, box):
+    """紅框裡不只一列(一個紅框圈住好幾筆單據)時,切成一列一個區塊。回傳 [(y_top, y_bottom), ...](標準大小圖片上的座標)。
+    Windows OCR 會把同一框內的好幾列文字讀成「一行」且欄位交錯(單別 單別 單號 單號 … 廠商 廠商),
+    只會讀到第一筆單號、廠商還會錯置,所以一定要先切成單列再辨識。
+    列數 = 框高 / 列高(表格一列約等於藍綠框高 FIELD_H);邊界再用附近的表格橫線微調。"""
+    x0, y0, x1, y1 = box
+    top, bot = y0 + 3, y1 - 3
+    n = int((bot - top) / FIELD_H + 0.3)
+    if n <= 1:
+        return [(top, bot)]
+    gray = img.convert("L")
+    rgb = img.convert("RGB")
+    W = x1 - x0 - 8
+    pitch = (bot - top) / float(n)
+
+    def line_score(y):
+        if y < y0 + 4 or y > y1 - 4:
+            return 0.0
+        g = gray.crop((x0 + 4, y, x1 - 4, y + 1)).tobytes()
+        c = rgb.crop((x0 + 4, y, x1 - 4, y + 1)).tobytes()
+        dark = 0
+        for i, v in enumerate(g):
+            r, gg, b = c[3 * i], c[3 * i + 1], c[3 * i + 2]
+            if v < 215 and not (r - gg > 60 and r - b > 60):   # 深色、但不是紅框的紅
+                dark += 1
+        return dark / float(max(1, W))
+
+    edges = [top]
+    for k in range(1, n):
+        e = int(round(top + pitch * k))
+        best_y, best_s = e, 0.0
+        for y in range(e - 6, e + 7):
+            s = line_score(y)
+            if s > best_s:
+                best_y, best_s = y, s
+        edges.append(best_y if best_s >= 0.35 else e)
+    edges.append(bot)
+    return [(edges[i], edges[i + 1]) for i in range(n)]
+
+
 def program_from_doc_name(doc_name, programs):
     """標題列讀不出程式代碼時的備援:用紅框裡的單據名稱(例「工程採購單」)找對照表中包含在內、最長的表單名稱
     (「採購單」-> PURI07;「工程採購變更單」會對到較長的「採購變更單」而不是「採購單」)。"""
@@ -680,11 +720,15 @@ def recognize(img, tag="img"):
         ocr.add("label", (max(0, int(hx0 - hh * 7)), max(0, int(hy0 - 2)), max(1, int(hx0 - 2)), int(hy1 + 2)), cyan=True, src=orig,
                 variants=[(s, "lanczos", m) for s in (2, 3, 4) for m in ("gray", "bin170")])
 
+    red_bands = {}   # 紅框序號 -> [列序號, ...]
     if reds:
         result["mode"] = "red"
         for i, (x0, y0, x1, y1) in enumerate(reds):
-            ocr.add("red%d" % i, (x0 + 3, y0 + 3, x1 - 3, y1 - 3), cyan=False,
-                    variants=[(s, r, "gray") for s in (2, 3, 4) for r in ("lanczos", "bicubic")] + [(3, "lanczos", "bin"), (4, "bicubic", "bin")])
+            # 一個紅框可能圈住好幾列:切成一列一個區塊,各自辨識(見 split_rows)
+            for r, (ya, yb) in enumerate(split_rows(img, (x0, y0, x1, y1))):
+                red_bands.setdefault(i, []).append(r)
+                ocr.add("red%d_%d" % (i, r), (x0 + 3, max(y0 + 3, ya - 1), x1 - 3, min(y1 - 3, yb + 1)), cyan=False,
+                        variants=[(s, rs, "gray") for s in (2, 3, 4) for rs in ("lanczos", "bicubic")] + [(3, "lanczos", "bin"), (4, "bicubic", "bin")])
     elif len(cyans) >= 2:
         result["mode"] = "cyan"
         v = [(s, r, m) for s in (2, 3, 4, 5) for r in ("lanczos", "bicubic") for m in ("gray", "bin")]
@@ -708,12 +752,16 @@ def recognize(img, tag="img"):
             vendor_list = (set(), {})
         for i in range(len(reds)):
             # 同一個紅框裡以「單號」分組:不同影像版本可能把單別讀錯(3303 讀成 1303),投票決定,不要變成另一張表單
+            # (紅框圈住好幾列時,每一列各自辨識,再合在一起)
             per_no = {}
-            for t in texts.get("red%d" % i, []):
-                for line in t.split("\n"):
-                    p = parse_red_line(line)
-                    if p:
-                        per_no.setdefault(p["docNo"], []).append(p)
+            for r in red_bands.get(i, [0]):
+                for t in texts.get("red%d_%d" % (i, r), []):
+                    for line in t.split("\n"):
+                        p = parse_red_line(line)
+                        if p:
+                            per_no.setdefault(p["docNo"], []).append(p)
+            if len(red_bands.get(i, [0])) > 1:
+                result.setdefault("rows", {})[str(i)] = len(red_bands[i])
             if not per_no:
                 result["warnings"].append("第 %d 個紅框沒有辨識出 4 碼單別 + 11 碼單號" % (i + 1))
             for dno, plist in per_no.items():
