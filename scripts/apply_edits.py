@@ -449,6 +449,12 @@ def main():
                 added, skipped = out
                 msg = "已寫入「待簽核清單」%d 張" % added + ("(另有 %d 張原本就在清單中)" % skipped if skipped else "")
                 call(endpoint, {"action": "sign_ack", "key": sync_key, "ts": sreq.get("ts"), "msg": msg})
+                # 留下通知檔:監看器(puri09_watch.py)看到會喚醒 Claude 去執行 skill erp-approval,簽完再回報釘釘(sign_result.py)
+                try:
+                    with open(os.path.join(os.path.dirname(args.log) or HERE, "sign_approval_pending.json"), "w", encoding="utf-8") as pf:
+                        json.dump({"ts": int(time.time() * 1000), "count": len(sreq["items"]), "added": added, "by": sreq.get("by", "")}, pf, ensure_ascii=False)
+                except Exception as ex:
+                    log("警告: 寫入簽核通知檔失敗: %s" % ex)
         except Exception as ex:
             log("警告: 寫入待簽核清單失敗: %s" % ex)
     # 網頁上「編輯表單清單」存的對照清單 -> 存成本機檔,辨識程式校正程式代碼時優先使用(沒編輯過 / 已還原預設就刪掉檔案)

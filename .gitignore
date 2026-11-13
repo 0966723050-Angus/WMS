@@ -18,3 +18,5 @@ scripts/sign_capture/
 scripts/sign_sheet_state.json
 scripts/dingtalk_state.json
 scripts/sign_programs_site.json
+scripts/sign_approval_pending.json
+scripts/sign_batch.json
