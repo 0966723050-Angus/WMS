@@ -7,7 +7,9 @@
   python -I sign_result.py begin
       在跑 erp-approval 之前執行:把工作表目前所有列存成這一批的快照(sign_batch.json),清掉各列舊的「狀態」,
       並刪除通知檔。印出一行 JSON(count=這一批幾張)。
-  python -I sign_result.py finish
+  python -I sign_result.py finish [--done "程式|單別|單號,..."] [--fail "程式|單別|單號=原因;..."]
+      (帶 --done / --fail 時,會先把結果寫回工作表:--done 的列刪除、--fail 的列在「狀態」寫原因,備份、存檔、同步雲端硬碟都一併做完;
+       erp-approval 用這個一次完成「回寫 + 回報」,不必另外寫 Python。)
       erp-approval 跑完之後執行:和快照比對 ——
         已不在工作表 = 簽核成功;還在、「狀態」有字 = 失敗(原因就是狀態內容);還在、狀態空白 = 未處理。
       把結果整理成一則訊息送到釘釘(edit_config.json 的 dingtalkWebhook),同時回報給網站的簽核狀態,最後刪掉快照。
@@ -151,7 +153,62 @@ def build_report(done, failed, pending_rows, total):
     return "\n".join(lines)
 
 
+def parse_keys(text, with_reason=False):
+    """\"MOCI05|5801|20261113001,...\" 或 \"MOCI12|5201|20260622001=原因;...\" -> [(prog, dt, dn, reason)]"""
+    out_list = []
+    sep = ";" if with_reason else ","
+    for part in [x for x in (text or "").split(sep) if x.strip()]:
+        reason = ""
+        if with_reason and "=" in part:
+            part, reason = part.split("=", 1)
+        bits = [b.strip() for b in part.split("|")]
+        if len(bits) == 3 and all(bits):
+            out_list.append((bits[0].upper(), bits[1], bits[2], reason.strip()))
+    return out_list
+
+
+def apply_results(done, fail):
+    """把 erp-approval 的結果寫回 WMS.xlsx「待簽核清單」:成功列刪除、失敗列在「狀態」寫原因。回傳 (刪除列數, 標記列數)。"""
+    if locked():
+        raise RuntimeError("WMS.xlsx 正被 Excel 開啟,請先關閉")
+    import datetime
+    import shutil
+    os.makedirs(os.path.join(WORK, "backup"), exist_ok=True)
+    shutil.copy2(MASTER, os.path.join(WORK, "backup", "WMS_erpapproval_%s.xlsx" % datetime.datetime.now().strftime("%Y%m%d_%H%M%S")))
+    wb = openpyxl.load_workbook(MASTER)
+    ws = wb[ss.SHEET]
+    done_keys = {"%s|%s|%s" % (a, b, c) for a, b, c, _ in done}
+    fail_map = {"%s|%s|%s" % (a, b, c): r for a, b, c, r in fail}
+    gone = marked = 0
+    for r in range(ws.max_row, 1, -1):   # 由下往上,避免刪列後列號位移
+        d = {h: _cell(ws, r, h) for h in ("程式代碼", "單別", "單號")}
+        k = "%s|%s|%s" % (d["程式代碼"].upper(), d["單別"], d["單號"])
+        if k in done_keys:
+            ws.delete_rows(r)
+            gone += 1
+        elif k in fail_map:
+            c = ws.cell(r, COL["狀態"])
+            c.value = "⚠ 失敗:" + (fail_map[k] or "原因不明")
+            marked += 1
+    tmp = MASTER + ".signtmp"
+    wb.save(tmp)
+    os.replace(tmp, MASTER)
+    try:
+        shutil.copy2(MASTER, DRIVE)
+    except Exception:
+        pass
+    return gone, marked
+
+
 def cmd_finish(argv):
+    applied = None
+    if "--done" in argv or "--fail" in argv:
+        done = parse_keys(argv[argv.index("--done") + 1] if "--done" in argv else "")
+        fail = parse_keys(argv[argv.index("--fail") + 1] if "--fail" in argv else "", with_reason=True)
+        try:
+            applied = apply_results(done, fail)
+        except Exception as ex:
+            return out({"ok": False, "error": "回寫工作表失敗:%s" % ex}, 3)
     if not os.path.exists(BATCH):
         return out({"ok": False, "error": "找不到這一批的快照(sign_batch.json),請先執行 begin"}, 1)
     with open(BATCH, encoding="utf-8") as f:
@@ -211,7 +268,8 @@ def cmd_finish(argv):
 
     if sent:   # 通知送出才刪快照;送不出去留著,可以重跑 finish
         os.remove(BATCH)
-    return out({"ok": True, "total": total, "success": len(done), "failed": len(failed), "unprocessed": len(pending_rows),
+    return out({"ok": True, "applied": ({"deleted": applied[0], "marked": applied[1]} if applied else None),
+                "total": total, "success": len(done), "failed": len(failed), "unprocessed": len(pending_rows),
                 "dingtalk": sent, "dingtalkError": sent_err, "site": site_ok,
                 "failures": [{"doc": "%s-%s" % (d["單別"], d["單號"]), "prog": d["程式代碼"], "reason": d["_reason"]} for d in failed]})
 
