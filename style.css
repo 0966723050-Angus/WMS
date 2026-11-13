@@ -843,6 +843,9 @@ button.erp-tile:disabled:hover { border-color: var(--border); box-shadow: var(--
 }
 .recv-btn:hover { background: var(--brand-dark); border-color: var(--brand-dark); box-shadow: 0 4px 12px rgba(15, 118, 110, 0.3); }
 .recv-btn:active { transform: translateY(1px); }
+/* 已收料、ERP 進貨單簽核還沒按:黃色底,直到按下進貨單簽核的確認鍵 */
+.recv-btn.recv-pending { background: #facc15; border-color: #eab308; color: #422006; box-shadow: 0 1px 2px rgba(161, 98, 7, 0.35); }
+.recv-btn.recv-pending:hover { background: #eab308; border-color: #ca8a04; box-shadow: 0 4px 12px rgba(161, 98, 7, 0.35); }
 /* 反白(停用):無採購單且庫存已足夠,不需收料 */
 .recv-btn:disabled,
 .recv-btn:disabled:hover {

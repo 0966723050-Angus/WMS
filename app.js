@@ -496,6 +496,7 @@
   function render() {
     signPage = null;      // 離開(或重新畫)待簽核表單頁就不再接收貼上的截圖
     if (!session) return; // 尚未登入時只顯示登入畫面
+    watchRecvPending();
     var route = parseHash();
     var app = document.getElementById("app");
     if (!state.data) {
@@ -2124,6 +2125,59 @@
     return '<button type="button" class="recv-btn" data-recv="' + recvIndex(r) + '">收料</button>';
   }
 
+  // ---------- 收料鍵變黃:已收料、ERP 進貨單簽核還沒按 ----------
+  // 伺服器回報目前「收料」清單裡有哪些(採購單, 品號)(receipt_pending);物料列對得上的收料鍵變黃色底,
+  // 直到有人按下「進貨單簽核」的確認鍵(請求送出後 busy = true,黃色就拿掉;簽核完成沒清掉的(失敗的)會再變黃)。
+  var recvPending = { items: [], busy: false, at: 0, loading: false, watching: false };
+
+  function recvPendingMatch(r) {
+    var code = String(r.materialCode || "").trim();
+    var pos = (r.poNos || []).map(function (p) { return String(p || "").trim(); }).filter(Boolean);
+    return recvPending.items.some(function (it) {
+      if (String(it.c || "").trim() !== code) return false;
+      var p = String(it.p || "").trim();
+      return !p || !pos.length || pos.indexOf(p) !== -1;   // 採購單號可以在收料視窗改過;對不上的就不標
+    });
+  }
+
+  function applyRecvPending() {
+    Array.prototype.forEach.call(document.querySelectorAll(".recv-btn[data-recv]"), function (b) {
+      var r = recvRows[parseInt(b.getAttribute("data-recv"), 10)];
+      var on = !!r && !recvPending.busy && recvPendingMatch(r);
+      b.classList.toggle("recv-pending", on);
+      if (on) b.title = "已收料,等待 ERP 進貨單簽核(按下「進貨單簽核」的確認鍵後恢復)"; else b.removeAttribute("title");
+    });
+  }
+
+  function loadRecvPending(force) {
+    if (!can("receive") || recvPending.loading) return;
+    if (!force && Date.now() - recvPending.at < 12000) { applyRecvPending(); return; }
+    recvPending.loading = true;
+    api("receipt_pending").then(function (res) {
+      recvPending.loading = false;
+      if (!res || !res.ok) return;
+      recvPending.items = res.items || [];
+      recvPending.busy = !!res.busy;
+      recvPending.at = Date.now();
+      applyRecvPending();
+    }).catch(function () { recvPending.loading = false; });
+  }
+
+  // 畫面上只要出現收料鍵(任何頁面重畫都算)就套用;每 20 秒再向伺服器更新一次
+  function watchRecvPending() {
+    if (recvPending.watching) return;
+    recvPending.watching = true;
+    var timer = null, app = document.getElementById("app");
+    if (!app || !window.MutationObserver) return;
+    new MutationObserver(function () {
+      clearTimeout(timer);
+      timer = setTimeout(function () { if (document.querySelector(".recv-btn[data-recv]")) loadRecvPending(false); }, 60);
+    }).observe(app, { childList: true, subtree: true });
+    setInterval(function () {
+      if (!document.hidden && session && document.querySelector(".recv-btn[data-recv]")) loadRecvPending(true);
+    }, 20000);
+  }
+
   function orderOfRow(r) {
     if (!recvOrderOf) {
       recvOrderOf = new Map();
@@ -2296,6 +2350,7 @@
         .then(function (res) {
           if (!res.ok) throw new Error(res.error || "送出失敗");
           if (opts.onSent) opts.onSent();
+          if (!isRet) loadRecvPending(true);   // 剛收料:收料鍵馬上變黃
           close();
           showToast(isRet ? "已送出退料,稍後會寫入 Excel「退料」工作表" : "已送出收料,稍後會寫入 Excel「收料」工作表");
         })

@@ -425,6 +425,21 @@ function receiptListView_(kind) {
   return { ok: true, snapshot: snap, pending: pending, deleting: dels.length };
 }
 
+// 已收料但 ERP 進貨單還沒簽核的項目(排隊中還沒寫進 Excel 的 + 「收料」工作表快照裡的)。
+// busy = 進貨單簽核已經按下(排隊中或執行中):這時收料鍵不再標黃,等執行完還留在「收料」裡的(失敗的)才會再變黃。
+function receiptPendingView_() {
+  var items = [], seen = {};
+  function add(p, c) {
+    var k = p + '|' + c;
+    if (c && !seen[k]) { seen[k] = true; items.push({ p: p, c: c }); }
+  }
+  listReceipts_('receipt').forEach(function (r) { add(String(r.po || ''), String(r.code || '')); });
+  var snap = readJson_(KINDS.receipt.snapKey);
+  if (snap && Array.isArray(snap.rows)) snap.rows.forEach(function (r) { if (!r.del) add(String(r.p || ''), String(r.c || '')); });
+  var v = puriView_('receipt');
+  return { ok: true, items: items.slice(0, 300), busy: !!(v.queued || (v.status && v.status.state === 'running')) };
+}
+
 function deleteReceiptRow_(body, user, kind) {
   var K = kindOf_(kind), isRet = K === KINDS.ret;
   var sub = String(body.kind || '');
@@ -961,6 +976,10 @@ function doPost(e) {
     if (action === 'wms_status' || action === 'wms_update') {
       if (!me.perms.erp_wms) return denied_('WMS更新');
       return json_(action === 'wms_update' ? requestWmsUpdate_(me) : wmsView_());
+    }
+    if (action === 'receipt_pending') {   // 物料明細的收料鍵要不要變黃:哪些(採購單, 品號)已收料、還沒做進貨單簽核
+      if (!me.perms.receive && !me.perms.erp_receipt) return denied_('收料');
+      return json_(receiptPendingView_());
     }
     if (action === 'receipt_list') {
       if (!me.perms.erp_receipt) return denied_('進貨單簽核');
