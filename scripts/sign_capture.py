@@ -10,6 +10,10 @@
 文字辨識用 Windows 內建 OCR(scripts\\ocr_win.ps1,不需安裝任何套件)。標題裡的小字英文代碼 OCR 讀不準,
 所以用「表單名稱 <-> 程式代碼」對照表(C:/ATK/Project/AI Agent/ERP/表單與程式碼對照表.xlsx)校正;表裡沒有的程式會記錄 OCR 原始結果並標記為不確定。
 (對照表讀不到時退回 sign_programs.json。)
+標題列讀不出程式代碼時的備援(依序):
+  1. 表頭藍綠框:第一個框左邊的標籤(採購單別 -> 採購單、領料單別 -> 製令領料單、入庫單別 -> 生產入庫單),
+     加上藍綠框數量 —— 3 個(多一個「變更版次」)是變更單(採購單別 + 3 框 = 採購變更單 PURI08),2 個是一般單據。
+  2. 紅框裡的單據名稱(例「工程採購單」-> 採購單);表頭有 3 個藍綠框時改用該表單的變更單。
 
 用法:
     python -I sign_capture.py --image 圖片.png            辨識圖片檔(只顯示結果,加 --push 才傳送)
@@ -161,6 +165,28 @@ def find_cyan_fields(img):
             fields.append((x0, y0, x1, y1))
     fields.sort(key=lambda b: (b[1], b[0]))
     return fields[:2]
+
+
+def header_cyan_fields(img):
+    """表頭「單別 / 單號 / (變更版次)」那一欄的藍綠色輸入框:從最上面一個往下,只收同一欄、上下緊鄰的框。
+    下方表格標題列的藍綠格(序號、採購單別欄名)離很遠或不同欄,不會算進來。"""
+    W, H = img.size
+    cands = []
+    for c in components(cyan_mask(img)):
+        x0, y0, x1, y1 = c["box"]
+        w, h = x1 - x0, y1 - y0
+        if w >= 30 and 12 <= h <= 48 and H * 0.04 < y0 < H * 0.45:
+            cands.append((x0, y0, x1, y1))
+    cands.sort(key=lambda b: (b[1], b[0]))
+    if not cands:
+        return []
+    chain = [cands[0]]
+    for b in cands[1:]:
+        last = chain[-1]
+        h = last[3] - last[1]
+        if abs(b[0] - chain[0][0]) <= max(6, h * 0.4) and 0 <= b[1] - last[3] <= h * 1.2:
+            chain.append(b)
+    return chain
 
 
 # ---------------------------------------------------------------- 裁切、前處理、OCR
@@ -416,6 +442,75 @@ def program_from_doc_name(doc_name, programs):
     return best
 
 
+# 表頭標籤(第一個藍綠框左邊的字,去掉「別」)對到多個表單時的偏好(使用者確認過的畫面)
+LABEL_PREFER = {"領料單": "MOCI03", "入庫單": "MOCI05"}
+
+
+def _label_core(text):
+    t = re.sub(r"[^%s]" % CJK, "", text or "")
+    return re.sub(r"[別號]+$", "", t)
+
+
+def program_from_header(label_texts, n_fields, programs):
+    """備援:用表頭第一個藍綠框左邊的標籤(例「採購單別」)和藍綠框數量判斷程式。
+    藍綠框 3 個(單別、單號、變更版次)= 變更單;2 個 = 一般單據。例:採購單別 + 2 框 = 採購單 PURI07、+ 3 框 = 採購變更單 PURI08;
+    領料單別 = 製令領料單 MOCI03;入庫單別 = 生產入庫單 MOCI05。回傳 (對照表項目 或 None, 讀到的標籤)。"""
+    label, _ = vote([_label_core(t) for t in label_texts if len(_label_core(t)) >= 2])
+    if not label:
+        return None, ""
+    want_change = n_fields >= 3
+    scored = []   # (相似度, 是否變更單, 表單, 對到的字)
+    for p in programs:
+        core = _core(p["name"])
+        base = core.replace("變更", "")
+        # 標籤通常是表單名稱的後段(「生產入庫單」的標籤是「入庫單別」):和名稱中同長度(±1)的每一段比,取最像的
+        best_r, best_sub = 0.0, ""
+        for n in {len(label) - 1, len(label), len(label) + 1}:
+            for i in range(0, max(0, len(base) - n) + 1):
+                sub = base[i:i + n]
+                if len(sub) < 2:
+                    continue
+                r = difflib.SequenceMatcher(None, label, sub).ratio()
+                if r > best_r or (r == best_r and sub.endswith("單") and not best_sub.endswith("單")):
+                    best_r, best_sub = r, sub
+        if best_r >= 0.6:
+            scored.append((round(best_r, 3), "變更" in core, p, best_sub))
+    if not scored:
+        return None, label
+    same_kind = [x for x in scored if x[1] == want_change]
+    pool = same_kind or scored
+    top = max(x[0] for x in pool)
+    pool = [x for x in pool if x[0] == top]
+    canon = Counter(x[3] for x in pool).most_common(1)[0][0]   # 校正後的標籤(例「採單」-> 「採購單」)
+    progs = [x[2] for x in pool]
+    if len({p["code"] for p in progs}) == 1:
+        return progs[0], canon
+    exact = [p for p in progs if _core(p["name"]).replace("變更", "") == canon]
+    if len({p["code"] for p in exact}) == 1:
+        return exact[0], canon
+    pref = LABEL_PREFER.get(canon)
+    if not pref:
+        # 只讀到一部分(例「庫單」):候選表單「全部」都包含某個偏好標籤(「入庫單」)時才套用;
+        # 「料單」還可能是製令退料單,就不猜
+        for key, code in LABEL_PREFER.items():
+            if canon in key and all(key in _core(p["name"]) for p in progs):
+                pref, canon = code, key
+                break
+    for p in progs:
+        if p["code"] == pref:
+            return p, canon
+    return None, canon   # 對到好幾種表單、又沒有偏好:不猜
+
+
+def change_variant(p, programs):
+    """表單的變更單版本(採購單 -> 採購變更單);沒有就回傳 None。"""
+    base = _core(p["name"])
+    for q in programs:
+        if "變更" in q["name"] and _core(q["name"]).replace("變更", "") == base:
+            return q
+    return None
+
+
 def recognize(img, tag="img"):
     orig = img
     img, norm = normalize_scale(img)
@@ -430,6 +525,15 @@ def recognize(img, tag="img"):
     title_box = (0, 0, max(120, int(OW * 0.25)), max(20, int(OH * 0.035)))
     ocr.add("title", title_box, cyan=False, src=orig,
             variants=[(s, r, "gray") for s in (2, 3, 4) for r in ("lanczos", "bicubic")] + [(s, "lanczos", "bin170") for s in (3, 4, 6)])
+
+    # 備援用:表頭藍綠框數量 + 第一個框左邊的標籤文字(標題列讀不出程式代碼時用)
+    hdr = header_cyan_fields(img)
+    if hdr:
+        # 和標題列一樣從原始圖片裁切(座標換回原圖比例),縮放過的圖小字會更糊
+        hx0, hy0, hx1, hy1 = [v / norm for v in hdr[0]]
+        hh = hy1 - hy0
+        ocr.add("label", (max(0, int(hx0 - hh * 7)), max(0, int(hy0 - 2)), max(1, int(hx0 - 2)), int(hy1 + 2)), cyan=True, src=orig,
+                variants=[(s, "lanczos", m) for s in (2, 3, 4) for m in ("gray", "bin170")])
 
     if reds:
         result["mode"] = "red"
@@ -477,19 +581,31 @@ def recognize(img, tag="img"):
         else:
             result["warnings"].append("藍綠框沒有辨識出 4 碼單別 + 11 碼單號(單別 %s、單號 %s)" % (dtype or "?", dno or "?"))
 
+    hp, hlabel = (None, "")
+    if conf != "known" and hdr:
+        hp, hlabel = program_from_header(texts.get("label", []), len(hdr), programs)
+        result["header"] = {"label": hlabel, "fields": len(hdr), "prog": hp["code"] if hp else ""}
     for f in result["forms"]:
         f["prog"], f["progName"], f["src"] = result["prog"], result["progName"], "紅框" if result["mode"] == "red" else "藍綠框"
-        if conf != "known":   # 標題列沒有完全認出來:紅框裡的單據名稱對得到程式時,以單據名稱為準
+        if conf == "known":
+            continue
+        # 標題列沒有完全認出來:先看表頭(標籤 + 藍綠框數量),再看紅框裡的單據名稱
+        p = hp
+        if not p:
             p = program_from_doc_name(f.get("docName"), programs)
-            if p:
-                f["prog"], f["progName"] = p["code"], p["name"]
-    if conf == "code" and all(f["prog"] == code for f in result["forms"]):
-        pass   # 代碼認得、單據名稱沒有不同意見
+            if p and len(hdr) >= 3:   # 變更單的資料瀏覽,單據名稱仍是原單別名稱(例「工程採購單」)
+                p = change_variant(p, programs) or p
+        if p:
+            f["prog"], f["progName"] = p["code"], p["name"]
+    if conf != "known" and not result["forms"] and hp:
+        result["prog"], result["progName"], result["progConf"] = hp["code"], hp["name"], "header"
+    elif conf == "code" and all(f["prog"] == code for f in result["forms"]):
+        pass   # 代碼認得、表頭 / 單據名稱沒有不同意見
     elif conf != "known":
         by_name = {(f["prog"], f["progName"]) for f in result["forms"] if f["prog"]}
         if result["forms"] and len(by_name) == 1 and all(f["prog"] for f in result["forms"]):
             result["prog"], result["progName"] = by_name.pop()
-            result["progConf"] = "docName"
+            result["progConf"] = "header" if hp else "docName"
         elif conf == "guess":
             result["warnings"].append("程式代碼 %s 不在「表單與程式碼對照表」中,是依 OCR 結果猜的" % code)
         else:
