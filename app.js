@@ -287,6 +287,7 @@
   }
 
   function startApp() {
+    try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) { /* 不支援就略過 */ }   // 要求瀏覽器不要自動清掉登入資料
     updateUserUi();
     render();
     loadData().then(render).catch(handleLoadError);
@@ -303,6 +304,7 @@
       session.perms = res.perms;
       session.isAdmin = !!res.isAdmin;
       if (res.name) session.name = res.name;
+      if (res.session && res.exp) { session.session = res.session; session.exp = res.exp; }   // 伺服器順延登入有效期
       setSession(session);
       updateUserUi();
       if (changed && state.data) render();

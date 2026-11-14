@@ -20,7 +20,7 @@ var MAX_PENDING = 500;
 var MAX_USERS = 400;
 var MAX_FAILS = 10;
 var FAIL_WINDOW_MS = 10 * 60 * 1000;
-var SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+var SESSION_TTL_MS = 180 * 24 * 60 * 60 * 1000;   // 登入有效 180 天,每次開啟網頁會自動順延(me),除非自己登出
 
 function json_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj))
@@ -958,7 +958,10 @@ function doPost(e) {
     if (!me) return json_({ ok: false, needLogin: true, error: '登入已失效,請重新登入' });
 
     // 目前的權限(管理者可能在登入後才調整,前端開啟時會用這個更新)
-    if (action === 'me') return json_({ ok: true, email: me.email, name: me.name, isAdmin: me.isAdmin, perms: me.perms });
+    if (action === 'me') {
+      var ns = makeSession_(me.email);   // 每次開啟網頁順延有效期,沒登出就不必重新登入
+      return json_({ ok: true, email: me.email, name: me.name, isAdmin: me.isAdmin, perms: me.perms, session: ns.token, exp: ns.exp });
+    }
 
     if (action === 'pending') return json_({ ok: true, pending: listPending_() });
     if (action === 'save') {
