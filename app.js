@@ -492,6 +492,7 @@
     if (parts[0] === "storage") return { view: "storage" };
     if (parts[0] === "admin") return { view: "admin" };
     if (parts[0] === "erp") return { view: "erp", sub: parts[1] || "" };
+    if (parts[0] === "label") return { view: "label", sub: parts[1] || "" };
     return { view: "home" };
   }
 
@@ -508,11 +509,11 @@
     recvRows = [];      // 每次重畫重新編號收料鈕
     recvOrderOf = null; // 資料可能重新載入,製令對照表重建
     // 含物料表格的頁面(專案/製令)在寬螢幕上用較寬的版面,避免出現左右捲軸
-    app.classList.toggle("app-wide", route.view === "project" || route.view === "order");
+    app.classList.toggle("app-wide", route.view === "project" || route.view === "order" || (route.view === "label" && !!route.sub));
     // 功能列:目前所在頁面的按鍵反白
-    var navOf = { storage: "storage-btn", erp: "erp-btn", admin: "admin-btn" };
+    var navOf = { storage: "storage-btn", erp: "erp-btn", admin: "admin-btn", label: "label-btn" };
     var activeNav = navOf[route.view] || "home-btn";
-    ["home-btn", "storage-btn", "erp-btn", "admin-btn"].forEach(function (id) {
+    ["home-btn", "storage-btn", "erp-btn", "admin-btn", "label-btn"].forEach(function (id) {
       var b = document.getElementById(id);
       if (b) b.classList.toggle("active", id === activeNav);
     });
@@ -526,6 +527,8 @@
       renderAdmin(app);
     } else if (route.view === "erp") {
       renderErp(app, route.sub);
+    } else if (route.view === "label") {
+      renderLabel(app, route.sub);
     } else {
       renderHome(app);
     }
@@ -2955,6 +2958,533 @@
     exportRowsToExcel(sheetRows, "物料明細_" + safeCode + ".xlsx");
   }
 
+  // ---------- 標籤:系統選取 / 手動設置,下載 Excel(下載位置由每位使用者自己設定) ----------
+
+  var LABEL_COLS = [
+    { k: "projCode", t: "專案代號", w: 14 }, { k: "projName", t: "專案名稱", w: 24 }, { k: "orderNo", t: "製令單號", w: 14 },
+    { k: "assy", t: "Ass'y", w: 14 }, { k: "code", t: "料號", w: 14 }, { k: "name", t: "品名", w: 22 },
+    { k: "spec", t: "規格", w: 36 }, { k: "qty", t: "數量", w: 8 }, { k: "note", t: "備註", w: 16 }, { k: "date", t: "列印日期", w: 12 }
+  ];
+  var LABEL_FILTERS = ["projCode", "projName", "orderNo", "assy"];   // 表頭下拉篩選的欄位
+  var LABEL_MAX_SHOW = 500;      // 一次最多列出的筆數(太多會拖慢手機)
+  var labelSel = null;           // 系統選取頁:篩選、勾選、改過的數量/備註(換頁回來還在)
+  var labelManual = null;        // 手動設置頁的各列
+  var LABEL_DIR_OK = typeof window.showDirectoryPicker === "function";   // 電腦版 Chrome / Edge 才能指定資料夾
+  var LABEL_ICONS = {
+    select: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="5" height="5" rx="1"/><path d="M4.5 6.5l1 1 1.5-2"/><path d="M11 6.5h10"/><rect x="3" y="14" width="5" height="5" rx="1"/><path d="M4.5 16.5l1 1 1.5-2"/><path d="M11 16.5h10"/></svg>',
+    manual: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg>'
+  };
+
+  function todayYmd() {
+    var d = new Date();
+    return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
+  }
+
+  // 製令單號只顯示「-」後面那段(例:5101-20261030001 → 20261030001)
+  function shortOrderNo(no) {
+    no = no || "";
+    var i = no.indexOf("-");
+    return i > -1 ? no.slice(i + 1) : no;
+  }
+
+  // 所有在線製令的物料,一列就是一個標籤候選
+  function labelSourceRows() {
+    var out = [];
+    (state.data.projects || []).forEach(function (p) {
+      (p.orders || []).forEach(function (o) {
+        (state.data.materials[o.orderNo] || []).forEach(function (r) {
+          out.push({
+            key: o.orderNo + "|" + r.seq + "|" + r.materialCode,
+            projCode: p.code, projName: p.name, orderNo: shortOrderNo(o.orderNo), assy: o.productName,
+            code: r.materialCode, name: r.materialName, spec: r.spec, defQty: r.needQty
+          });
+        });
+      });
+    });
+    return out;
+  }
+
+  // ---- 下載位置:選好的資料夾存在這台電腦瀏覽器的 IndexedDB,依登入帳號分開 ----
+  function labelDb() {
+    return new Promise(function (resolve, reject) {
+      var req = indexedDB.open("wms-label", 1);
+      req.onupgradeneeded = function () { req.result.createObjectStore("kv"); };
+      req.onsuccess = function () { resolve(req.result); };
+      req.onerror = function () { reject(req.error); };
+    });
+  }
+
+  function labelDirKey() { return "dir:" + ((session && session.email) || ""); }
+
+  function getLabelDir() {
+    if (!LABEL_DIR_OK || !window.indexedDB) return Promise.resolve(null);
+    return labelDb().then(function (db) {
+      return new Promise(function (resolve) {
+        var req = db.transaction("kv").objectStore("kv").get(labelDirKey());
+        req.onsuccess = function () { resolve(req.result || null); };
+        req.onerror = function () { resolve(null); };
+      });
+    }).catch(function () { return null; });
+  }
+
+  function setLabelDir(handle) {
+    return labelDb().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction("kv", "readwrite");
+        if (handle) tx.objectStore("kv").put(handle, labelDirKey());
+        else tx.objectStore("kv").delete(labelDirKey());
+        tx.oncomplete = function () { resolve(); };
+        tx.onerror = function () { reject(tx.error); };
+      });
+    });
+  }
+
+  function labelWorkbook(rows) {
+    var aoa = [LABEL_COLS.map(function (c) { return c.t; })].concat(rows.map(function (r) {
+      return LABEL_COLS.map(function (c) { return r[c.k] === null || r[c.k] === undefined ? "" : r[c.k]; });
+    }));
+    var ws = XLSX.utils.aoa_to_sheet(aoa);   // 字串欄位(製令單號等)保持文字,不會變成數字
+    ws["!cols"] = LABEL_COLS.map(function (c) { return { wch: c.w }; });
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "標籤");
+    return wb;
+  }
+
+  function labelFileName() {
+    var d = new Date();
+    return "標籤_" + d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + "_" +
+      pad2(d.getHours()) + pad2(d.getMinutes()) + pad2(d.getSeconds()) + ".xlsx";
+  }
+
+  // 有設定資料夾就直接寫進去;沒設定、不支援或沒給權限,就用瀏覽器一般下載
+  function saveLabelExcel(rows) {
+    var wb = labelWorkbook(rows), name = labelFileName();
+    function browserDownload() { XLSX.writeFile(wb, name); return "瀏覽器的「下載」資料夾"; }
+    return getLabelDir().then(function (dir) {
+      if (!dir) return browserDownload();
+      var opts = { mode: "readwrite" };
+      return Promise.resolve(dir.queryPermission ? dir.queryPermission(opts) : "granted")
+        .then(function (p) { return p === "granted" ? p : dir.requestPermission(opts); })
+        .then(function (p) {
+          if (p !== "granted") return browserDownload() + "(未允許寫入「" + dir.name + "」)";
+          var data = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+          return dir.getFileHandle(name, { create: true })
+            .then(function (fh) { return fh.createWritable(); })
+            .then(function (w) { return w.write(new Blob([data])).then(function () { return w.close(); }); })
+            .then(function () { return "「" + dir.name + "」資料夾"; });
+        })
+        .catch(function () { return browserDownload() + "(「" + dir.name + "」無法寫入,請到標籤頁重新設定下載位置)"; });
+    }).then(function (where) {
+      showToast("已下載 " + rows.length + " 筆標籤:" + name + ",存到" + where);
+    }).catch(function (err) {
+      window.alert("下載失敗:" + ((err && err.message) || err));
+    });
+  }
+
+  function renderLabel(app, sub) {
+    if (sub === "select") { renderLabelSelect(app); return; }
+    if (sub === "manual") { renderLabelManual(app); return; }
+    if (sub) { location.hash = "#/label"; return; }
+
+    app.innerHTML =
+      '<div class="breadcrumb"><a href="#/">首頁</a> / 標籤</div>' +
+      '<h1 class="page-title">標籤</h1>' +
+      '<div class="erp-grid">' +
+        '<a class="erp-tile" href="#/label/select"><span class="erp-tile-icon">' + LABEL_ICONS.select + '</span>' +
+          '<span class="erp-tile-title">系統選取</span><span class="erp-tile-note">從在線製令的物料勾選要印的標籤</span></a>' +
+        '<a class="erp-tile" href="#/label/manual"><span class="erp-tile-icon">' + LABEL_ICONS.manual + '</span>' +
+          '<span class="erp-tile-title">手動設置</span><span class="erp-tile-note">自行輸入標籤內容</span></a>' +
+      '</div>' +
+      '<section class="sign-card lbl-dir-card">' +
+        '<h2 class="sign-h">Excel 下載位置</h2>' +
+        '<div class="lbl-dir-now" id="lbl-dir-now">讀取中…</div>' +
+        (LABEL_DIR_OK
+          ? '<div class="lbl-dir-btns"><button type="button" class="btn btn-sm" id="lbl-dir-pick">選擇資料夾</button>' +
+            '<button type="button" class="btn btn-sm btn-secondary" id="lbl-dir-clear" hidden>改回預設</button></div>'
+          : '') +
+        '<p class="lbl-dir-note">' + (LABEL_DIR_OK
+          ? '每個人各自設定,只記在這台電腦的這個瀏覽器,換電腦或換瀏覽器要重新設定。因瀏覽器安全限制,這裡只顯示資料夾名稱,第一次下載時瀏覽器可能會詢問是否允許寫入。'
+          : '這個瀏覽器(例如手機)不支援指定資料夾,Excel 會存到瀏覽器預設的「下載」資料夾;要指定資料夾請用電腦版 Chrome 或 Edge。') +
+        '</p>' +
+      '</section>';
+
+    function showDir() {
+      getLabelDir().then(function (dir) {
+        var el = document.getElementById("lbl-dir-now");
+        if (!el) return;
+        el.innerHTML = dir ? '目前:<b>' + esc(dir.name) + '</b>' : '目前:瀏覽器預設的「下載」資料夾';
+        var c = document.getElementById("lbl-dir-clear");
+        if (c) c.hidden = !dir;
+      });
+    }
+    showDir();
+
+    var pick = document.getElementById("lbl-dir-pick");
+    if (pick) pick.addEventListener("click", function () {
+      window.showDirectoryPicker({ id: "wms-label", mode: "readwrite" }).then(function (h) {
+        return setLabelDir(h).then(function () { showToast("已設定下載位置:" + h.name); showDir(); });
+      }).catch(function (err) {
+        if (err && err.name === "AbortError") return;   // 使用者按了取消
+        window.alert("無法使用這個資料夾:" + ((err && err.message) || err) + "\n\n(系統資料夾不能選,請改選或新建一個一般資料夾)");
+      });
+    });
+    var clr = document.getElementById("lbl-dir-clear");
+    if (clr) clr.addEventListener("click", function () {
+      setLabelDir(null).then(function () { showToast("已改回瀏覽器預設的下載資料夾"); showDir(); });
+    });
+  }
+
+  // ---- 系統選取(標籤選取) ----
+  function renderLabelSelect(app) {
+    if (!labelSel) labelSel = { f: { projCode: "", projName: "", orderNo: "", assy: "" }, q: "", checked: {}, qty: {}, note: {} };
+    var S = labelSel, all = labelSourceRows(), byKey = {}, cur = [], today = todayYmd();
+    all.forEach(function (r) { byKey[r.key] = r; });
+    Object.keys(S.checked).forEach(function (k) { if (!byKey[k]) delete S.checked[k]; });   // 資料更新後已不存在的列
+
+    app.innerHTML =
+      '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/label">標籤</a> / 系統選取</div>' +
+      '<h1 class="page-title page-title-row"><span>標籤選取</span>' +
+        '<button type="button" class="btn btn-sm" id="lbl-dl" disabled>下載 Excel</button></h1>' +
+      '<div class="toolbar lbl-toolbar">' +
+        '<input type="search" id="lbl-q" placeholder="全文檢索:輸入關鍵字(專案、製令、Ass\'y、料號、品名、規格…)" value="' + esc(S.q) + '" />' +
+        '<button type="button" class="btn btn-sm btn-secondary" id="lbl-reset">清除篩選</button>' +
+      '</div>' +
+      '<p class="result-count" id="lbl-count"></p>' +
+      '<div class="lbl-wrap"><table class="lbl-table lbl-sel"><thead>' +
+        '<tr class="lbl-titles"><th class="c-chk"><input type="checkbox" id="lbl-all" aria-label="全選" title="全選目前列出的項目" /></th>' +
+          LABEL_COLS.map(function (c) { return '<th class="c-' + c.k + '">' + esc(c.t) + '</th>'; }).join("") + '</tr>' +
+        '<tr class="lbl-filters" id="lbl-filters"></tr>' +
+      '</thead><tbody id="lbl-body"></tbody></table></div>';
+
+    function match(r, skip) {
+      for (var i = 0; i < LABEL_FILTERS.length; i++) {
+        var k = LABEL_FILTERS[i];
+        if (k !== skip && S.f[k] && r[k] !== S.f[k]) return false;
+      }
+      return true;
+    }
+    function searchOk(r) {
+      var terms = S.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      if (!terms.length) return true;
+      var hay = [r.projCode, r.projName, r.orderNo, r.assy, r.code, r.name, r.spec, S.note[r.key] || ""].join("\n").toLowerCase();
+      return terms.every(function (t) { return hay.indexOf(t) > -1; });
+    }
+
+    // 下拉選單的選項:依其他篩選與全文檢索的結果列出該欄位有的值
+    function renderFilters() {
+      var html = '<th class="c-chk"></th>';
+      LABEL_COLS.forEach(function (c) {
+        if (LABEL_FILTERS.indexOf(c.k) < 0) { html += '<th class="c-' + c.k + ' lbl-f-empty"></th>'; return; }
+        var seen = {}, opts = [];
+        all.forEach(function (r) {
+          var v = r[c.k];
+          if (v && !seen[v] && match(r, c.k) && searchOk(r)) { seen[v] = 1; opts.push(v); }
+        });
+        if (S.f[c.k] && !seen[S.f[c.k]]) opts.push(S.f[c.k]);
+        opts.sort(function (a, b) { return String(a).localeCompare(String(b), "zh-Hant"); });
+        html += '<th class="c-' + c.k + '"><select data-f="' + c.k + '" aria-label="' + esc(c.t) + ' 篩選">' +
+          '<option value="">' + esc(c.t) + ':全部</option>' +
+          opts.map(function (v) { return '<option value="' + esc(v) + '"' + (v === S.f[c.k] ? ' selected' : '') + '>' + esc(v) + '</option>'; }).join("") +
+          '</select></th>';
+      });
+      document.getElementById("lbl-filters").innerHTML = html;
+    }
+
+    function renderBody() {
+      cur = all.filter(function (r) { return match(r, null) && searchOk(r); });
+      var shown = cur.slice(0, LABEL_MAX_SHOW);
+      document.getElementById("lbl-body").innerHTML = shown.length ? shown.map(function (r, i) {
+        var on = !!S.checked[r.key];
+        var qty = S.qty[r.key] !== undefined ? S.qty[r.key] : r.defQty;
+        return '<tr data-i="' + i + '"' + (on ? ' class="on"' : '') + '>' +
+          '<td class="c-chk"><input type="checkbox" class="lbl-chk"' + (on ? ' checked' : '') + ' aria-label="選取" /></td>' +
+          '<td class="c-projCode" data-k="專案代號">' + esc(r.projCode) + '</td>' +
+          '<td class="c-projName" data-k="專案名稱">' + esc(r.projName) + '</td>' +
+          '<td class="c-orderNo" data-k="製令單號">' + esc(r.orderNo) + '</td>' +
+          '<td class="c-assy" data-k="Ass&#39;y">' + esc(r.assy) + '</td>' +
+          '<td class="c-code" data-k="料號">' + esc(r.code) + '</td>' +
+          '<td class="c-name" data-k="品名">' + esc(r.name) + '</td>' +
+          '<td class="c-spec" data-k="規格">' + esc(r.spec) + '</td>' +
+          '<td class="c-qty" data-k="數量"><input type="number" class="lbl-qty" inputmode="decimal" min="0" step="any" value="' + esc(qty) + '" aria-label="數量" /></td>' +
+          '<td class="c-note" data-k="備註"><input type="text" class="lbl-note" maxlength="60" value="' + esc(S.note[r.key] || "") + '" aria-label="備註" /></td>' +
+          '<td class="c-date" data-k="列印日期">' + today + '</td></tr>';
+      }).join("") : '<tr><td colspan="11" class="lbl-empty">沒有符合條件的物料</td></tr>';
+      updateCount();
+    }
+
+    function updateCount() {
+      var n = Object.keys(S.checked).length, shown = cur.slice(0, LABEL_MAX_SHOW);
+      var el = document.getElementById("lbl-count");
+      if (el) el.textContent = "符合 " + cur.length + " 筆" +
+        (cur.length > LABEL_MAX_SHOW ? "(只列出前 " + LABEL_MAX_SHOW + " 筆,請用下拉選單或關鍵字縮小範圍)" : "") +
+        " · 已勾選 " + n + " 筆";
+      var dl = document.getElementById("lbl-dl");
+      if (dl) { dl.textContent = "下載 Excel" + (n ? "(" + n + ")" : ""); dl.disabled = !n; }
+      var a = document.getElementById("lbl-all");
+      if (a) {
+        var on = shown.filter(function (r) { return S.checked[r.key]; }).length;
+        a.checked = shown.length > 0 && on === shown.length;
+        a.indeterminate = on > 0 && on < shown.length;
+      }
+    }
+
+    function refresh() { renderFilters(); renderBody(); }
+
+    document.getElementById("lbl-filters").addEventListener("change", function (e) {
+      var k = e.target.getAttribute("data-f");
+      if (!k) return;
+      var v = e.target.value;
+      S.f[k] = v;
+      if (k === "projCode" || k === "projName") {   // 專案代號 ↔ 專案名稱 連動
+        var other = k === "projCode" ? "projName" : "projCode";
+        var hit = v ? all.filter(function (r) { return r[k] === v; })[0] : null;
+        S.f[other] = hit ? hit[other] : "";
+      }
+      // 換了上層條件後,下層的選擇對不上就清掉,避免整張表變空的
+      if (!all.some(function (r) { return match(r, null); })) {
+        if (k !== "orderNo") S.f.orderNo = "";
+        if (k !== "assy") S.f.assy = "";
+      }
+      refresh();
+    });
+
+    var qTimer = null;
+    document.getElementById("lbl-q").addEventListener("input", function (e) {
+      S.q = e.target.value;
+      clearTimeout(qTimer);
+      qTimer = setTimeout(refresh, 200);
+    });
+
+    document.getElementById("lbl-reset").addEventListener("click", function () {
+      S.f = { projCode: "", projName: "", orderNo: "", assy: "" };
+      S.q = "";
+      document.getElementById("lbl-q").value = "";
+      refresh();
+    });
+
+    var body = document.getElementById("lbl-body");
+    function rowOf(el) {
+      var tr = el.closest ? el.closest("tr") : null;
+      var r = tr ? cur[parseInt(tr.getAttribute("data-i"), 10)] : null;
+      return r ? { tr: tr, r: r } : null;
+    }
+    body.addEventListener("change", function (e) {
+      if (!e.target.classList.contains("lbl-chk")) return;
+      var x = rowOf(e.target);
+      if (!x) return;
+      if (e.target.checked) S.checked[x.r.key] = true; else delete S.checked[x.r.key];
+      x.tr.classList.toggle("on", e.target.checked);
+      updateCount();
+    });
+    body.addEventListener("input", function (e) {
+      var t = e.target, x = rowOf(t);
+      if (!x) return;
+      if (t.classList.contains("lbl-qty")) S.qty[x.r.key] = t.value;
+      else if (t.classList.contains("lbl-note")) S.note[x.r.key] = t.value;
+      else return;
+      if (!S.checked[x.r.key]) {   // 改了數量或備註就自動勾選這一列
+        S.checked[x.r.key] = true;
+        x.tr.classList.add("on");
+        var c = x.tr.querySelector(".lbl-chk");
+        if (c) c.checked = true;
+        updateCount();
+      }
+    });
+
+    document.getElementById("lbl-all").addEventListener("change", function (e) {
+      var on = e.target.checked;
+      cur.slice(0, LABEL_MAX_SHOW).forEach(function (r) { if (on) S.checked[r.key] = true; else delete S.checked[r.key]; });
+      renderBody();
+    });
+
+    document.getElementById("lbl-dl").addEventListener("click", function () {
+      var rows = all.filter(function (r) { return S.checked[r.key]; }).map(function (r) {
+        var raw = S.qty[r.key] !== undefined ? S.qty[r.key] : r.defQty;
+        var num = Number(raw);
+        return {
+          projCode: r.projCode, projName: r.projName, orderNo: r.orderNo, assy: r.assy,
+          code: r.code, name: r.name, spec: r.spec,
+          qty: raw === "" ? "" : (isNaN(num) ? raw : num), note: S.note[r.key] || "", date: today
+        };
+      });
+      if (rows.length) saveLabelExcel(rows);
+    });
+
+    refresh();
+  }
+
+  // ---- 手動設置:自行輸入,選專案/製令/料號時自動帶出其他欄位 ----
+  function blankLabelRow(from) {
+    return {
+      projCode: from ? from.projCode : "", projName: from ? from.projName : "",
+      orderNo: from ? from.orderNo : "", assy: from ? from.assy : "",
+      code: "", name: "", spec: "", qty: "", note: "", date: todayYmd()
+    };
+  }
+
+  function renderLabelManual(app) {
+    if (!labelManual) labelManual = { rows: [blankLabelRow()] };
+    var M = labelManual, projects = state.data.projects || [];
+    var projByCode = {};
+    projects.forEach(function (p) { projByCode[p.code] = p; });
+
+    function findOrder(r) {
+      if (!r.orderNo) return null;
+      var pools = projByCode[r.projCode] ? [projByCode[r.projCode]] : projects;
+      for (var i = 0; i < pools.length; i++) {
+        var os = pools[i].orders || [];
+        for (var j = 0; j < os.length; j++) {
+          if (os[j].orderNo === r.orderNo || shortOrderNo(os[j].orderNo) === r.orderNo) return { project: pools[i], order: os[j] };
+        }
+      }
+      return null;
+    }
+    function findMaterial(r) {
+      if (!r.code) return null;
+      var fo = findOrder(r);
+      var lists = fo ? [state.data.materials[fo.order.orderNo] || []] : Object.keys(state.data.materials).map(function (k) { return state.data.materials[k]; });
+      for (var i = 0; i < lists.length; i++) {
+        for (var j = 0; j < lists[i].length; j++) {
+          if (lists[i][j].materialCode === r.code) return { m: lists[i][j], inOrder: !!fo };
+        }
+      }
+      return null;
+    }
+    function orderOptions(r) {
+      var p = projByCode[r.projCode];
+      return (p ? p.orders : []).map(function (o) {
+        return '<option value="' + esc(shortOrderNo(o.orderNo)) + '">' + esc(o.productName) + '</option>';
+      }).join("");
+    }
+    function codeOptions(r) {
+      var fo = findOrder(r);
+      return (fo ? (state.data.materials[fo.order.orderNo] || []) : []).map(function (m) {
+        return '<option value="' + esc(m.materialCode) + '">' + esc(m.materialName) + '</option>';
+      }).join("");
+    }
+
+    function rowHtml(r, i) {
+      function inp(k, extra) { return '<input type="text" data-k="' + k + '" value="' + esc(r[k]) + '"' + (extra || "") + ' />'; }
+      return '<tr data-i="' + i + '">' +
+        '<td class="c-chk"><button type="button" class="lbl-del" title="刪除這一列" aria-label="刪除這一列">✕</button></td>' +
+        '<td class="c-projCode" data-k="專案代號">' + inp("projCode", ' list="lbl-dl-pc" aria-label="專案代號"') + '</td>' +
+        '<td class="c-projName" data-k="專案名稱">' + inp("projName", ' list="lbl-dl-pn" aria-label="專案名稱"') + '</td>' +
+        '<td class="c-orderNo" data-k="製令單號">' + inp("orderNo", ' list="lbl-dl-o' + i + '" aria-label="製令單號"') +
+          '<datalist id="lbl-dl-o' + i + '">' + orderOptions(r) + '</datalist></td>' +
+        '<td class="c-assy" data-k="Ass&#39;y">' + inp("assy", ' aria-label="Ass&#39;y"') + '</td>' +
+        '<td class="c-code" data-k="料號">' + inp("code", ' list="lbl-dl-c' + i + '" aria-label="料號"') +
+          '<datalist id="lbl-dl-c' + i + '">' + codeOptions(r) + '</datalist></td>' +
+        '<td class="c-name" data-k="品名">' + inp("name", ' aria-label="品名"') + '</td>' +
+        '<td class="c-spec" data-k="規格">' + inp("spec", ' aria-label="規格"') + '</td>' +
+        '<td class="c-qty" data-k="數量"><input type="number" data-k="qty" inputmode="decimal" min="0" step="any" value="' + esc(r.qty) + '" aria-label="數量" /></td>' +
+        '<td class="c-note" data-k="備註">' + inp("note", ' maxlength="60" aria-label="備註"') + '</td>' +
+        '<td class="c-date" data-k="列印日期"><input type="date" data-k="date" value="' + esc(r.date) + '" aria-label="列印日期" /></td>' +
+        '</tr>';
+    }
+
+    app.innerHTML =
+      '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/label">標籤</a> / 手動設置</div>' +
+      '<h1 class="page-title page-title-row"><span>手動設置</span>' +
+        '<button type="button" class="btn btn-sm" id="lbl-m-dl">下載 Excel</button></h1>' +
+      '<p class="rcv-intro lbl-m-intro">選專案代號(或專案名稱)會自動帶出另一個;選製令單號會帶出 Ass\'y;輸入料號會帶出品名、規格與數量。每一格也都可以直接手打。新增的列會沿用上一列的專案與製令。</p>' +
+      '<div class="lbl-wrap"><table class="lbl-table lbl-man"><thead><tr class="lbl-titles"><th class="c-chk"></th>' +
+        LABEL_COLS.map(function (c) { return '<th class="c-' + c.k + '">' + esc(c.t) + '</th>'; }).join("") +
+      '</tr></thead><tbody id="lbl-m-body"></tbody></table></div>' +
+      '<div class="lbl-m-actions">' +
+        '<button type="button" class="btn btn-sm btn-secondary" id="lbl-m-add">+ 新增一列</button>' +
+        '<button type="button" class="btn btn-sm btn-secondary" id="lbl-m-clear">全部清除</button>' +
+      '</div>' +
+      '<datalist id="lbl-dl-pc">' + projects.map(function (p) { return '<option value="' + esc(p.code) + '">' + esc(p.name) + '</option>'; }).join("") + '</datalist>' +
+      '<datalist id="lbl-dl-pn">' + projects.map(function (p) { return '<option value="' + esc(p.name) + '">' + esc(p.code) + '</option>'; }).join("") + '</datalist>';
+
+    var body = document.getElementById("lbl-m-body");
+    function renderRows() { body.innerHTML = M.rows.map(rowHtml).join(""); }
+
+    // 自動帶出後只更新欄位內容與下拉建議,不重畫整列(游標不會跑掉)
+    function syncRow(tr, r) {
+      var inputs = tr.querySelectorAll("input[data-k]");
+      for (var i = 0; i < inputs.length; i++) {
+        var k = inputs[i].getAttribute("data-k");
+        if (inputs[i].value !== String(r[k] === undefined || r[k] === null ? "" : r[k])) inputs[i].value = r[k];
+      }
+      var idx = tr.getAttribute("data-i");
+      var dlo = document.getElementById("lbl-dl-o" + idx), dlc = document.getElementById("lbl-dl-c" + idx);
+      if (dlo) dlo.innerHTML = orderOptions(r);
+      if (dlc) dlc.innerHTML = codeOptions(r);
+    }
+
+    body.addEventListener("input", function (e) {
+      var t = e.target, k = t.getAttribute("data-k"), tr = t.closest ? t.closest("tr") : null;
+      if (!k || !tr) return;
+      M.rows[parseInt(tr.getAttribute("data-i"), 10)][k] = t.value;
+    });
+    body.addEventListener("change", function (e) {
+      var t = e.target, k = t.getAttribute("data-k"), tr = t.closest ? t.closest("tr") : null;
+      if (!k || !tr) return;
+      var r = M.rows[parseInt(tr.getAttribute("data-i"), 10)];
+      r[k] = t.value.trim();
+      if (k === "projCode") {
+        var p = projByCode[r.projCode];
+        if (p) r.projName = p.name;
+      } else if (k === "projName") {
+        var p2 = projects.filter(function (x) { return x.name === r.projName; })[0];
+        if (p2) r.projCode = p2.code;
+      } else if (k === "orderNo") {
+        var fo = findOrder(r);
+        if (fo) {
+          r.orderNo = shortOrderNo(fo.order.orderNo);
+          r.assy = fo.order.productName;
+          r.projCode = fo.project.code;
+          r.projName = fo.project.name;
+        }
+      } else if (k === "code") {
+        var fm = findMaterial(r);
+        if (fm) {
+          r.name = fm.m.materialName;
+          r.spec = fm.m.spec;
+          if (r.qty === "" && fm.inOrder) r.qty = fm.m.needQty;
+        }
+      } else {
+        return;
+      }
+      syncRow(tr, r);
+    });
+    body.addEventListener("click", function (e) {
+      var b = e.target.closest ? e.target.closest(".lbl-del") : null;
+      if (!b) return;
+      M.rows.splice(parseInt(b.closest("tr").getAttribute("data-i"), 10), 1);
+      if (!M.rows.length) M.rows.push(blankLabelRow());
+      renderRows();
+    });
+
+    document.getElementById("lbl-m-add").addEventListener("click", function () {
+      M.rows.push(blankLabelRow(M.rows[M.rows.length - 1]));
+      renderRows();
+      var last = body.querySelector("tr:last-child input[data-k='code']");
+      if (last) last.focus();
+    });
+    document.getElementById("lbl-m-clear").addEventListener("click", function () {
+      if (!window.confirm("確定要清除所有已輸入的列嗎?")) return;
+      M.rows = [blankLabelRow()];
+      renderRows();
+    });
+    document.getElementById("lbl-m-dl").addEventListener("click", function () {
+      var rows = M.rows.filter(function (r) {
+        return ["projCode", "projName", "orderNo", "assy", "code", "name", "spec", "qty", "note"].some(function (k) { return String(r[k] || "").trim(); });
+      }).map(function (r) {
+        var num = Number(r.qty);
+        var out = {};
+        LABEL_COLS.forEach(function (c) { out[c.k] = r[c.k]; });
+        out.qty = r.qty === "" ? "" : (isNaN(num) ? r.qty : num);
+        return out;
+      });
+      if (!rows.length) { window.alert("請先輸入標籤內容"); return; }
+      saveLabelExcel(rows);
+    });
+
+    renderRows();
+  }
+
   // ---------- Init ----------
 
   function loadData() {
@@ -3045,28 +3575,11 @@
     if (document.visibilityState === "visible") checkDataUpdate();
   });
 
-  function refreshData() {
-    if (!session) return;
-    var btn = document.getElementById("refresh-btn");
-    if (btn) btn.classList.add("spinning");
-    loadData()
-      .then(render)
-      .catch(handleLoadError)
-      .then(function () {
-        if (btn) btn.classList.remove("spinning");
-      });
-  }
-
   window.addEventListener("hashchange", render);
   window.addEventListener("resize", updateHeaderHeightVar);
 
   document.addEventListener("DOMContentLoaded", function () {
     lsSet("wms_edit_pin", null); // 舊版的儲存密碼不再使用,清掉
-
-    var refreshBtn = document.getElementById("refresh-btn");
-    if (refreshBtn) {
-      refreshBtn.addEventListener("click", refreshData);
-    }
 
     var scanBtn = document.getElementById("scan-btn");
     if (scanBtn) scanBtn.addEventListener("click", openScanner);

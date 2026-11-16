@@ -1290,3 +1290,66 @@ body.scan-open .modal-backdrop { -webkit-backdrop-filter: none; backdrop-filter:
   .sign-row .sign-dn, .sign-row .sign-vendor, .sign-row .sign-del, .sign-add-btns { grid-column: 2 / -1; }
   .sign-row .sign-del, .sign-add-btns { justify-self: end; }
 }
+
+/* ---------- 標籤(系統選取 / 手動設置) ---------- */
+.lbl-dir-card { max-width: 640px; }
+.lbl-dir-now { font-size: 14px; margin: 2px 0 10px; word-break: break-all; }
+.lbl-dir-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.lbl-dir-btns .btn[hidden] { display: none; }
+.lbl-dir-note { margin: 10px 0 0; font-size: 12.5px; line-height: 1.7; color: var(--text-muted); }
+.lbl-toolbar { align-items: center; }
+.lbl-toolbar .btn { height: 42px; }
+.lbl-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
+.lbl-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.lbl-table.lbl-sel { min-width: 1080px; }
+.lbl-table.lbl-man { min-width: 1280px; }
+.lbl-table th, .lbl-table td { padding: 8px 7px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
+.lbl-table thead th { background: var(--surface-alt); color: var(--text-muted); font-size: 12.5px; font-weight: 700; white-space: nowrap; }
+.lbl-table .lbl-filters th { padding: 6px 5px; font-weight: 400; }
+.lbl-table select, .lbl-table input[type="text"], .lbl-table input[type="number"], .lbl-table input[type="date"] {
+  width: 100%; min-width: 0; height: 32px; padding: 0 7px;
+  border: 1px solid var(--border-strong); border-radius: 7px;
+  background: var(--surface); color: var(--text); font: inherit; font-size: 13px;
+}
+.lbl-table select:focus, .lbl-table input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--ring); }
+.lbl-table .c-chk { width: 36px; text-align: center; }
+.lbl-table input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--brand); cursor: pointer; vertical-align: middle; }
+.lbl-table .c-qty { width: 84px; }
+.lbl-table .c-note { width: 150px; }
+.lbl-table .c-date { width: 104px; white-space: nowrap; }
+.lbl-table td.c-code, .lbl-table td.c-orderNo, .lbl-table td.c-projCode { white-space: nowrap; }
+.lbl-sel td.c-name { font-weight: 700; }
+.lbl-sel tbody tr:hover { background: var(--brand-soft); }
+.lbl-sel tbody tr.on { background: color-mix(in srgb, var(--brand-soft) 75%, transparent); }
+.lbl-table tbody tr:last-child td { border-bottom: none; }
+.lbl-empty { text-align: center !important; color: var(--text-muted); padding: 30px 10px !important; }
+.lbl-table .c-projName { min-width: 130px; }
+.lbl-table .lbl-filters select { min-width: 96px; }
+.lbl-man .c-spec { min-width: 200px; }
+.lbl-del { width: 28px; height: 28px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--text-muted); cursor: pointer; font-size: 13px; line-height: 1; }
+.lbl-del:hover { color: var(--warn-text); border-color: var(--warn-text); }
+.lbl-m-intro { margin: 0 0 10px; }
+.lbl-m-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+
+/* 手機:表格改成一張張卡片,篩選下拉排成兩欄 */
+@media (max-width: 720px) {
+  .lbl-wrap { overflow: visible; border: none; box-shadow: none; background: transparent; border-radius: 0; }
+  .lbl-table, .lbl-table.lbl-sel, .lbl-table.lbl-man { min-width: 0; }
+  .lbl-table, .lbl-table thead, .lbl-table tbody { display: block; }
+  .lbl-table .lbl-titles { display: none; }
+  .lbl-table .lbl-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+  .lbl-table .lbl-filters th { display: block; padding: 0; border: none; background: none; width: auto; }
+  .lbl-table .lbl-filters th.c-chk, .lbl-table .lbl-filters th.lbl-f-empty { display: none; }
+  .lbl-table tbody tr {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; position: relative;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 10px 12px 12px 46px; margin-bottom: 10px; box-shadow: var(--shadow-sm);
+  }
+  .lbl-table tbody td { display: block; padding: 0; border: none; width: auto; font-size: 14px; min-width: 0; white-space: normal !important; word-break: break-word; }
+  .lbl-table tbody td::before { content: attr(data-k); display: block; font-size: 11.5px; font-weight: 400; color: var(--text-muted); margin-bottom: 1px; }
+  .lbl-table tbody td.c-chk { position: absolute; left: 12px; top: 12px; width: auto; }
+  .lbl-table tbody td.c-chk::before, .lbl-table tbody td.lbl-empty::before { content: none; }
+  .lbl-table tbody td.c-projName, .lbl-table tbody td.c-name, .lbl-table tbody td.c-spec, .lbl-table tbody td.lbl-empty { grid-column: 1 / -1; }
+  .lbl-table select, .lbl-table input[type="text"], .lbl-table input[type="number"], .lbl-table input[type="date"] { height: 38px; font-size: 16px; }
+  .lbl-table input[type="checkbox"] { width: 20px; height: 20px; }
+}
