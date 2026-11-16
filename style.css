@@ -1358,3 +1358,8 @@ body.scan-open .modal-backdrop { -webkit-backdrop-filter: none; backdrop-filter:
   .lbl-table tbody tr#lbl-m-draft { padding: 0; border: none; box-shadow: none; background: transparent; margin: 0; }
   .lbl-table tbody tr#lbl-m-draft td.c-date { font-size: 14px; }
 }
+.lbl-countrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.lbl-countrow .result-count { flex: 1; }
+.lbl-all-m { display: none; align-items: center; gap: 6px; font-size: 14px; font-weight: 700; white-space: nowrap; cursor: pointer; padding: 6px 12px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface); }
+.lbl-all-m input { width: 20px; height: 20px; accent-color: var(--brand); }
+@media (max-width: 720px) { .lbl-all-m { display: inline-flex; } }

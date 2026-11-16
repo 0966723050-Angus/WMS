@@ -3167,7 +3167,8 @@
         '<input type="search" id="lbl-q" placeholder="全文檢索:輸入關鍵字(專案、製令、Ass\'y、料號、品名、規格…)" value="' + esc(S.q) + '" />' +
         '<button type="button" class="btn btn-sm btn-secondary" id="lbl-reset">清除篩選</button>' +
       '</div>' +
-      '<p class="result-count" id="lbl-count"></p>' +
+      '<div class="lbl-countrow"><p class="result-count" id="lbl-count"></p>' +
+        '<label class="lbl-all-m"><input type="checkbox" id="lbl-all-m" /> 全選</label></div>' +   // 手機版(表頭隱藏時)的全選
       '<div class="lbl-wrap"><table class="lbl-table lbl-sel"><thead>' +
         '<tr class="lbl-titles"><th class="c-chk"><input type="checkbox" id="lbl-all" aria-label="全選" title="全選目前列出的項目" /></th>' +
           LABEL_COLS.map(function (c) { return '<th class="c-' + c.k + '">' + esc(c.t) + '</th>'; }).join("") + '</tr>' +
@@ -3238,12 +3239,13 @@
         " · 已勾選 " + n + " 筆";
       var dl = document.getElementById("lbl-dl");
       if (dl) { dl.textContent = "下載 Excel" + (n ? "(" + n + ")" : ""); dl.disabled = !n; }
-      var a = document.getElementById("lbl-all");
-      if (a) {
-        var on = shown.filter(function (r) { return S.checked[r.key]; }).length;
+      var on = shown.filter(function (r) { return S.checked[r.key]; }).length;
+      ["lbl-all", "lbl-all-m"].forEach(function (id) {
+        var a = document.getElementById(id);
+        if (!a) return;
         a.checked = shown.length > 0 && on === shown.length;
         a.indeterminate = on > 0 && on < shown.length;
-      }
+      });
     }
 
     function refresh() { renderFilters(); renderBody(); }
@@ -3309,11 +3311,13 @@
       }
     });
 
-    document.getElementById("lbl-all").addEventListener("change", function (e) {
+    function selectAll(e) {
       var on = e.target.checked;
       cur.slice(0, LABEL_MAX_SHOW).forEach(function (r) { if (on) S.checked[r.key] = true; else delete S.checked[r.key]; });
       renderBody();
-    });
+    }
+    document.getElementById("lbl-all").addEventListener("change", selectAll);
+    document.getElementById("lbl-all-m").addEventListener("change", selectAll);
 
     document.getElementById("lbl-dl").addEventListener("click", function () {
       var rows = all.filter(function (r) { return S.checked[r.key]; }).map(function (r) {
