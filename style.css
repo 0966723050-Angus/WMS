@@ -1302,7 +1302,10 @@ body.scan-open .modal-backdrop { -webkit-backdrop-filter: none; backdrop-filter:
 .lbl-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
 .lbl-table { border-collapse: collapse; width: 100%; font-size: 13px; }
 .lbl-table.lbl-sel { min-width: 1080px; }
-.lbl-table.lbl-man { min-width: 1280px; }
+.lbl-table.lbl-man { min-width: 1180px; }
+.lbl-table.lbl-saved { min-width: 1040px; }
+.lbl-m-card .lbl-wrap { box-shadow: none; }
+.lbl-m-card .sign-h-row .btn[hidden] { display: none; }
 .lbl-table th, .lbl-table td { padding: 8px 7px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
 .lbl-table thead th { background: var(--surface-alt); color: var(--text-muted); font-size: 12.5px; font-weight: 700; white-space: nowrap; }
 .lbl-table .lbl-filters th { padding: 6px 5px; font-weight: 400; }
@@ -1352,4 +1355,6 @@ body.scan-open .modal-backdrop { -webkit-backdrop-filter: none; backdrop-filter:
   .lbl-table tbody td.c-projName, .lbl-table tbody td.c-name, .lbl-table tbody td.c-spec, .lbl-table tbody td.lbl-empty { grid-column: 1 / -1; }
   .lbl-table select, .lbl-table input[type="text"], .lbl-table input[type="number"], .lbl-table input[type="date"] { height: 38px; font-size: 16px; }
   .lbl-table input[type="checkbox"] { width: 20px; height: 20px; }
+  .lbl-table tbody tr#lbl-m-draft { padding: 0; border: none; box-shadow: none; background: transparent; margin: 0; }
+  .lbl-table tbody tr#lbl-m-draft td.c-date { font-size: 14px; }
 }

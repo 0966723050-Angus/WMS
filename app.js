@@ -3039,26 +3039,25 @@
     });
   }
 
+  // 工作表「單頭資料」:A 欄流水號(L + 年月日 + 5 位序號,例 L2026111600001),B~K 欄為標籤欄位
+  var LABEL_FILE_SYSTEM = "export.xlsx";        // 系統選取:固定檔名,資料夾裡已有就直接覆蓋
+  var LABEL_FILE_MANUAL = "export-自填.xlsx";   // 手動設置
   function labelWorkbook(rows) {
-    var aoa = [LABEL_COLS.map(function (c) { return c.t; })].concat(rows.map(function (r) {
-      return LABEL_COLS.map(function (c) { return r[c.k] === null || r[c.k] === undefined ? "" : r[c.k]; });
+    var ymd = todayYmd().replace(/-/g, "");
+    var aoa = [["流水號"].concat(LABEL_COLS.map(function (c) { return c.t; }))].concat(rows.map(function (r, i) {
+      var sn = "L" + ymd + ("0000" + (i + 1)).slice(-5);
+      return [sn].concat(LABEL_COLS.map(function (c) { return r[c.k] === null || r[c.k] === undefined ? "" : r[c.k]; }));
     }));
     var ws = XLSX.utils.aoa_to_sheet(aoa);   // 字串欄位(製令單號等)保持文字,不會變成數字
-    ws["!cols"] = LABEL_COLS.map(function (c) { return { wch: c.w }; });
+    ws["!cols"] = [{ wch: 16 }].concat(LABEL_COLS.map(function (c) { return { wch: c.w }; }));
     var wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "標籤");
+    XLSX.utils.book_append_sheet(wb, ws, "單頭資料");
     return wb;
   }
 
-  function labelFileName() {
-    var d = new Date();
-    return "標籤_" + d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + "_" +
-      pad2(d.getHours()) + pad2(d.getMinutes()) + pad2(d.getSeconds()) + ".xlsx";
-  }
-
-  // 有設定資料夾就直接寫進去;沒設定、不支援或沒給權限,就用瀏覽器一般下載
-  function saveLabelExcel(rows) {
-    var wb = labelWorkbook(rows), name = labelFileName();
+  // 有設定資料夾就直接寫進去(同名檔案直接覆蓋);沒設定、不支援或沒給權限,就用瀏覽器一般下載
+  function saveLabelExcel(rows, name) {
+    var wb = labelWorkbook(rows);
     function browserDownload() { XLSX.writeFile(wb, name); return "瀏覽器的「下載」資料夾"; }
     return getLabelDir().then(function (dir) {
       if (!dir) return browserDownload();
@@ -3307,7 +3306,7 @@
           qty: raw === "" ? "" : (isNaN(num) ? raw : num), note: S.note[r.key] || "", date: today
         };
       });
-      if (rows.length) saveLabelExcel(rows);
+      if (rows.length) saveLabelExcel(rows, LABEL_FILE_SYSTEM);
     });
 
     refresh();
@@ -3322,11 +3321,15 @@
     };
   }
 
+  // 上方一列輸入欄位 → 按「新增」放進下方預存清單 → 全部輸入完按「下載 Excel」
   function renderLabelManual(app) {
-    if (!labelManual) labelManual = { rows: [blankLabelRow()] };
+    if (!labelManual || !labelManual.draft) labelManual = { draft: blankLabelRow(), rows: [] };
     var M = labelManual, projects = state.data.projects || [];
+    var D = M.draft;
+    D.date = todayYmd();   // 列印日期一律自動帶當天
     var projByCode = {};
     projects.forEach(function (p) { projByCode[p.code] = p; });
+    var INPUT_KEYS = ["projCode", "projName", "orderNo", "assy", "code", "name", "spec", "qty", "note"];
 
     function findOrder(r) {
       if (!r.orderNo) return null;
@@ -3363,126 +3366,158 @@
       }).join("");
     }
 
-    function rowHtml(r, i) {
-      function inp(k, extra) { return '<input type="text" data-k="' + k + '" value="' + esc(r[k]) + '"' + (extra || "") + ' />'; }
-      return '<tr data-i="' + i + '">' +
-        '<td class="c-chk"><button type="button" class="lbl-del" title="刪除這一列" aria-label="刪除這一列">✕</button></td>' +
-        '<td class="c-projCode" data-k="專案代號">' + inp("projCode", ' list="lbl-dl-pc" aria-label="專案代號"') + '</td>' +
-        '<td class="c-projName" data-k="專案名稱">' + inp("projName", ' list="lbl-dl-pn" aria-label="專案名稱"') + '</td>' +
-        '<td class="c-orderNo" data-k="製令單號">' + inp("orderNo", ' list="lbl-dl-o' + i + '" aria-label="製令單號"') +
-          '<datalist id="lbl-dl-o' + i + '">' + orderOptions(r) + '</datalist></td>' +
-        '<td class="c-assy" data-k="Ass&#39;y">' + inp("assy", ' aria-label="Ass&#39;y"') + '</td>' +
-        '<td class="c-code" data-k="料號">' + inp("code", ' list="lbl-dl-c' + i + '" aria-label="料號"') +
-          '<datalist id="lbl-dl-c' + i + '">' + codeOptions(r) + '</datalist></td>' +
-        '<td class="c-name" data-k="品名">' + inp("name", ' aria-label="品名"') + '</td>' +
-        '<td class="c-spec" data-k="規格">' + inp("spec", ' aria-label="規格"') + '</td>' +
-        '<td class="c-qty" data-k="數量"><input type="number" data-k="qty" inputmode="decimal" min="0" step="any" value="' + esc(r.qty) + '" aria-label="數量" /></td>' +
-        '<td class="c-note" data-k="備註">' + inp("note", ' maxlength="60" aria-label="備註"') + '</td>' +
-        '<td class="c-date" data-k="列印日期"><input type="date" data-k="date" value="' + esc(r.date) + '" aria-label="列印日期" /></td>' +
-        '</tr>';
-    }
+    function inp(k, extra) { return '<input type="text" data-k="' + k + '" value="' + esc(D[k]) + '"' + (extra || "") + ' />'; }
+    var titles = LABEL_COLS.map(function (c) { return '<th class="c-' + c.k + '">' + esc(c.t) + (c.k === "date" ? '(自動)' : '') + '</th>'; }).join("");
 
     app.innerHTML =
       '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/label">標籤</a> / 手動設置</div>' +
       '<h1 class="page-title page-title-row"><span>手動設置</span>' +
         '<button type="button" class="btn btn-sm" id="lbl-m-dl">下載 Excel</button></h1>' +
-      '<p class="rcv-intro lbl-m-intro">選專案代號(或專案名稱)會自動帶出另一個;選製令單號會帶出 Ass\'y;輸入料號會帶出品名、規格與數量。每一格也都可以直接手打。新增的列會沿用上一列的專案與製令。</p>' +
-      '<div class="lbl-wrap"><table class="lbl-table lbl-man"><thead><tr class="lbl-titles"><th class="c-chk"></th>' +
-        LABEL_COLS.map(function (c) { return '<th class="c-' + c.k + '">' + esc(c.t) + '</th>'; }).join("") +
-      '</tr></thead><tbody id="lbl-m-body"></tbody></table></div>' +
-      '<div class="lbl-m-actions">' +
-        '<button type="button" class="btn btn-sm btn-secondary" id="lbl-m-add">+ 新增一列</button>' +
-        '<button type="button" class="btn btn-sm btn-secondary" id="lbl-m-clear">全部清除</button>' +
-      '</div>' +
+      '<p class="rcv-intro lbl-m-intro">在下面欄位輸入後按「新增」放進預存清單;全部輸入完再按「下載 Excel」。選專案代號(或專案名稱)會自動帶出另一個,選製令單號會帶出 Ass\'y,輸入料號會帶出品名、規格與數量;每一格也都可以直接手打。</p>' +
+
+      '<section class="sign-card lbl-m-card">' +
+        '<div class="lbl-wrap"><table class="lbl-table lbl-man"><thead><tr class="lbl-titles">' + titles + '</tr></thead><tbody><tr id="lbl-m-draft">' +
+          '<td class="c-projCode" data-k="專案代號">' + inp("projCode", ' list="lbl-dl-pc" aria-label="專案代號"') + '</td>' +
+          '<td class="c-projName" data-k="專案名稱">' + inp("projName", ' list="lbl-dl-pn" aria-label="專案名稱"') + '</td>' +
+          '<td class="c-orderNo" data-k="製令單號">' + inp("orderNo", ' list="lbl-dl-o" aria-label="製令單號"') + '</td>' +
+          '<td class="c-assy" data-k="Ass&#39;y">' + inp("assy", ' aria-label="Ass&#39;y"') + '</td>' +
+          '<td class="c-code" data-k="料號">' + inp("code", ' list="lbl-dl-c" aria-label="料號"') + '</td>' +
+          '<td class="c-name" data-k="品名">' + inp("name", ' aria-label="品名"') + '</td>' +
+          '<td class="c-spec" data-k="規格">' + inp("spec", ' aria-label="規格"') + '</td>' +
+          '<td class="c-qty" data-k="數量"><input type="number" data-k="qty" inputmode="decimal" min="0" step="any" value="' + esc(D.qty) + '" aria-label="數量" /></td>' +
+          '<td class="c-note" data-k="備註">' + inp("note", ' maxlength="60" aria-label="備註"') + '</td>' +
+          '<td class="c-date" data-k="列印日期(自動)">' + esc(D.date) + '</td>' +
+        '</tr></tbody></table></div>' +
+        '<div class="lbl-m-actions">' +
+          '<button type="button" class="btn btn-sm" id="lbl-m-add">+ 新增</button>' +
+          '<button type="button" class="btn btn-sm btn-secondary" id="lbl-m-reset">清空欄位</button>' +
+        '</div>' +
+      '</section>' +
+
+      '<section class="sign-card lbl-m-card">' +
+        '<h2 class="sign-h sign-h-row"><span id="lbl-m-title">預存清單</span>' +
+          '<button type="button" class="btn btn-sm btn-secondary" id="lbl-m-clear">全部清除</button></h2>' +
+        '<div class="lbl-wrap"><table class="lbl-table lbl-saved"><thead><tr class="lbl-titles"><th class="c-chk"></th>' +
+          LABEL_COLS.map(function (c) { return '<th class="c-' + c.k + '">' + esc(c.t) + '</th>'; }).join("") +
+        '</tr></thead><tbody id="lbl-m-body"></tbody></table></div>' +
+      '</section>' +
+
       '<datalist id="lbl-dl-pc">' + projects.map(function (p) { return '<option value="' + esc(p.code) + '">' + esc(p.name) + '</option>'; }).join("") + '</datalist>' +
-      '<datalist id="lbl-dl-pn">' + projects.map(function (p) { return '<option value="' + esc(p.name) + '">' + esc(p.code) + '</option>'; }).join("") + '</datalist>';
+      '<datalist id="lbl-dl-pn">' + projects.map(function (p) { return '<option value="' + esc(p.name) + '">' + esc(p.code) + '</option>'; }).join("") + '</datalist>' +
+      '<datalist id="lbl-dl-o">' + orderOptions(D) + '</datalist>' +
+      '<datalist id="lbl-dl-c">' + codeOptions(D) + '</datalist>';
 
+    var draftTr = document.getElementById("lbl-m-draft");
     var body = document.getElementById("lbl-m-body");
-    function renderRows() { body.innerHTML = M.rows.map(rowHtml).join(""); }
 
-    // 自動帶出後只更新欄位內容與下拉建議,不重畫整列(游標不會跑掉)
-    function syncRow(tr, r) {
-      var inputs = tr.querySelectorAll("input[data-k]");
-      for (var i = 0; i < inputs.length; i++) {
-        var k = inputs[i].getAttribute("data-k");
-        if (inputs[i].value !== String(r[k] === undefined || r[k] === null ? "" : r[k])) inputs[i].value = r[k];
-      }
-      var idx = tr.getAttribute("data-i");
-      var dlo = document.getElementById("lbl-dl-o" + idx), dlc = document.getElementById("lbl-dl-c" + idx);
-      if (dlo) dlo.innerHTML = orderOptions(r);
-      if (dlc) dlc.innerHTML = codeOptions(r);
+    function renderSaved() {
+      document.getElementById("lbl-m-title").textContent = "預存清單(" + M.rows.length + " 筆)";
+      document.getElementById("lbl-m-clear").hidden = !M.rows.length;
+      var dl = document.getElementById("lbl-m-dl");
+      dl.textContent = "下載 Excel" + (M.rows.length ? "(" + M.rows.length + ")" : "");
+      dl.disabled = !M.rows.length;
+      body.innerHTML = M.rows.length ? M.rows.map(function (r, i) {
+        return '<tr data-i="' + i + '">' +
+          '<td class="c-chk"><button type="button" class="lbl-del" title="刪除這一筆" aria-label="刪除這一筆">✕</button></td>' +
+          LABEL_COLS.map(function (c) {
+            var t = c.k === "assy" ? "Ass&#39;y" : esc(c.t);
+            return '<td class="c-' + c.k + '" data-k="' + t + '">' + esc(r[c.k]) + '</td>';
+          }).join("") + '</tr>';
+      }).join("") : '<tr><td colspan="11" class="lbl-empty">還沒有預存的標籤,請在上方輸入後按「新增」</td></tr>';
     }
 
-    body.addEventListener("input", function (e) {
-      var t = e.target, k = t.getAttribute("data-k"), tr = t.closest ? t.closest("tr") : null;
-      if (!k || !tr) return;
-      M.rows[parseInt(tr.getAttribute("data-i"), 10)][k] = t.value;
+    // 自動帶出後只更新欄位內容與下拉建議(游標不會跑掉)
+    function syncDraft() {
+      var inputs = draftTr.querySelectorAll("input[data-k]");
+      for (var i = 0; i < inputs.length; i++) {
+        var k = inputs[i].getAttribute("data-k");
+        var v = D[k] === undefined || D[k] === null ? "" : String(D[k]);
+        if (inputs[i].value !== v) inputs[i].value = v;
+      }
+      document.getElementById("lbl-dl-o").innerHTML = orderOptions(D);
+      document.getElementById("lbl-dl-c").innerHTML = codeOptions(D);
+    }
+
+    draftTr.addEventListener("input", function (e) {
+      var k = e.target.getAttribute("data-k");
+      if (k) D[k] = e.target.value;
     });
-    body.addEventListener("change", function (e) {
-      var t = e.target, k = t.getAttribute("data-k"), tr = t.closest ? t.closest("tr") : null;
-      if (!k || !tr) return;
-      var r = M.rows[parseInt(tr.getAttribute("data-i"), 10)];
-      r[k] = t.value.trim();
+    draftTr.addEventListener("change", function (e) {
+      var k = e.target.getAttribute("data-k");
+      if (!k) return;
+      D[k] = e.target.value.trim();
       if (k === "projCode") {
-        var p = projByCode[r.projCode];
-        if (p) r.projName = p.name;
+        var p = projByCode[D.projCode];
+        if (p) D.projName = p.name;
       } else if (k === "projName") {
-        var p2 = projects.filter(function (x) { return x.name === r.projName; })[0];
-        if (p2) r.projCode = p2.code;
+        var p2 = projects.filter(function (x) { return x.name === D.projName; })[0];
+        if (p2) D.projCode = p2.code;
       } else if (k === "orderNo") {
-        var fo = findOrder(r);
+        var fo = findOrder(D);
         if (fo) {
-          r.orderNo = shortOrderNo(fo.order.orderNo);
-          r.assy = fo.order.productName;
-          r.projCode = fo.project.code;
-          r.projName = fo.project.name;
+          D.orderNo = shortOrderNo(fo.order.orderNo);
+          D.assy = fo.order.productName;
+          D.projCode = fo.project.code;
+          D.projName = fo.project.name;
         }
       } else if (k === "code") {
-        var fm = findMaterial(r);
+        var fm = findMaterial(D);
         if (fm) {
-          r.name = fm.m.materialName;
-          r.spec = fm.m.spec;
-          if (r.qty === "" && fm.inOrder) r.qty = fm.m.needQty;
+          D.name = fm.m.materialName;
+          D.spec = fm.m.spec;
+          if (D.qty === "" && fm.inOrder) D.qty = fm.m.needQty;
         }
       } else {
         return;
       }
-      syncRow(tr, r);
+      syncDraft();
+    });
+    // 在輸入列按 Enter = 新增
+    draftTr.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); document.getElementById("lbl-m-add").click(); }
+    });
+
+    document.getElementById("lbl-m-add").addEventListener("click", function () {
+      if (!INPUT_KEYS.some(function (k) { return String(D[k] === undefined || D[k] === null ? "" : D[k]).trim(); })) {
+        window.alert("請先輸入標籤內容");
+        return;
+      }
+      var row = {};
+      LABEL_COLS.forEach(function (c) { row[c.k] = typeof D[c.k] === "string" ? D[c.k].trim() : D[c.k]; });
+      var num = Number(row.qty);
+      row.qty = row.qty === "" || row.qty === undefined ? "" : (isNaN(num) ? row.qty : num);
+      row.date = todayYmd();
+      M.rows.push(row);
+      // 下一筆沿用專案、製令、Ass'y,其餘清空
+      M.draft = D = blankLabelRow(D);
+      syncDraft();
+      renderSaved();
+      var c = draftTr.querySelector("input[data-k='code']");
+      if (c) c.focus();
+      showToast("已新增到預存清單(共 " + M.rows.length + " 筆)");
+    });
+    document.getElementById("lbl-m-reset").addEventListener("click", function () {
+      M.draft = D = blankLabelRow();
+      syncDraft();
     });
     body.addEventListener("click", function (e) {
       var b = e.target.closest ? e.target.closest(".lbl-del") : null;
       if (!b) return;
       M.rows.splice(parseInt(b.closest("tr").getAttribute("data-i"), 10), 1);
-      if (!M.rows.length) M.rows.push(blankLabelRow());
-      renderRows();
-    });
-
-    document.getElementById("lbl-m-add").addEventListener("click", function () {
-      M.rows.push(blankLabelRow(M.rows[M.rows.length - 1]));
-      renderRows();
-      var last = body.querySelector("tr:last-child input[data-k='code']");
-      if (last) last.focus();
+      renderSaved();
     });
     document.getElementById("lbl-m-clear").addEventListener("click", function () {
-      if (!window.confirm("確定要清除所有已輸入的列嗎?")) return;
-      M.rows = [blankLabelRow()];
-      renderRows();
+      if (!window.confirm("確定要清除預存清單裡的 " + M.rows.length + " 筆嗎?")) return;
+      M.rows = [];
+      renderSaved();
     });
     document.getElementById("lbl-m-dl").addEventListener("click", function () {
-      var rows = M.rows.filter(function (r) {
-        return ["projCode", "projName", "orderNo", "assy", "code", "name", "spec", "qty", "note"].some(function (k) { return String(r[k] || "").trim(); });
-      }).map(function (r) {
-        var num = Number(r.qty);
-        var out = {};
-        LABEL_COLS.forEach(function (c) { out[c.k] = r[c.k]; });
-        out.qty = r.qty === "" ? "" : (isNaN(num) ? r.qty : num);
-        return out;
-      });
-      if (!rows.length) { window.alert("請先輸入標籤內容"); return; }
-      saveLabelExcel(rows);
+      if (!M.rows.length) return;
+      var today = todayYmd();
+      saveLabelExcel(M.rows.map(function (r) { var o = Object.assign({}, r); o.date = today; return o; }), LABEL_FILE_MANUAL);
     });
 
-    renderRows();
+    renderSaved();
   }
 
   // ---------- Init ----------
