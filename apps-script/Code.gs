@@ -963,6 +963,19 @@ function doPost(e) {
       return json_({ ok: true, email: me.email, name: me.name, isAdmin: me.isAdmin, perms: me.perms, session: ns.token, exp: ns.exp });
     }
 
+    // 標籤流水號:全公司共用、每天從 1 重新起算。一次保留 count 個號碼,回傳第一個號碼(doPost 已加鎖,不會重複)
+    if (action === 'label_serial') {
+      var cnt = Math.floor(Number(body.count) || 0);
+      if (cnt < 1 || cnt > 5000) return json_({ ok: false, error: '數量不正確' });
+      var day = Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyyMMdd');
+      var sp = props_(), cur = null;
+      try { cur = JSON.parse(sp.getProperty('LABEL_SERIAL') || 'null'); } catch (err) { cur = null; }
+      var last = cur && cur.d === day ? Number(cur.n) || 0 : 0;
+      if (last + cnt > 99999) return json_({ ok: false, error: '今天的流水號已超過 99999 號' });
+      sp.setProperty('LABEL_SERIAL', JSON.stringify({ d: day, n: last + cnt }));
+      return json_({ ok: true, date: day, start: last + 1, end: last + cnt });
+    }
+
     if (action === 'pending') return json_({ ok: true, pending: listPending_() });
     if (action === 'save') {
       if (!me.perms.edit) return denied_('儲位編輯');

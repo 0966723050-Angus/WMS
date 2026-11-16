@@ -3039,13 +3039,13 @@
     });
   }
 
-  // 工作表「單頭資料」:A 欄流水號(L + 年月日 + 5 位序號,例 L2026111600001),B~K 欄為標籤欄位
+  // 工作表「單頭資料」:A 欄流水號(L + 年月日 + 5 位序號,例 L2026111600001),B~K 欄為標籤欄位。
+  // 流水號由伺服器發號:全公司共用、當天連續往下編,隔天從 00001 重新起算。
   var LABEL_FILE_SYSTEM = "export.xlsx";        // 系統選取:固定檔名,資料夾裡已有就直接覆蓋
   var LABEL_FILE_MANUAL = "export-自填.xlsx";   // 手動設置
-  function labelWorkbook(rows) {
-    var ymd = todayYmd().replace(/-/g, "");
+  function labelWorkbook(rows, ymd, start) {
     var aoa = [["流水號"].concat(LABEL_COLS.map(function (c) { return c.t; }))].concat(rows.map(function (r, i) {
-      var sn = "L" + ymd + ("0000" + (i + 1)).slice(-5);
+      var sn = "L" + ymd + ("0000" + (start + i)).slice(-5);
       return [sn].concat(LABEL_COLS.map(function (c) { return r[c.k] === null || r[c.k] === undefined ? "" : r[c.k]; }));
     }));
     var ws = XLSX.utils.aoa_to_sheet(aoa);   // 字串欄位(製令單號等)保持文字,不會變成數字
@@ -3055,29 +3055,48 @@
     return wb;
   }
 
+  var labelSaving = false;
+  // 先確認資料夾權限(要在按鍵當下詢問),再向伺服器領流水號,最後寫檔:
   // 有設定資料夾就直接寫進去(同名檔案直接覆蓋);沒設定、不支援或沒給權限,就用瀏覽器一般下載
   function saveLabelExcel(rows, name) {
-    var wb = labelWorkbook(rows);
-    function browserDownload() { XLSX.writeFile(wb, name); return "瀏覽器的「下載」資料夾"; }
-    return getLabelDir().then(function (dir) {
-      if (!dir) return browserDownload();
+    if (labelSaving) return Promise.resolve();
+    labelSaving = true;
+    var dir = null, note = "";
+    return getLabelDir().then(function (d) {
+      if (!d) return;
       var opts = { mode: "readwrite" };
-      return Promise.resolve(dir.queryPermission ? dir.queryPermission(opts) : "granted")
-        .then(function (p) { return p === "granted" ? p : dir.requestPermission(opts); })
+      return Promise.resolve(d.queryPermission ? d.queryPermission(opts) : "granted")
+        .then(function (p) { return p === "granted" ? p : d.requestPermission(opts); })
         .then(function (p) {
-          if (p !== "granted") return browserDownload() + "(未允許寫入「" + dir.name + "」)";
-          var data = XLSX.write(wb, { bookType: "xlsx", type: "array" });
-          return dir.getFileHandle(name, { create: true })
-            .then(function (fh) { return fh.createWritable(); })
-            .then(function (w) { return w.write(new Blob([data])).then(function () { return w.close(); }); })
-            .then(function () { return "「" + dir.name + "」資料夾"; });
+          if (p === "granted") dir = d; else note = "(未允許寫入「" + d.name + "」)";
         })
-        .catch(function () { return browserDownload() + "(「" + dir.name + "」無法寫入,請到標籤頁重新設定下載位置)"; });
-    }).then(function (where) {
-      showToast("已下載 " + rows.length + " 筆標籤:" + name + ",存到" + where);
+        .catch(function () { note = "(「" + d.name + "」無法使用,請到標籤頁重新設定下載位置)"; });
+    }).then(function () {
+      return api("label_serial", { count: rows.length }).catch(function (err) {
+        throw new Error("無法取得流水號(" + err.message + ")");
+      });
+    }).then(function (res) {
+      if (!res.ok) throw new Error(res.error || "無法取得流水號");
+      var wb = labelWorkbook(rows, res.date, res.start);
+      var range = "L" + res.date + ("0000" + res.start).slice(-5) + (rows.length > 1 ? " ~ " + ("0000" + res.end).slice(-5) : "");
+      function browserDownload() { XLSX.writeFile(wb, name); return "瀏覽器的「下載」資料夾"; }
+      var saved;
+      if (!dir) {
+        saved = Promise.resolve(browserDownload() + note);
+      } else {
+        var data = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+        saved = dir.getFileHandle(name, { create: true })
+          .then(function (fh) { return fh.createWritable(); })
+          .then(function (w) { return w.write(new Blob([data])).then(function () { return w.close(); }); })
+          .then(function () { return "「" + dir.name + "」資料夾"; })
+          .catch(function () { return browserDownload() + "(「" + dir.name + "」無法寫入,請到標籤頁重新設定下載位置)"; });
+      }
+      return saved.then(function (where) {
+        showToast("已下載 " + rows.length + " 筆標籤(流水號 " + range + "):" + name + ",存到" + where);
+      });
     }).catch(function (err) {
       window.alert("下載失敗:" + ((err && err.message) || err));
-    });
+    }).then(function () { labelSaving = false; });
   }
 
   function renderLabel(app, sub) {
