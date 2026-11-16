@@ -982,7 +982,7 @@
     var st = res.status, when = st && st.ts ? new Date(st.ts).toLocaleString("zh-TW", { hour12: false }) : "";
     if (res.queued) return { text: "已送出,等待電腦啟動(約 5 分鐘內)", busy: true };
     if (!st) return { text: "", busy: false };
-    if (st.state === "running") return { text: "執行中(" + when + " 起),完成約需 5~15 分鐘", busy: true };
+    if (st.state === "running") return { text: "執行中(" + when + " 起),完成約需 1~2 分鐘", busy: true };
     if (st.state === "done") return { text: "上次完成:" + when, busy: false };
     return { text: "上次失敗(" + when + "):" + (st.msg || ""), busy: false };
   }
@@ -1010,7 +1010,7 @@
     }
 
     btn.addEventListener("click", function () {
-      if (!window.confirm("確定要執行 WMS 更新嗎?\n\n電腦會清空 C:\\My Documents、重新從 ERP 匯出報表並更新 WMS 資料,約需 5~15 分鐘。")) return;
+      if (!window.confirm("確定要執行 WMS 更新嗎?\n\n電腦會直接查詢 ERP 資料庫(製令、物料、採購、庫存)並更新 WMS 資料,約需 1~2 分鐘。")) return;
       btn.disabled = true;
       note.textContent = "送出中…";
       api("wms_update").then(function (res) {
@@ -1030,7 +1030,7 @@
   // 設定存在 Apps Script;電腦端每 5 分鐘檢查一次,到了時段就啟動對應的流程。
 
   var SCHED_JOBS = [
-    { key: "wms", title: "WMS更新", desc: "清空 C:\\My Documents、從 ERP 匯出報表並更新 WMS 資料(每次約 5~15 分鐘)" }
+    { key: "wms", title: "WMS更新", desc: "直接查詢 ERP 資料庫並更新 WMS 資料(每次約 1~2 分鐘)" }
   ];
   var SCHED_INTERVALS = [30, 60, 90, 120, 180, 240, 360, 480, 720, 1440];
 
