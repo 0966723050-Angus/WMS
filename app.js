@@ -2008,7 +2008,7 @@
   function renderErpVendor(app) {
     var all = (state.data && state.data.suppliers) || [];
     app.innerHTML =
-      '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/erp">ERP</a> / 廠商</div>' +
+      '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/erp">ERP</a> / 廠商清單</div>' +
       '<h1 class="page-title">廠商清單<span class="sub">共 ' + all.length + ' 家</span></h1>' +
       '<section class="sign-card erpq-card">' +
         '<form id="vnd-form" class="vnd-form" autocomplete="off">' +
@@ -2124,7 +2124,7 @@
               '<div class="erp-tile-actions"><a class="btn btn-sm" href="#/erp/poq">採單查詢</a><a class="btn btn-sm btn-secondary" href="#/erp/pochg">變更查詢</a></div></div>'
             : '') +
           '<a class="erp-tile" href="#/erp/vendor">' +
-            '<span class="erp-tile-icon">' + ERP_ICONS.vendor + '</span><span class="erp-tile-title">廠商</span>' +
+            '<span class="erp-tile-icon">' + ERP_ICONS.vendor + '</span><span class="erp-tile-title">廠商清單</span>' +
             '<span class="erp-tile-note">' + ((state.data && state.data.suppliers) ? "共 " + state.data.suppliers.length + " 家" : "") + '</span></a>' +
           (can("erp_wms")
             ? '<button type="button" class="erp-tile erp-tile-wms" id="wms-update-btn">' +
