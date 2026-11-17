@@ -1508,3 +1508,14 @@ table.data-table th { font-weight: 800; font-size: 12.5px; box-shadow: inset 0 -
 }
 /* 廠商清單標題列:橘色底白字(同物料明細) */
 .vnd-table thead th { background: #f97316; color: #ffffff; font-weight: 800; }
+
+/* ERP 頁項目(使用者指定):圖示改深色底(品牌色)白色圖示;項目內的查詢鍵(含「變更查詢」)改淺色底(原圖示的底色),兩個鍵同樣式 */
+.erp-tile-icon, .erp-tile-group .erp-tile-icon, .erp-tile-group:hover .erp-tile-icon { background: var(--brand); color: var(--brand-contrast); }
+.erp-tile-actions .btn, .erp-tile-actions .btn.btn-secondary {
+  background: var(--brand-soft); color: var(--brand); border-color: var(--brand-soft); box-shadow: none; font-weight: 800;
+}
+.erp-tile-actions .btn:hover, .erp-tile-actions .btn.btn-secondary:hover { background: var(--brand); color: var(--brand-contrast); border-color: var(--brand); }
+/* 手機:說明文字(例「共 457 家」)排在標題下方,不擠在圖示底下 */
+@media (max-width: 520px) {
+  .erp-tile-note { grid-column: 2; }
+}
