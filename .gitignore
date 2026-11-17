@@ -21,3 +21,4 @@ scripts/sign_programs_site.json
 scripts/sign_approval_pending.json
 scripts/sign_batch.json
 scripts/sign_vendors.json
+scripts/erpq_sql.log

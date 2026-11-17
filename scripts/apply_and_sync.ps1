@@ -12,6 +12,13 @@ Set-Location $repo
 
 if (-not (Test-Path (Join-Path $repo "scripts\edit_config.json"))) { exit 0 }
 
+# 網站「ERP 查詢」(製令 / 採購單):直接用 SQL 查 ERP 資料庫並回傳(只讀不寫,不受下面 WMS 更新流程影響)
+try {
+    python -I scripts\erpq_sql.py | Out-Null
+} catch {
+    Log "ERPQ ERROR: $($_.Exception.Message)"
+}
+
 # WMS 更新流程(一鍵更新.exe / schedule_wms.ps1)執行中先不處理,避免兩邊同時寫入主檔
 $busy = Get-CimInstance Win32_Process | Where-Object {
     $_.Name -like 'WMS*.exe' -or ($_.Name -eq 'powershell.exe' -and $_.CommandLine -like '*schedule_wms.ps1*')

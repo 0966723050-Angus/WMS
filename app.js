@@ -1706,7 +1706,7 @@
   }
 
   // ---------- ERP 查詢:製造命令(製令查詢 / 變更查詢)、採購單(採單查詢 / 變更查詢) ----------
-  // 按「確認」把條件送到中繼 → 電腦端監看程式取走 → Claude 在鼎新 ERP 查詢 → 清單回傳,這一頁每 4 秒更新一次狀態。
+  // 按「確認」把條件送到中繼 → 公司電腦取走後直接用 SQL 查鼎新 ERP 資料庫(scripts/erpq_sql.py)→ 清單回傳,這一頁每 4 秒更新一次狀態。
   var ERPQ_CONFIRM = { N: "未確認", Y: "已確認" };
   var ERPQ_KINDS = {
     moq:   { group: "製造命令", title: "製令查詢", perm: "erp_mo", confirm: ["N", "Y"],
@@ -1792,7 +1792,7 @@
       if (!st || !box) return;
       if (!r) {
         st.className = "erpq-status";
-        st.textContent = "尚未查詢。輸入條件後按「確認」,電腦會到 ERP 查詢並把清單傳回這裡(約 1~3 分鐘)。";
+        st.textContent = "尚未查詢。輸入條件後按「確認」,公司電腦會直接查詢 ERP 資料庫並把清單傳回這裡(約 10 秒~1 分鐘)。單號、專案代號、品號可只輸入前幾碼。";
         box.innerHTML = "";
         setBusy(false);
         return;
@@ -1801,11 +1801,11 @@
       var head = '<div class="erpq-cond">條件:' + esc(erpqCondText(kind, r.cond) || "(無)") + ' · ' + esc(when) + '</div>';
       st.className = "erpq-status" + (r.state === "error" ? " bad" : r.state === "done" ? " ok" : " busy");
       if (r.state === "queued") {
-        st.innerHTML = head + '<b>已送出,等待電腦端開始查詢…</b>' +
-          (Date.now() - r.ts > 5 * 60000 ? '<div class="erpq-hint">超過 5 分鐘還沒開始,可能是電腦端的監看沒有開啟。</div>' : '');
+        st.innerHTML = head + '<b>已送出,等待公司電腦開始查詢…</b>' +
+          (Date.now() - r.ts > 3 * 60000 ? '<div class="erpq-hint">超過 3 分鐘還沒開始,可能是公司電腦沒有開機或網路中斷。</div>' : '');
         box.innerHTML = "";
       } else if (r.state === "running") {
-        st.innerHTML = head + '<b>電腦正在 ERP 查詢中…</b>';
+        st.innerHTML = head + '<b>正在查詢 ERP 資料庫…</b>';
         box.innerHTML = "";
       } else if (r.state === "error") {
         st.innerHTML = head + '<b>查詢失敗:' + esc(r.msg || "") + '</b>';

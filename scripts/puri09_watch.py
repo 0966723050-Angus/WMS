@@ -6,8 +6,8 @@ r"""ERP「進貨單」請求監看器(給 Claude 的 Monitor 工具使用,讓按
 「待簽核表單」按確認後,apply_edits 會把表單寫進 WMS.xlsx「待簽核清單」並留下通知檔 sign_approval_pending.json;
 這裡看到通知檔就印 "SIGN_APPROVAL_REQUEST count=<張數> by=<帳號>"(15 分鐘內沒被處理會再提醒一次),
 Claude 收到後依序:sign_result.py begin -> 執行 skill erp-approval -> sign_result.py finish(結果回報釘釘)。
-「ERP 查詢」(製令/製令變更/採購單/採購變更)用 erpq_claim 取走,印 "ERPQ_REQUEST id=<id> kind=<moq|mochg|poq|pochg> by=<帳號> cond=<JSON>",
-Claude 收到後在 ERP 查詢,再用 erpq_result.py 回傳清單(見 ERP\skills更新\erp-query\SKILL.md)。
+「ERP 查詢」(製令/製令變更/採購單/採購變更)由 erpq_sql.py 直接用 SQL 查 ERP 資料庫並回傳網站,不輸出、不需要 Claude
+(排程「WMS 儲位編輯寫入」每分鐘也會處理,監看器沒開時查詢一樣會完成)。
 連續讀取失敗時,每次失敗串只印一行 "PURI09_WATCH_ERROR ..." 提醒。沒有請求時不輸出任何東西。
 
 用法: python -I scripts\\puri09_watch.py            (一直執行,由 Monitor 到期時結束它)
@@ -22,6 +22,8 @@ import urllib.parse
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)   # -I 模式不會自動加入本檔資料夾
+import erpq_sql  # noqa: E402
 CONFIG = os.path.join(HERE, "edit_config.json")
 SIGN_PENDING = os.path.join(HERE, "sign_approval_pending.json")
 SIGN_REMIND_S = 15 * 60
@@ -72,13 +74,9 @@ def main(argv):
                     print("RETURN_REQUEST by=%s" % (res2.get("request") or {}).get("by", ""), flush=True)
             except Exception:
                 pass
-            # ERP 查詢(製令/採購單):取走一筆就印出條件,Claude 收到後在 ERP 查詢並用 erpq_result.py 回傳清單
+            # ERP 查詢(製令/採購單):直接用 SQL 查 ERP 資料庫並回傳清單(erpq_sql.py),不需要 Claude 介入、不輸出
             try:
-                res3 = claim(endpoint, key, "erpq_claim")
-                if res3.get("ok") and res3.get("pending"):
-                    rq = res3.get("request") or {}
-                    print("ERPQ_REQUEST id=%s kind=%s by=%s cond=%s" % (rq.get("id", ""), rq.get("kind", ""), rq.get("by", ""),
-                                                                      json.dumps(rq.get("cond") or {}, ensure_ascii=False)), flush=True)
+                erpq_sql.handle_pending(endpoint, key)
             except Exception:
                 pass
         except Exception as ex:
