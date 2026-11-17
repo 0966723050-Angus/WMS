@@ -1502,7 +1502,9 @@ table.data-table th { font-weight: 800; font-size: 12.5px; box-shadow: inset 0 -
 /* 廠商清單:網頁捲動時欄位標題列固定在頁首下方(外框不當捲動容器,sticky 才會以整頁為準) */
 @media (min-width: 721px) {
   .vnd-card .erpq-wrap { overflow: visible; }
-  .vnd-table thead th { position: sticky; top: var(--header-height, 0px); z-index: 3; background: var(--surface-alt); box-shadow: inset 0 -1px 0 var(--border-strong); }
+  .vnd-table thead th { position: sticky; top: var(--header-height, 0px); z-index: 3; box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.12); }
   .vnd-table thead th:first-child { border-top-left-radius: 12px; }
   .vnd-table thead th:last-child { border-top-right-radius: 12px; }
 }
+/* 廠商清單標題列:橘色底白字(同物料明細) */
+.vnd-table thead th { background: #f97316; color: #ffffff; font-weight: 800; }
