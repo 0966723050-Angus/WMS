@@ -91,11 +91,17 @@ function makeSession_(email) {
 
 // ---------- 權限 ----------
 // admin 名單管理 / edit 儲位編輯 / receive 收料 / ret 退料 / erp_receipt 進貨單 / erp_return 退貨單 / erp_issue 製令領料單 / erp_sign 待簽核表單 / erp_wms WMS更新
+// cost 庫存單位成本(有此權限才在 auth / me 回傳 COST_KEY,網頁才能解開 cost.enc)
 // 帳號記錄裡沒有 perms 的舊帳號 = 只有「儲位編輯」(維持原本能做的事)。主管理者(ADMIN_EMAIL)永遠全部權限。
 
-var PERM_KEYS = ['admin', 'edit', 'receive', 'ret', 'erp_receipt', 'erp_return', 'erp_issue', 'erp_sign', 'erp_wms'];
+var PERM_KEYS = ['admin', 'edit', 'receive', 'ret', 'erp_receipt', 'erp_return', 'erp_issue', 'erp_sign', 'erp_wms', 'cost'];
 // 沒設定過的項目用預設值:儲位編輯、收料原本所有人都能用,所以舊帳號維持有這兩項
-var PERM_DEFAULTS = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_issue: false, erp_sign: false, erp_wms: false };
+var PERM_DEFAULTS = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_issue: false, erp_sign: false, erp_wms: false, cost: false };
+
+// 單位成本金鑰:只給有 cost 權限的人
+function costKeyFor_(perms) {
+  return (perms && perms.cost) ? (props_().getProperty('COST_KEY') || '') : '';
+}
 
 function normPerms_(p) {
   var out = {};
@@ -938,7 +944,7 @@ function doPost(e) {
       var key = props_().getProperty('DATA_KEY');
       if (!key) return json_({ ok: false, error: '系統尚未完成設定(缺少資料金鑰),請聯絡管理者' });
       var s = makeSession_(user.email);
-      return json_({ ok: true, email: user.email, name: user.name || info.name, isAdmin: user.isAdmin, perms: user.perms, key: key, session: s.token, exp: s.exp });
+      return json_({ ok: true, email: user.email, name: user.name || info.name, isAdmin: user.isAdmin, perms: user.perms, key: key, costKey: costKeyFor_(user.perms), session: s.token, exp: s.exp });
     }
 
     // 電腦端回報「收料」工作表內容(用同步金鑰,不是登入工作階段)
@@ -960,7 +966,7 @@ function doPost(e) {
     // 目前的權限(管理者可能在登入後才調整,前端開啟時會用這個更新)
     if (action === 'me') {
       var ns = makeSession_(me.email);   // 每次開啟網頁順延有效期,沒登出就不必重新登入
-      return json_({ ok: true, email: me.email, name: me.name, isAdmin: me.isAdmin, perms: me.perms, session: ns.token, exp: ns.exp });
+      return json_({ ok: true, email: me.email, name: me.name, isAdmin: me.isAdmin, perms: me.perms, costKey: costKeyFor_(me.perms), session: ns.token, exp: ns.exp });
     }
 
     // 標籤流水號:全公司共用、每天從 1 重新起算。一次保留 count 個號碼,回傳第一個號碼(doPost 已加鎖,不會重複)
@@ -1067,7 +1073,7 @@ function doGet(e) {
   var lock = LockService.getScriptLock();
   lock.waitLock(15000);
   try {
-    if (p.action === 'pull' || p.action === 'ack' || p.action === 'set_data_key' || p.action === 'wms_report' ||
+    if (p.action === 'pull' || p.action === 'ack' || p.action === 'set_data_key' || p.action === 'set_cost_key' || p.action === 'wms_report' ||
         p.action === 'puri09_claim' || p.action === 'puri09_report' || p.action === 'ret_claim' || p.action === 'ret_report' ||
         p.action === 'sign_claim' || p.action === 'sign_report' || p.action === 'sign_ack' || p.action === 'sign_notify_ack' || p.action === 'signimg_get' || p.action === 'signimg_report') {
       var err = checkSyncKey_(p.key);
@@ -1112,6 +1118,11 @@ function doGet(e) {
       if (p.action === 'set_data_key') {
         if (!/^[A-Za-z0-9+\/]{43}=$/.test(String(p.dataKey || ''))) return json_({ ok: false, error: '金鑰格式不正確' });
         props_().setProperty('DATA_KEY', p.dataKey);
+        return json_({ ok: true });
+      }
+      if (p.action === 'set_cost_key') {
+        if (!/^[A-Za-z0-9+\/]{43}=$/.test(String(p.costKey || ''))) return json_({ ok: false, error: '金鑰格式不正確' });
+        props_().setProperty('COST_KEY', p.costKey);
         return json_({ ok: true });
       }
 

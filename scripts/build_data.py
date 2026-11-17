@@ -18,11 +18,15 @@ AUTH_CONFIG = os.path.join(HERE, "auth_config.json")
 FORMS_XLSX = os.environ.get("SIGN_FORMS_XLSX", r"C:\ATK\Project\AI Agent\ERP\表單與程式碼對照表.xlsx")
 
 
-def load_data_key(path):
+def load_data_key(path, field="dataKey"):
+    """讀 auth_config.json 的金鑰。dataKey 必須有;costKey(單位成本專用)沒有時回傳 None。"""
     with open(path, encoding="utf-8-sig") as f:
-        key = base64.b64decode(json.load(f)["dataKey"])
+        cfg = json.load(f)
+    if field != "dataKey" and not cfg.get(field):
+        return None
+    key = base64.b64decode(cfg[field])
     if len(key) != 32:
-        raise ValueError("dataKey 必須是 32 bytes(base64)")
+        raise ValueError("%s 必須是 32 bytes(base64)" % field)
     return key
 
 
@@ -145,6 +149,7 @@ def main():
                 order["status"] = "完全領料"
 
     storage_items = []
+    costs = {}   # 單位成本另存 cost.enc(用 costKey 加密,只有「庫存單位成本」權限的人拿得到金鑰)
     if "庫存物料" in wb.sheetnames:
         ws4 = wb["庫存物料"]
         for row_no, row in enumerate(ws4.iter_rows(min_row=2, values_only=True), start=2):
@@ -152,13 +157,14 @@ def main():
                 continue
             mat_code, mat_name, spec, stock_qty, category, location, bin_no = row[:7]
             unit_cost = row[7] if len(row) > 7 else None   # H 欄「單位成本」(WMS 一鍵更新由 ERP INVR17 寫入)
+            if isinstance(unit_cost, (int, float)) and norm(mat_code):
+                costs[str(norm(mat_code))] = unit_cost
             storage_items.append({
                 "row": row_no,
                 "code": norm(mat_code),
                 "name": norm(mat_name),
                 "spec": norm(spec),
                 "stockQty": stock_qty if stock_qty is not None else 0,
-                "unitCost": unit_cost if isinstance(unit_cost, (int, float)) else None,
                 "category": norm(category),
                 "location": norm(location),
                 "bin": norm(bin_no),
@@ -214,6 +220,11 @@ def main():
     if os.path.exists(args.auth_config):
         write_atomic(os.path.join(args.out_dir, "data.enc"), encrypt_payload(plain, load_data_key(args.auth_config)))
         print("wrote encrypted data.enc")
+        cost_key = load_data_key(args.auth_config, "costKey")
+        if cost_key:
+            cost_plain = json.dumps(costs, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            write_atomic(os.path.join(args.out_dir, "cost.enc"), encrypt_payload(cost_plain, cost_key))
+            print("wrote encrypted cost.enc (%d)" % len(costs))
     else:
         write_atomic(os.path.join(args.out_dir, "data.json"), plain)
 

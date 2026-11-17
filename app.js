@@ -135,9 +135,10 @@
     { key: "erp_receipt", label: "ERP:進貨單簽核" },
     { key: "erp_return", label: "ERP:退貨單簽核" },
     { key: "erp_sign", label: "ERP:待簽核表單確認" },
-    { key: "erp_wms", label: "ERP:WMS更新" }
+    { key: "erp_wms", label: "ERP:WMS更新" },
+    { key: "cost", label: "庫存單位成本" }
   ];
-  var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_sign: false, erp_wms: false };
+  var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_sign: false, erp_wms: false, cost: false };
 
   function can(perm) { return !!(session && session.perms && session.perms[perm]); }
 
@@ -288,7 +289,7 @@
     api("auth", { idToken: resp.credential })
       .then(function (res) {
         if (!res.ok) throw new Error(res.error || "登入失敗");
-        setSession(withPerms({ email: res.email, name: res.name, isAdmin: !!res.isAdmin, perms: res.perms, key: res.key, session: res.session, exp: res.exp }));
+        setSession(withPerms({ email: res.email, name: res.name, isAdmin: !!res.isAdmin, perms: res.perms, key: res.key, costKey: res.costKey || "", session: res.session, exp: res.exp }));
         startApp();
       })
       .catch(function (err) { msgEl.textContent = err.message; });
@@ -309,13 +310,19 @@
     api("me").then(function (res) {
       if (!res || !res.ok || !res.perms || !session) return;
       var changed = JSON.stringify(res.perms) !== JSON.stringify(session.perms);
+      var costKeyChanged = (res.costKey || "") !== (session.costKey || "");
       session.perms = res.perms;
+      session.costKey = res.costKey || "";   // 單位成本金鑰:權限被拿掉時伺服器回空字串
       session.isAdmin = !!res.isAdmin;
       if (res.name) session.name = res.name;
       if (res.session && res.exp) { session.session = res.session; session.exp = res.exp; }   // 伺服器順延登入有效期
       setSession(session);
       updateUserUi();
-      if (changed && state.data) render();
+      if (costKeyChanged && state.data) {
+        loadCosts().then(render);
+      } else if (changed && state.data) {
+        render();
+      }
     }).catch(function () { /* 讀不到就沿用目前權限;伺服器端仍會逐項檢查 */ });
   }
 
@@ -1920,7 +1927,7 @@
           '</div>' +
           '<div class="material-grid">' +
             '<div><span class="k">庫存數量:</span> <span class="v">' + fmtNum(r.stockQty) + '</span></div>' +
-            '<div><span class="k">單位成本:</span> <span class="v">' + fmtCost(r.unitCost) + '</span></div>' +
+            (showCost() ? '<div><span class="k">單位成本:</span> <span class="v">' + fmtCost(costOf(r.code)) + '</span></div>' : '') +
             '<div class="full"><span class="k">類別:</span> <span class="v">' + esc(r.category) + '</span></div>' +
             '<div class="full"><span class="k">儲放地點:</span> <span class="v">' + esc(r.location) + '</span></div>' +
             '<div class="full"><span class="k">儲位:</span> <span class="v">' + esc(r.bin) + '</span></div>' +
@@ -2058,7 +2065,7 @@
             '<div class="material-code">' + esc(item.code) + '</div>' +
             '<div class="material-name">' + esc(item.name) + '</div>' +
             (item.spec ? '<div class="material-spec">' + esc(item.spec) + '</div>' : '') +
-            '<div class="material-spec">庫存數量: ' + fmtNum(item.stockQty) + '　單位成本: ' + fmtCost(item.unitCost) + '</div>' +
+            '<div class="material-spec">庫存數量: ' + fmtNum(item.stockQty) + (showCost() ? '　單位成本: ' + fmtCost(costOf(item.code)) : '') + '</div>' +
           '</div>' +
           comboHtml("category", "類別", item.category) +
           comboHtml("location", "儲放地點", item.location) +
@@ -3575,8 +3582,26 @@
           var version = data.sourceUpdatedAt ? "(版本 " + data.sourceUpdatedAt + ")" : "";
           t.textContent = "資料來源: WMS.xlsx " + version + " · 頁面載入 " + new Date().toLocaleString("zh-Hant");
         }
+        return loadCosts();
       });
   }
+
+  // 單位成本另存 cost.enc,用 costKey 加密;只有「庫存單位成本」權限的人登入時才拿得到 costKey。
+  // 沒權限、沒金鑰或讀取失敗時 state.costs = null,畫面就不顯示單位成本。
+  function loadCosts() {
+    if (!session || !session.costKey || !can("cost")) { state.costs = null; return Promise.resolve(); }
+    return fetch("cost.enc?_=" + Date.now(), { cache: "no-store" })
+      .then(function (res) {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.arrayBuffer();
+      })
+      .then(function (buf) { return decryptData(buf, session.costKey); })
+      .then(function (costs) { state.costs = costs || {}; })
+      .catch(function () { state.costs = null; });
+  }
+
+  function showCost() { return !!(state.costs && can("cost")); }
+  function costOf(code) { return state.costs ? state.costs[code] : null; }
 
   // ---------- 自動重新整理:WMS 更新把新的 data.enc 發布到網站後,自動載入 ----------
   // 平時每 60 秒用 HEAD 比對 data.enc 的 ETag(很輕量);WMS 更新剛完成時改為每 20 秒,持續 15 分鐘

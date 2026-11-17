@@ -13,7 +13,7 @@ try {
     python scripts\build_data.py | ForEach-Object { Log $_ }
 
     # data.enc (encrypted, used once auth_config.json exists) or data.json (plain, legacy mode)
-    $paths = @("data.json", "data.enc") | Where-Object { (Test-Path $_) -or (git ls-files $_) }
+    $paths = @("data.json", "data.enc", "cost.enc") | Where-Object { (Test-Path $_) -or (git ls-files $_) }
     $changed = git status --porcelain -- $paths
     if ($changed) {
         git add -A -- $paths

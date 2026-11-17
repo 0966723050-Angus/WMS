@@ -1,4 +1,4 @@
-﻿var CACHE_NAME = "wms-cache-v68";
+﻿var CACHE_NAME = "wms-cache-v69";
 var CORE_ASSETS = [
   "./",
   "./index.html",
@@ -40,9 +40,9 @@ self.addEventListener("fetch", function (event) {
   // 只處理本站檔案;儲位編輯的儲存服務(跨網域)一律直接連線,不快取
   if (new URL(event.request.url).origin !== self.location.origin) return;
 
-  // data.enc 每次都帶 ?_=時間 參數,快取時去掉參數存成同一份,避免快取越積越多
+  // data.enc / cost.enc 每次都帶 ?_=時間 參數,快取時去掉參數存成同一份,避免快取越積越多
   var url = new URL(event.request.url);
-  var cacheKey = /\/data\.enc$/.test(url.pathname) ? url.origin + url.pathname : event.request;
+  var cacheKey = /\/(data|cost)\.enc$/.test(url.pathname) ? url.origin + url.pathname : event.request;
 
   event.respondWith(
     // cache:"no-cache" = 每次都向伺服器確認檔案有沒有更新(沒變時只回 304,很快),
