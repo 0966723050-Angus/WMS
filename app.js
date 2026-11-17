@@ -1783,6 +1783,8 @@
       var els = form.querySelectorAll("[data-k]");
       for (var i = 0; i < els.length; i++) els[i].value = "";
       msg("");
+      clearTimeout(timer);   // 查詢結果一起清掉
+      showRequest(null);
       var first = form.querySelector("input[data-k]");
       if (first) first.focus();
     });
@@ -1833,7 +1835,7 @@
               (hasD ? '<th>單身</th>' : '') + cols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join("") + '</tr></thead><tbody>' +
               rows.map(function (row, i) {
                 var n = details[i] ? details[i].length : null;
-                var tg = hasD ? '<td class="erpq-tg" data-k="單身"><span class="erpq-arrow">' + (openAll ? "▾" : "▸") + '</span> ' + (n === null ? "-" : n + " 項") + '</td>' : '';
+                var tg = hasD ? '<td class="erpq-tg" data-k="單身"><span class="erpq-arrow">' + (openAll ? "▾" : "▸") + '</span> <span class="erpq-tgl">單身 </span>' + (n === null ? "-" : n + " 項") + '</td>' : '';
                 return '<tr class="' + (hasD ? "erpq-hrow" : "") + (openAll ? " open" : "") + '" data-i="' + i + '">' + tg +
                   cols.map(function (c, j) { return '<td data-k="' + esc(c) + '">' + esc(row[j]) + '</td>'; }).join("") + '</tr>' +
                   (hasD ? '<tr class="erpq-drow" data-i="' + i + '"' + (openAll ? "" : " hidden") + '><td colspan="' + (cols.length + 1) + '">' +
@@ -1872,8 +1874,10 @@
       if (!alive()) return;
       api("erpq_get", id ? { id: id } : { kind: kind }).then(function (res) {
         if (!alive() || !res.ok) return;
-        showRequest(res.request);
         var r = res.request;
+        // 剛進入頁面:之前查完的結果不再顯示(離開頁面就清除);只有還在查詢中的才接著顯示
+        if (!id && r && r.state !== "queued" && r.state !== "running") r = null;
+        showRequest(r);
         if (r && (r.state === "queued" || r.state === "running")) timer = setTimeout(function () { poll(r.id); }, 4000);
       }).catch(function () {
         if (alive()) timer = setTimeout(function () { poll(id); }, 8000);   // 連線失敗就晚一點再試
