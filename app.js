@@ -1760,10 +1760,18 @@
   var erpqCond = {};      // 各頁輸入過的條件(換頁回來還在)
   var erpqInstance = 0;   // 每次進入查詢頁 +1,舊頁面的背景更新看到編號不同就停止
 
+  // 每個條件的比較方式(同 ERP「設定查詢條件」):預設 =
+  var ERPQ_OPS = ["=", ">=", "<=", "<>", "%like%", "%like", "like%"];
+  function erpqOpSelect(k, cur) {
+    return '<select class="erpq-op" data-k="op_' + k + '" aria-label="比較方式">' +
+      ERPQ_OPS.map(function (o) { return '<option value="' + esc(o) + '"' + ((cur || "=") === o ? " selected" : "") + '>' + esc(o) + '</option>'; }).join("") +
+      '</select>';
+  }
   function erpqCondText(kind, cond) {
     var K = ERPQ_KINDS[kind], parts = [];
-    K.fields.forEach(function (f) { if (cond && cond[f[0]]) parts.push(f[1] + "=" + cond[f[0]]); });
-    if (cond && cond.confirm) parts.push("確認碼=" + (ERPQ_CONFIRM[cond.confirm] || cond.confirm));
+    var op = function (k) { var o = cond && cond["op_" + k]; return o ? " " + o + " " : "="; };
+    K.fields.forEach(function (f) { if (cond && cond[f[0]]) parts.push(f[1] + op(f[0]) + cond[f[0]]); });
+    if (cond && cond.confirm) parts.push("確認碼" + op("confirm") + (ERPQ_CONFIRM[cond.confirm] || cond.confirm));
     return parts.join("、");
   }
 
@@ -1861,11 +1869,13 @@
           K.fields.map(function (f) {
             var extra = f[0] === "proj" ? ' list="erpq-dl-proj"' : f[0] === "prod" ? ' list="erpq-dl-prod"' :
               f[0] === "type" ? ' inputmode="numeric" maxlength="6"' : f[0] === "no" ? ' inputmode="numeric" maxlength="14"' : "";
-            return '<label class="erpq-f"><span>' + esc(f[1]) + '</span><input type="text" data-k="' + f[0] + '" value="' + esc(C[f[0]] || "") + '"' + extra + ' spellcheck="false" /></label>';
+            return '<div class="erpq-f"><span>' + esc(f[1]) + '</span><div class="erpq-in">' + erpqOpSelect(f[0], C["op_" + f[0]]) +
+              '<input type="text" data-k="' + f[0] + '" value="' + esc(C[f[0]] || "") + '"' + extra + ' spellcheck="false" aria-label="' + esc(f[1]) + '" /></div></div>';
           }).join("") +
-          '<label class="erpq-f"><span>確認碼</span><select data-k="confirm"><option value=""></option>' +
+          '<div class="erpq-f"><span>確認碼</span><div class="erpq-in">' + erpqOpSelect("confirm", C.op_confirm) +
+            '<select data-k="confirm" aria-label="確認碼"><option value=""></option>' +
             K.confirm.map(function (v) { return '<option value="' + v + '"' + (C.confirm === v ? " selected" : "") + '>' + ERPQ_CONFIRM[v] + '</option>'; }).join("") +
-          '</select></label>' +
+          '</select></div></div>' +
           '<div class="erpq-btns">' +
             '<button type="button" class="btn btn-sm btn-secondary" id="erpq-clear">清除</button>' +
             '<button type="submit" class="btn btn-sm" id="erpq-ok">確認</button>' +
@@ -1888,7 +1898,7 @@
     document.getElementById("erpq-clear").addEventListener("click", function () {
       Object.keys(C).forEach(function (k) { delete C[k]; });
       var els = form.querySelectorAll("[data-k]");
-      for (var i = 0; i < els.length; i++) els[i].value = "";
+      for (var i = 0; i < els.length; i++) els[i].value = els[i].classList.contains("erpq-op") ? "=" : "";   // 比較方式恢復成 =
       msg("");
       clearTimeout(timer);   // 查詢結果一起清掉
       showRequest(null);
@@ -1901,7 +1911,7 @@
       if (!st || !box) return;
       if (!r) {
         st.className = "erpq-status";
-        st.textContent = "尚未查詢。輸入條件後按「確認」,公司電腦會直接查詢 ERP 資料庫並把清單傳回這裡(約 10 秒~1 分鐘)。單號、專案代號、品號可只輸入前幾碼。";
+        st.textContent = "尚未查詢。輸入條件後按「確認」,公司電腦會直接查詢 ERP 資料庫並把清單傳回這裡(約 10 秒~1 分鐘)。比較方式預設「=」(完全相同);只輸入部分號碼時請改成 like%(開頭相同)或 %like%(包含)。";
         box.innerHTML = "";
         setBusy(false);
         return;
@@ -2006,8 +2016,8 @@
       e.preventDefault();
       if (busy) return;
       var cond = {};
-      K.fields.forEach(function (f) { if (C[f[0]]) cond[f[0]] = C[f[0]]; });
-      if (C.confirm) cond.confirm = C.confirm;
+      K.fields.forEach(function (f) { if (C[f[0]]) { cond[f[0]] = C[f[0]]; cond["op_" + f[0]] = C["op_" + f[0]] || "="; } });
+      if (C.confirm) { cond.confirm = C.confirm; cond.op_confirm = C.op_confirm || "="; }
       if (!Object.keys(cond).length) { msg("請至少輸入一個查詢條件", true); return; }
       msg("");
       setBusy(true);

@@ -316,33 +316,44 @@ def _like_escape(v):
     return v.replace("[", "[[]").replace("%", "[%]").replace("_", "[_]")
 
 
+OPS = ("=", ">=", "<=", "<>", "%like%", "%like", "like%")   # 與網頁 / ERP 查詢對話框相同
+
+
 def build_sql(kind, cond):
     """依條件組出 SELECT 與參數。只接受 KINDS 裡定義的條件鍵,值一律用參數帶入,不拼進 SQL 字串。"""
     K = KINDS.get(kind)
     if not K:
         raise ValueError("不支援的查詢種類:%s" % kind)
     where, params = [], []
-    for key, val in (cond or {}).items():
+    cond = cond or {}
+    for key, val in cond.items():
+        if key.startswith("op_"):
+            continue
         val = str(val or "").strip()
         if not val:
             continue
+        op = str(cond.get("op_" + key) or "").strip()
+        if op and op not in OPS:
+            raise ValueError("不支援的比較方式:%s" % op)
         if key == "confirm":
             if val not in ("Y", "N"):
                 raise ValueError("確認碼只能是 Y 或 N")
-            where.append("%s = ?" % K["confirm"])
-            params.append(val)
+            col, default = K["confirm"], "="
         elif key in K["cond"]:
             if len(val) > 40:
                 raise ValueError("條件太長:%s" % key)
             col, how = K["cond"][key]
-            if how == "eq":
-                where.append("%s = ?" % col)
-                params.append(val)
-            else:
-                where.append("%s LIKE ?" % col)
-                params.append(_like_escape(val) + "%")
+            default = "=" if how == "eq" else "like%"   # 舊版網頁沒送比較方式時:單別相同、單號開頭相同
         else:
             raise ValueError("不支援的條件欄位:%s" % key)
+        op = op or default
+        if op in ("=", ">=", "<=", "<>"):
+            where.append("%s %s ?" % (col, op))   # op 只會是 OPS 裡的固定字串
+            params.append(val)
+        else:
+            where.append("%s LIKE ?" % col)
+            v = _like_escape(val)
+            params.append(("%" + v + "%") if op == "%like%" else ("%" + v) if op == "%like" else (v + "%"))
     if not where:
         raise ValueError("至少要有一個查詢條件")
     if K.get("where"):   # 固定條件(程式內寫死的常數,例如單據性質、固定單別;不含使用者輸入)

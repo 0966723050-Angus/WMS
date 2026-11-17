@@ -719,6 +719,12 @@ function erpqRequest_(body, me) {
   var c = body.cond || {}, cond = {};
   ['proj', 'prod', 'type', 'no', 'confirm'].forEach(function (k) { var v = clip_(c[k], 40); if (v) cond[k] = v; });
   if (cond.confirm && ['N', 'Y'].indexOf(cond.confirm) < 0) delete cond.confirm;
+  // 各條件的比較方式(同 ERP 查詢對話框):= >= <= <> %like% %like like%;沒給就用舊的預設(單別相同、單號開頭相同)
+  var OPS = ['=', '>=', '<=', '<>', '%like%', '%like', 'like%'];
+  ['proj', 'prod', 'type', 'no', 'confirm'].forEach(function (k) {
+    var o = String(c['op_' + k] || '');
+    if (cond[k] && OPS.indexOf(o) !== -1) cond['op_' + k] = o;
+  });
   if (!Object.keys(cond).length) return { ok: false, error: '請至少輸入一個查詢條件' };
   var q = erpqQueue_();
   var busy = q.filter(function (r) { return r.by === me.email && r.kind === kind && (r.state === 'queued' || r.state === 'running') && Date.now() - r.ts < ERPQ_STALE_MS; });
