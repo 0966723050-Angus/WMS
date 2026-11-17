@@ -526,7 +526,7 @@
     recvRows = [];      // 每次重畫重新編號收料鈕
     recvOrderOf = null; // 資料可能重新載入,製令對照表重建
     // 含物料表格的頁面(專案/製令)在寬螢幕上用較寬的版面,避免出現左右捲軸
-    app.classList.toggle("app-wide", route.view === "project" || route.view === "order" || (route.view === "label" && !!route.sub));
+    app.classList.toggle("app-wide", route.view === "project" || route.view === "order" || (route.view === "label" && !!route.sub) || (route.view === "erp" && route.sub === "vendor"));
     // 功能列:目前所在頁面的按鍵反白
     var navOf = { storage: "storage-btn", erp: "erp-btn", admin: "admin-btn", label: "label-btn" };
     var activeNav = navOf[route.view] || "home-btn";
@@ -739,6 +739,8 @@
     wms: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 01-14.3 4.9M4 12a8 8 0 0114.3-4.9"/><path d="M18.5 3v4.2h-4.2M5.5 21v-4.2h4.2"/></svg>',
     // 製造命令:工廠
     mo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21V10l6 4V10l6 4V6l6 3v12z"/><path d="M7 18h2M12 18h2M17 18h2"/></svg>',
+    // 廠商:大樓
+    vendor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V5a2 2 0 012-2h8a2 2 0 012 2v16"/><path d="M16 9h2a2 2 0 012 2v10M2 21h20M8 7h4M8 11h4M8 15h4"/></svg>',
     // 採購單:購物車
     po: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.6 12.4a1 1 0 001 .8h9.7a1 1 0 001-.8L21 7H6"/></svg>'
   };
@@ -1988,11 +1990,84 @@
     poll(null);
   }
 
+  // ---------- 廠商清單:資料來自 WMS.xlsx「Supplier」工作表(隨網站資料一起發布) ----------
+  var vendorQuery = "";
+  function renderErpVendor(app) {
+    var all = (state.data && state.data.suppliers) || [];
+    app.innerHTML =
+      '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/erp">ERP</a> / 廠商</div>' +
+      '<h1 class="page-title">廠商清單<span class="sub">共 ' + all.length + ' 家</span></h1>' +
+      '<section class="sign-card erpq-card">' +
+        '<form id="vnd-form" class="vnd-form" autocomplete="off">' +
+          '<input type="search" id="vnd-q" placeholder="廠商代號 / 簡稱 / 統一編號(可只輸入部分)" value="' + esc(vendorQuery) + '" spellcheck="false" />' +
+          '<button type="button" class="btn btn-sm btn-secondary" id="vnd-clear">清除</button>' +
+          '<button type="submit" class="btn btn-sm" id="vnd-ok">確認</button>' +
+        '</form>' +
+      '</section>' +
+      '<section class="sign-card vnd-card">' +
+        '<p class="result-count" id="vnd-count"></p>' +
+        '<div id="vnd-list"></div>' +
+      '</section>';
+
+    function norm(v) { return String(v || "").toLowerCase().replace(/[\s\-]/g, ""); }
+    function show() {
+      var terms = vendorQuery.trim().toLowerCase().split(/\s+/).filter(Boolean).map(norm);
+      var rows = all.filter(function (v) {
+        if (!terms.length) return true;
+        var hay = norm(v.code) + "\n" + norm(v.short) + "\n" + norm(v.taxId);
+        return terms.every(function (t) { return hay.indexOf(t) !== -1; });
+      });
+      document.getElementById("vnd-count").textContent = (terms.length ? "符合 " + rows.length + " / " + all.length : "共 " + all.length) + " 家廠商";
+      var cols = [["code", "廠商代號"], ["short", "簡稱"], ["taxId", "統一編號"], ["tel", "電話"], ["fax", "傳真"],
+                  ["contact", "聯絡人"], ["email", "E-mail"], ["name", "公司全名"], ["addr", "登記地址"]];
+      var cell = function (v, k) {
+        if (k === "tel") {
+          return [v.tel1, v.tel2].filter(Boolean).map(function (t) {
+            return '<a href="tel:' + esc(t.replace(/[^\d+#]/g, "")) + '">' + esc(t) + '</a>';
+          }).join("<br>");
+        }
+        if (k === "email" && v.email) {   // 一格可能有多個信箱(用 / ; , 分隔)
+          return v.email.split(/[\/;,\s]+/).filter(function (m) { return m.indexOf("@") > 0; }).map(function (m) {
+            return '<a href="mailto:' + esc(m) + '">' + esc(m) + '</a>';
+          }).join("<br>") || esc(v.email);
+        }
+        return esc(v[k]);
+      };
+      document.getElementById("vnd-list").innerHTML = !all.length
+        ? '<div class="lbl-empty">還沒有廠商資料(WMS.xlsx 的 Supplier 工作表下次同步後就會出現)</div>'
+        : rows.length
+          ? '<div class="erpq-wrap"><table class="lbl-table erpq-table vnd-table"><thead><tr class="lbl-titles">' +
+              cols.map(function (c) { return '<th class="v-' + c[0] + '">' + esc(c[1]) + '</th>'; }).join("") + '</tr></thead><tbody>' +
+              rows.map(function (v) {
+                return '<tr>' + cols.map(function (c) {
+                  return '<td class="v-' + c[0] + '" data-k="' + esc(c[1]) + '">' + cell(v, c[0]) + '</td>';
+                }).join("") + '</tr>';
+              }).join("") + '</tbody></table></div>'
+          : '<div class="lbl-empty">查無符合的廠商</div>';
+    }
+
+    var q = document.getElementById("vnd-q");
+    document.getElementById("vnd-form").addEventListener("submit", function (e) {
+      e.preventDefault();
+      vendorQuery = q.value;
+      show();
+      q.blur();   // 手機收起鍵盤
+    });
+    document.getElementById("vnd-clear").addEventListener("click", function () {
+      vendorQuery = "";
+      q.value = "";
+      show();
+      q.focus();
+    });
+    show();
+  }
+
   function renderErp(app, sub) {
     if (!canSeeErp()) { location.hash = "#/"; return; } // 沒有任何 ERP 權限
     if (sub === "settings") { renderErpSettings(app); return; }
     if (sub === "sign") { renderErpSign(app); return; }
     if (ERPQ_KINDS[sub]) { renderErpQuery(app, sub); return; }
+    if (sub === "vendor") { renderErpVendor(app); return; }
     var page = ERP_PAGES[sub];
     if (sub && !page) { location.hash = "#/erp"; return; }
     if (page && !can(page.perm)) { location.hash = "#/erp"; return; } // 沒有這個按鍵的權限
@@ -2018,12 +2093,6 @@
           '<a class="erp-tile" href="#/erp/sign">' +
             '<span class="erp-tile-icon">' + ERP_ICONS.sign + '</span><span class="erp-tile-title">待簽核表單</span>' +
             '<span class="erp-tile-note" id="sign-note"></span></a>' +
-          (can("erp_wms")
-            ? '<button type="button" class="erp-tile erp-tile-wms" id="wms-update-btn">' +
-              '<span class="erp-tile-icon">' + ERP_ICONS.wms + '</span><span class="erp-tile-title">WMS更新</span>' +
-              '<span class="erp-tile-note" id="wms-update-note"></span>' +
-              '<span class="erp-tile-note" id="wms-sched-note"></span></button>'
-            : '') +
           (can("erp_mo")
             ? '<div class="erp-tile erp-tile-group"><span class="erp-tile-icon">' + ERP_ICONS.mo + '</span><span class="erp-tile-title">製造命令</span>' +
               '<div class="erp-tile-actions"><a class="btn btn-sm" href="#/erp/moq">製令查詢</a><a class="btn btn-sm btn-secondary" href="#/erp/mochg">變更查詢</a></div></div>'
@@ -2031,6 +2100,15 @@
           (can("erp_po")
             ? '<div class="erp-tile erp-tile-group"><span class="erp-tile-icon">' + ERP_ICONS.po + '</span><span class="erp-tile-title">採購單</span>' +
               '<div class="erp-tile-actions"><a class="btn btn-sm" href="#/erp/poq">採單查詢</a><a class="btn btn-sm btn-secondary" href="#/erp/pochg">變更查詢</a></div></div>'
+            : '') +
+          '<a class="erp-tile" href="#/erp/vendor">' +
+            '<span class="erp-tile-icon">' + ERP_ICONS.vendor + '</span><span class="erp-tile-title">廠商</span>' +
+            '<span class="erp-tile-note">' + ((state.data && state.data.suppliers) ? "共 " + state.data.suppliers.length + " 家" : "") + '</span></a>' +
+          (can("erp_wms")
+            ? '<button type="button" class="erp-tile erp-tile-wms" id="wms-update-btn">' +
+              '<span class="erp-tile-icon">' + ERP_ICONS.wms + '</span><span class="erp-tile-title">WMS更新</span>' +
+              '<span class="erp-tile-note" id="wms-update-note"></span>' +
+              '<span class="erp-tile-note" id="wms-sched-note"></span></button>'
             : '') +
         '</div>';
       if (can("erp_receipt")) setupPuri09("receipt");

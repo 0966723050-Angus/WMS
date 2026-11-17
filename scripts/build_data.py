@@ -203,6 +203,20 @@ def main():
                 "qty": h_qty if isinstance(h_qty, (int, float)) else 0,
             })
 
+    # 廠商清單(網站 ERP 頁「廠商」):Supplier 工作表 A~K 欄
+    suppliers = []
+    if "Supplier" in wb.sheetnames:
+        def _t(v):
+            return " ".join(str(norm(v)).split()) if v is not None else ""
+        for row in wb["Supplier"].iter_rows(min_row=2, values_only=True):
+            row = (list(row or []) + [None] * 11)[:11]
+            code = _t(row[0])
+            if not code:
+                continue
+            suppliers.append({"code": code, "short": _t(row[1]), "taxId": _t(row[2]), "tel1": _t(row[3]), "tel2": _t(row[4]),
+                              "fax": _t(row[5]), "owner": _t(row[6]), "contact": _t(row[7]), "email": _t(row[8]),
+                              "name": _t(row[9]), "addr": _t(row[10])})
+
     sign_forms = []
     try:
         wbf = openpyxl.load_workbook(FORMS_XLSX, read_only=True, data_only=True)
@@ -224,6 +238,7 @@ def main():
         "storageItems": storage_items,
         "history": history,
         "signForms": sign_forms,
+        "suppliers": suppliers,
     }
 
     plain = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -240,7 +255,7 @@ def main():
 
     n_orders = sum(len(p["orders"]) for p in data["projects"])
     n_materials = sum(len(v) for v in materials.values())
-    print(f"projects={len(data['projects'])} orders={n_orders} material_rows={n_materials} storage_items={len(storage_items)} history={len(history)} signForms={len(sign_forms)}")
+    print(f"projects={len(data['projects'])} orders={n_orders} material_rows={n_materials} storage_items={len(storage_items)} history={len(history)} signForms={len(sign_forms)} suppliers={len(suppliers)}")
 
 
 if __name__ == "__main__":
