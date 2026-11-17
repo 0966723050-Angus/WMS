@@ -1814,13 +1814,55 @@
         var res = r.result || { cols: [], rows: [] };
         var cols = res.cols || [], rows = res.rows || [];
         st.innerHTML = head + '<b>查詢完成:共 ' + rows.length + ' 筆</b>' + (r.msg ? '<div class="erpq-hint">' + esc(r.msg) + '</div>' : '');
+        // 單身明細:dcols / details 與 rows 一一對應(details[i] 為 null = 沒附單身);點單頭列展開或收合
+        var dcols = res.dcols || [], details = res.details || [], hasD = dcols.length > 0;
+        var detailHtml = function (i) {
+          var d = details[i];
+          if (!d) return '<div class="erpq-dnone">這張單沒有附單身(結果太多,請加條件縮小範圍)</div>';
+          if (!d.length) return '<div class="erpq-dnone">沒有單身資料</div>';
+          return '<table class="lbl-table erpq-dtable"><thead><tr class="lbl-titles">' +
+            dcols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join("") + '</tr></thead><tbody>' +
+            d.map(function (line) {
+              return '<tr>' + dcols.map(function (c, j) { return '<td data-k="' + esc(c) + '">' + esc(line[j]) + '</td>'; }).join("") + '</tr>';
+            }).join("") + '</tbody></table>';
+        };
+        var openAll = rows.length === 1;   // 只有一張單就直接展開
         box.innerHTML = rows.length
-          ? '<div class="erpq-wrap"><table class="lbl-table erpq-table"><thead><tr class="lbl-titles">' +
-              cols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join("") + '</tr></thead><tbody>' +
-              rows.map(function (row) {
-                return '<tr>' + cols.map(function (c, i) { return '<td data-k="' + esc(c) + '">' + esc(row[i]) + '</td>'; }).join("") + '</tr>';
+          ? (hasD && rows.length > 1 ? '<div class="erpq-tools"><button type="button" class="btn btn-sm btn-secondary" id="erpq-expand">全部展開</button></div>' : '') +
+            '<div class="erpq-wrap"><table class="lbl-table erpq-table"><thead><tr class="lbl-titles">' +
+              (hasD ? '<th>單身</th>' : '') + cols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join("") + '</tr></thead><tbody>' +
+              rows.map(function (row, i) {
+                var n = details[i] ? details[i].length : null;
+                var tg = hasD ? '<td class="erpq-tg" data-k="單身"><span class="erpq-arrow">' + (openAll ? "▾" : "▸") + '</span> ' + (n === null ? "-" : n + " 項") + '</td>' : '';
+                return '<tr class="' + (hasD ? "erpq-hrow" : "") + (openAll ? " open" : "") + '" data-i="' + i + '">' + tg +
+                  cols.map(function (c, j) { return '<td data-k="' + esc(c) + '">' + esc(row[j]) + '</td>'; }).join("") + '</tr>' +
+                  (hasD ? '<tr class="erpq-drow" data-i="' + i + '"' + (openAll ? "" : " hidden") + '><td colspan="' + (cols.length + 1) + '">' +
+                    (openAll ? detailHtml(i) : "") + '</td></tr>' : '');
               }).join("") + '</tbody></table></div>'
           : '<div class="lbl-empty">ERP 查無符合條件的單據</div>';
+        if (hasD && rows.length) {
+          var toggle = function (tr, open) {
+            var i = tr.getAttribute("data-i"), drow = box.querySelector('tr.erpq-drow[data-i="' + i + '"]');
+            if (!drow) return;
+            if (open === undefined) open = drow.hidden;
+            if (open && !drow.firstChild.innerHTML) drow.firstChild.innerHTML = detailHtml(+i);   // 第一次展開才產生,結果很多時比較快
+            drow.hidden = !open;
+            tr.classList.toggle("open", open);
+            var ar = tr.querySelector(".erpq-arrow");
+            if (ar) ar.textContent = open ? "▾" : "▸";
+          };
+          box.querySelector("tbody").addEventListener("click", function (e) {
+            var tr = e.target.closest("tr.erpq-hrow");
+            if (tr) toggle(tr);
+          });
+          var ex = document.getElementById("erpq-expand");
+          if (ex) ex.addEventListener("click", function () {
+            var open = ex.textContent === "全部展開";
+            var hs = box.querySelectorAll("tr.erpq-hrow");
+            for (var k = 0; k < hs.length; k++) toggle(hs[k], open);
+            ex.textContent = open ? "全部收合" : "全部展開";
+          });
+        }
       }
       setBusy(r.state === "queued" || r.state === "running");
     }

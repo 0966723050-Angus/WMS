@@ -25,6 +25,8 @@ MAX_ROWS = 500   # 與 ERP 查詢對話框「總資料筆數限制」預設相�
 
 CONFIRM = {"Y": "Y:已確認", "N": "N:未確認", "V": "V:作廢", "U": "U:確認失敗"}
 MOC_STATUS = {"1": "未生產", "2": "已領料", "3": "生產中", "Y": "已完工", "y": "指定完工"}
+MATERIAL_TYPE = {"1": "1:直接材料", "2": "2:間接材料", "3": "3:廠商供料", "4": "4:不發料", "5": "5:客戶供料"}
+MAX_DETAIL_LINES = 3000   # 單身總列數上限(超過的單據不附單身,網頁註明)
 
 
 def _ymd(v):
@@ -62,6 +64,15 @@ KINDS = {
         "row": lambda r: [r.TA001, r.TA002, _ymd(r.TA003), r.TA551, r.TA006, r.TA034, r.TA035, _qty(r.TA015),
                           _ymd(r.TA009), _ymd(r.TA010), MOC_STATUS.get((r.TA011 or "").strip(), r.TA011),
                           CONFIRM.get((r.TA013 or "").strip(), r.TA013), r.TA029],
+        "key": lambda r: (r.TA001, r.TA002),
+        "detail": {   # 單身 MOCTB
+            "from": "MOCTB WITH (NOLOCK)", "keycols": ("TB001", "TB002"),
+            "select": "TB001, TB002, TB003, TB012, TB013, TB004, TB005, TB007, TB011, TB017, TB015, TB006, TB009",
+            "order": "TB001, TB002, TB006, TB003",
+            "cols": ["材料品號", "品名", "規格", "需領用量", "已領用量", "未領用量", "單位", "材料型態", "備註", "預計領料", "製程代號", "庫別"],
+            "row": lambda r: [r.TB003, r.TB012, r.TB013, _qty(r.TB004), _qty(r.TB005), _qty(float(r.TB004 or 0) - float(r.TB005 or 0)),
+                              r.TB007, MATERIAL_TYPE.get((r.TB011 or "").strip(), r.TB011), r.TB017, _ymd(r.TB015), r.TB006, r.TB009],
+        },
     },
     "mochg": {
         "from": "MOCTO WITH (NOLOCK)",
@@ -73,6 +84,16 @@ KINDS = {
                  "確認碼", "確認日期", "確認者"],
         "row": lambda r: [r.TO001, r.TO002, r.TO003, _ymd(r.TO004), r.TO009, r.TO035, r.TO036, _qty(r.TO017),
                           CONFIRM.get((r.TO041 or "").strip(), r.TO041), _ymd(r.TO043), r.TO044],
+        "key": lambda r: (r.TO001, r.TO002, r.TO003),
+        "detail": {   # 單身 MOCTP(TP1xx = 變更前的值)
+            "from": "MOCTP WITH (NOLOCK)", "keycols": ("TP001", "TP002", "TP003"),
+            "select": "TP001, TP002, TP003, TP004, TP013, TP014, TP104, TP107, TP007, TP105, TP005, TP006, TP008, TP018, TP024, TP026, TP010",
+            "order": "TP001, TP002, TP003, TP007, TP004",
+            "cols": ["材料品號", "材料品名", "材料規格", "原材料品號", "原製程代號", "製程代號", "原需領用量", "需領用量",
+                     "已領用量", "未領用量", "單位", "備註", "被取替代品號", "被取替代製程", "庫別"],
+            "row": lambda r: [r.TP004, r.TP013, r.TP014, r.TP104, r.TP107, r.TP007, _qty(r.TP105), _qty(r.TP005), _qty(r.TP006),
+                              _qty(float(r.TP005 or 0) - float(r.TP006 or 0)), r.TP008, r.TP018, r.TP024, r.TP026, r.TP010],
+        },
     },
     "poq": {
         "from": "PURTC WITH (NOLOCK) LEFT JOIN PURMA WITH (NOLOCK) ON MA001 = TC004",
@@ -83,6 +104,15 @@ KINDS = {
         "cols": ["採購單別", "採購單號", "採購日期", "廠商", "數量合計", "採購金額", "稅額", "確認碼", "確認日期", "確認者"],
         "row": lambda r: [r.TC001, r.TC002, _ymd(r.TC003), _vendor(r.TC004, r.MA002), _qty(r.TC023), _money(r.TC019),
                           _money(r.TC020), CONFIRM.get((r.TC014 or "").strip(), r.TC014), _ymd(r.TC024), r.TC025],
+        "key": lambda r: (r.TC001, r.TC002),
+        "detail": {   # 單身 PURTD
+            "from": "PURTD WITH (NOLOCK)", "keycols": ("TD001", "TD002"),
+            "select": "TD001, TD002, TD003, TD004, TD005, TD006, TD008, TD015, TD009, TD010, TD011, TD012, TD022, TD014, TD016, TD007",
+            "order": "TD001, TD002, TD003",
+            "cols": ["序號", "品號", "品名", "規格", "採購數量", "已交數量", "單位", "單價", "金額", "預交日", "專案代號", "備註", "結案", "庫別"],
+            "row": lambda r: [r.TD003, r.TD004, r.TD005, r.TD006, _qty(r.TD008), _qty(r.TD015), r.TD009, _money(r.TD010),
+                              _money(r.TD011), _ymd(r.TD012), r.TD022, r.TD014, r.TD016, r.TD007],
+        },
     },
     "pochg": {
         "from": "PURTE WITH (NOLOCK) LEFT JOIN PURMA WITH (NOLOCK) ON MA001 = TE005",
@@ -93,6 +123,15 @@ KINDS = {
         "cols": ["採購單別", "採購單號", "變更版次", "變更日期", "廠商", "確認碼", "確認日期", "確認者"],
         "row": lambda r: [r.TE001, r.TE002, r.TE003, _ymd(r.TE004), _vendor(r.TE005, r.MA002),
                           CONFIRM.get((r.TE017 or "").strip(), r.TE017), _ymd(r.TE011), r.TE021],
+        "key": lambda r: (r.TE001, r.TE002, r.TE003),
+        "detail": {   # 單身 PURTF(TF1xx = 變更前的值)
+            "from": "PURTF WITH (NOLOCK)", "keycols": ("TF001", "TF002", "TF003"),
+            "select": "TF001, TF002, TF003, TF004, TF005, TF006, TF007, TF109, TF009, TF010, TF011, TF012, TF113, TF013, TF020, TF027, TF014",
+            "order": "TF001, TF002, TF003, TF004",
+            "cols": ["序號", "品號", "品名", "規格", "原數量", "數量", "單位", "單價", "金額", "原預交日", "預交日", "專案代號", "備註", "結案"],
+            "row": lambda r: [r.TF004, r.TF005, r.TF006, r.TF007, _qty(r.TF109), _qty(r.TF009), r.TF010, _money(r.TF011),
+                              _money(r.TF012), _ymd(r.TF113), _ymd(r.TF013), r.TF020, r.TF027, r.TF014],
+        },
     },
 }
 
@@ -140,17 +179,53 @@ def run_query(kind, cond):
     if ERP_SQL_DIR not in sys.path:
         sys.path.insert(0, ERP_SQL_DIR)
     import erp_sql
+    K = KINDS[kind]
     cn = erp_sql.connect()
     try:
         cur = cn.cursor()
         cur.execute(sql, params)
         raw = cur.fetchall()
+        keys = [tuple((v or "").strip() for v in K["key"](r)) for r in raw[:MAX_ROWS]]
+        lines = _load_details(cur, K["detail"], keys)
     finally:
         cn.close()
-    K = KINDS[kind]
-    rows = [[("" if v is None else str(v).strip()) for v in K["row"](r)] for r in raw[:MAX_ROWS]]
-    msg = "超過 %d 筆,只列出前 %d 筆,請加條件縮小範圍。" % (MAX_ROWS, MAX_ROWS) if len(raw) > MAX_ROWS else ""
-    return K["cols"], rows, msg
+    rows = [_texts(K["row"](r)) for r in raw[:MAX_ROWS]]
+    msgs = []
+    if len(raw) > MAX_ROWS:
+        msgs.append("超過 %d 筆,只列出前 %d 筆,請加條件縮小範圍。" % (MAX_ROWS, MAX_ROWS))
+    details, total, cut = [], 0, 0
+    for k in keys:
+        d = lines.get(k, [])
+        if total + len(d) > MAX_DETAIL_LINES:
+            details.append(None)
+            cut += 1
+        else:
+            details.append(d)
+            total += len(d)
+    if cut:
+        msgs.append("單身明細太多,有 %d 張單沒有附單身,請加條件縮小範圍。" % cut)
+    return {"cols": K["cols"], "rows": rows, "dcols": K["detail"]["cols"], "details": details, "msg": " ".join(msgs)}
+
+
+def _texts(vals):
+    return [("" if v is None else str(v).strip()) for v in vals]
+
+
+def _load_details(cur, D, keys, batch=150):
+    """依單頭的鍵(單別、單號[、版次])分批查單身,回傳 {鍵: [[值...], ...]}。值一律用參數帶入。"""
+    out = {}
+    uniq = list(dict.fromkeys(keys))
+    n = len(D["keycols"])
+    one = "(" + " AND ".join("%s = ?" % c for c in D["keycols"]) + ")"
+    for i in range(0, len(uniq), batch):
+        part = uniq[i:i + batch]
+        sql = "SELECT %s FROM %s WHERE %s ORDER BY %s" % (D["select"], D["from"], " OR ".join([one] * len(part)), D["order"])
+        assert sql.startswith("SELECT "), "只允許 SELECT"
+        cur.execute(sql, [v for k in part for v in k])
+        for r in cur.fetchall():
+            k = tuple((r[j] or "").strip() for j in range(n))
+            out.setdefault(k, []).append(_texts(D["row"](r)))
+    return out
 
 
 # ---------- 與網站中繼(Apps Script)溝通 ----------
@@ -186,9 +261,9 @@ def answer(endpoint, key, rq):
     qid, kind, cond = rq.get("id", ""), rq.get("kind", ""), rq.get("cond") or {}
     payload = {"action": "erpq_result", "key": key, "id": qid}
     try:
-        cols, rows, msg = run_query(kind, cond)
-        payload.update(ok=True, cols=cols, rows=rows, msg=msg)
-        note = "%d 筆" % len(rows)
+        res = run_query(kind, cond)
+        payload.update(ok=True, **res)
+        note = "%d 筆,單身 %d 列" % (len(res["rows"]), sum(len(d or []) for d in res["details"]))
     except Exception as ex:
         payload.update(ok=False, msg="資料庫查詢失敗:%s" % str(ex)[:200])
         note = "失敗:%s" % str(ex)[:200]
@@ -214,8 +289,11 @@ def main(argv):
     sys.stdout.reconfigure(encoding="utf-8")
     if "--test" in argv:
         i = argv.index("--test")
-        cols, rows, msg = run_query(argv[i + 1], json.loads(argv[i + 2]))
-        print(json.dumps({"cols": cols, "rows": rows[:20], "count": len(rows), "msg": msg}, ensure_ascii=False, indent=1))
+        res = run_query(argv[i + 1], json.loads(argv[i + 2]))
+        print(json.dumps({"count": len(res["rows"]), "lines": sum(len(d or []) for d in res["details"]),
+                          "chars": len(json.dumps(res, ensure_ascii=False)), "msg": res["msg"],
+                          "rows": res["rows"][:2], "dcols": res["dcols"], "details": [(d or [])[:3] for d in res["details"][:2]]},
+                         ensure_ascii=False))
         return 0
     endpoint, key = load_config()
     if "--id" in argv:

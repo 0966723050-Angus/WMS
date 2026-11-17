@@ -665,16 +665,25 @@ function signAck_(ts, msg) {
 // ---------- ERP 查詢(製令 / 製令變更 / 採購單 / 採購變更):網頁送出條件 → 電腦端在 ERP 查詢 → 清單回傳網頁 ----------
 var ERPQ_PERM = { moq: 'erp_mo', mochg: 'erp_mo', poq: 'erp_po', pochg: 'erp_po' };
 var ERPQ_QUEUE_KEY = 'ERPQ_QUEUE';     // [{id, kind, cond, by, ts, state(queued/running/done/error), msg, parts, n}]
-var ERPQ_RES_PREFIX = 'erpqr_';        // 結果分段存放:erpqr_<id>_<段>(屬性值有 9KB 上限,中文 1 字 3 bytes)
+var ERPQ_RES_PREFIX = 'erpqr_';        // 結果分段存放:erpqr_<id>_<段>
 var ERPQ_KEEP = 12;                    // 只保留最近幾筆查詢(含結果)
-var ERPQ_CHUNK = 2500;
-var ERPQ_MAX_CHARS = 60000;            // 單次結果上限(太大就截斷列數)
+var ERPQ_CHUNK = 2500;                 // 舊格式(Script Properties,屬性值 9KB 上限)
+var ERPQ_GZ_CHUNK = 90000;             // 新格式:gzip+base64 存在 CacheService(每個值上限 100KB)
+var ERPQ_CACHE_S = 6 * 3600;           // 結果保存 6 小時(CacheService 上限)
+var ERPQ_MAX_CHARS = 1500000;          // 單次結果上限(含單身;太大就截斷列數)
 var ERPQ_STALE_MS = 30 * 60 * 1000;    // 執行中超過 30 分鐘沒回報就當失敗
 
 function erpqQueue_() { return readJson_(ERPQ_QUEUE_KEY) || []; }
 function erpqSave_(q) { props_().setProperty(ERPQ_QUEUE_KEY, JSON.stringify(q)); }
+function erpqPartKeys_(r) {
+  var keys = [];
+  for (var i = 0; i < (r.parts || 0); i++) keys.push(ERPQ_RES_PREFIX + r.id + '_' + i);
+  return keys;
+}
 function erpqDropResult_(r) {
-  for (var i = 0; i < (r.parts || 0); i++) props_().deleteProperty(ERPQ_RES_PREFIX + r.id + '_' + i);
+  var keys = erpqPartKeys_(r);
+  if (r.gz) { if (keys.length) CacheService.getScriptCache().removeAll(keys); }
+  else keys.forEach(function (k) { props_().deleteProperty(k); });
 }
 
 function erpqRequest_(body, me) {
@@ -700,9 +709,23 @@ function erpqView_(r, withResult) {
   var v = { id: r.id, kind: r.kind, cond: r.cond, by: r.by, ts: r.ts, state: r.state, msg: r.msg, n: r.n, done: r.done || 0 };
   if ((v.state === 'queued' || v.state === 'running') && Date.now() - r.ts > ERPQ_STALE_MS) { v.state = 'error'; v.msg = '電腦端超過 30 分鐘沒有回報,請再查一次'; }
   if (withResult && r.state === 'done' && r.parts) {
-    var txt = '';
-    for (var i = 0; i < r.parts; i++) txt += props_().getProperty(ERPQ_RES_PREFIX + r.id + '_' + i) || '';
-    try { v.result = JSON.parse(txt); } catch (err) { v.result = null; v.msg = '結果讀取失敗'; }
+    var keys = erpqPartKeys_(r), txt = '';
+    try {
+      if (r.gz) {
+        var got = CacheService.getScriptCache().getAll(keys), b64 = '';
+        for (var i = 0; i < keys.length; i++) {
+          if (!got[keys[i]]) throw new Error('expired');
+          b64 += got[keys[i]];
+        }
+        txt = Utilities.ungzip(Utilities.newBlob(Utilities.base64Decode(b64), 'application/x-gzip')).getDataAsString('UTF-8');
+      } else {
+        keys.forEach(function (k) { txt += props_().getProperty(k) || ''; });
+      }
+      v.result = JSON.parse(txt);
+    } catch (err) {
+      v.result = null;
+      v.msg = String(err && err.message) === 'expired' ? '查詢結果已超過 6 小時被清除,請再查一次' : '結果讀取失敗';
+    }
   }
   return v;
 }
@@ -741,16 +764,31 @@ function erpqResult_(body) {
     r.state = 'error';
     r.msg = clip_(body.msg || '查詢失敗', 200);
   } else {
-    var cols = (Array.isArray(body.cols) ? body.cols : []).map(function (c) { return clip_(c, 30); });
-    var rows = (Array.isArray(body.rows) ? body.rows : []).map(function (row) {
-      return (Array.isArray(row) ? row : []).slice(0, cols.length).map(function (v) { return v === null || v === undefined ? '' : clip_(v, 80); });
+    var clipCols = function (a) { return (Array.isArray(a) ? a : []).slice(0, 40).map(function (c) { return clip_(c, 30); }); };
+    var clipRows = function (a, n) {
+      return (Array.isArray(a) ? a : []).map(function (row) {
+        return (Array.isArray(row) ? row : []).slice(0, n).map(function (v) { return v === null || v === undefined ? '' : clip_(v, 80); });
+      });
+    };
+    var cols = clipCols(body.cols), dcols = clipCols(body.dcols);
+    var rows = clipRows(body.rows, cols.length);
+    var details = rows.map(function (_, i) {   // 單身:與 rows 一一對應,null = 沒有附單身
+      var d = Array.isArray(body.details) ? body.details[i] : null;
+      return Array.isArray(d) ? clipRows(d, dcols.length) : null;
     });
-    var total = rows.length, txt = JSON.stringify({ cols: cols, rows: rows });
+    var pack = function () { return JSON.stringify(dcols.length ? { cols: cols, rows: rows, dcols: dcols, details: details } : { cols: cols, rows: rows }); };
+    var total = rows.length, txt = pack();
     while (txt.length > ERPQ_MAX_CHARS && rows.length > 1) {
-      rows = rows.slice(0, Math.floor(rows.length * 0.8));
-      txt = JSON.stringify({ cols: cols, rows: rows });
+      var keep = Math.floor(rows.length * 0.8);
+      rows = rows.slice(0, keep);
+      details = details.slice(0, keep);
+      txt = pack();
     }
-    for (var i = 0; i * ERPQ_CHUNK < txt.length; i++) props_().setProperty(ERPQ_RES_PREFIX + r.id + '_' + i, txt.slice(i * ERPQ_CHUNK, (i + 1) * ERPQ_CHUNK));
+    var b64 = Utilities.base64Encode(Utilities.gzip(Utilities.newBlob(txt, 'application/json')).getBytes());
+    var parts = {}, i;
+    for (i = 0; i * ERPQ_GZ_CHUNK < b64.length; i++) parts[ERPQ_RES_PREFIX + r.id + '_' + i] = b64.slice(i * ERPQ_GZ_CHUNK, (i + 1) * ERPQ_GZ_CHUNK);
+    CacheService.getScriptCache().putAll(parts, ERPQ_CACHE_S);
+    r.gz = 1;
     r.parts = i;
     r.n = rows.length;
     r.state = 'done';
