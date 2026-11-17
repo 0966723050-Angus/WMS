@@ -63,6 +63,12 @@ def split_lines(v):
     return [p.strip() for p in s.split("\n")]
 
 
+def num_or_none(v):
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return int(v) if float(v).is_integer() else v
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", default=SRC)
@@ -98,6 +104,10 @@ def main():
             "spec": norm(spec),
             "status": norm(status),
             "note": norm(note),
+            # 預計產量 / 已領料量(已領套數)/ 已生產量:WMS 一鍵更新由 ERP MOCR19(MOCTA TA015/TA016/TA017)寫入 I~K 欄
+            "planQty": num_or_none(row[8] if len(row) > 8 else None),
+            "issuedSets": num_or_none(row[9] if len(row) > 9 else None),
+            "doneQty": num_or_none(row[10] if len(row) > 10 else None),
         }
         projects[code]["orders"].append(order)
         order_index[order["orderNo"]] = order

@@ -405,6 +405,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); width:
 .order-counts span { font-weight: 700; }
 .cnt-ok { color: var(--ok-text); }
 .cnt-pending { color: var(--warn-text); }
+.order-qty { display: flex; flex-wrap: wrap; gap: 2px 16px; margin-top: 4px; font-size: 14px; line-height: 1.5; color: var(--text-muted); }
+.order-qty b { color: var(--text); font-weight: 700; }
+@media (max-width: 600px) { .order-qty { font-size: 12.5px; gap: 2px 12px; margin-top: 3px; } }
 
 @keyframes fade-down {
   from { opacity: 0; transform: translateY(-4px); }

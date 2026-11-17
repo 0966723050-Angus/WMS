@@ -707,6 +707,7 @@
                   '<span class="order-product" title="' + esc(o.productCode) + (o.productName ? " · " + esc(o.productName) : "") + '">' + esc(o.productCode) + (o.productName ? " · " + esc(o.productName) : "") + '</span>' +
                   '<span class="order-counts"><span class="cnt-ok">已到料:' + c.arrived + '項</span>' +
                     '<span class="cnt-pending">未到料:' + c.pending + '項</span></span>' +
+                  orderQtyHtml(o) +
                 '</div>' +
                 '<div class="order-right"><span class="status-pill ' + statusPillClass(o.status) + '">' + esc(o.status || "-") + '</span></div>' +
               '</div>'
@@ -2930,8 +2931,27 @@
         '<div class="row"><span class="k">規格</span><span class="v">' + esc(order.spec) + '</span></div>' +
         '<div class="row"><span class="k">製令狀態</span><span class="v">' + esc(order.status) + '</span></div>' +
         (order.note ? '<div class="row"><span class="k">備註</span><span class="v">' + esc(order.note) + '</span></div>' : '') +
+        (hasOrderQty(order)
+          ? '<div class="row"><span class="k">預計產量</span><span class="v">' + qtyText(order.planQty) + '</span></div>' +
+            '<div class="row"><span class="k">已領料量</span><span class="v">' + qtyText(order.issuedSets) + '</span></div>' +
+            '<div class="row"><span class="k">已生產量</span><span class="v">' + qtyText(order.doneQty) + '</span></div>'
+          : '') +
       '</div>'
     );
+  }
+
+  // 製令數量(ERP MOCR19:預計產量 / 已領料量(已領套數)/ 已生產量);舊資料沒有這三欄就不顯示
+  function hasOrderQty(o) {
+    return o && (o.planQty != null || o.issuedSets != null || o.doneQty != null);
+  }
+  function qtyText(v) { return v == null ? "-" : fmtNum(v); }
+  function orderQtyHtml(o) {
+    if (!hasOrderQty(o)) return "";
+    return '<span class="order-qty">' +
+      '<span>預計產量 <b>' + qtyText(o.planQty) + '</b></span>' +
+      '<span>已領料量 <b>' + qtyText(o.issuedSets) + '</b></span>' +
+      '<span>已生產量 <b>' + qtyText(o.doneQty) + '</b></span>' +
+    '</span>';
   }
 
   function toolbarHtml(ids, f, exportLabel) {
