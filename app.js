@@ -1719,6 +1719,9 @@
     pochg: { group: "採購單", title: "變更查詢", perm: "erp_po", confirm: ["N"],
              fields: [["type", "採購單別"], ["no", "採購單號"]] }
   };
+  // 送簽:查詢種類 → 待簽核清單的程式代碼(表單名稱優先用表單清單裡的名稱)
+  var ERPQ_SIGN = { moq: { prog: "MOCI02", name: "製令" }, mochg: { prog: "MOCI12", name: "製令變更" },
+                    poq: { prog: "PURI07", name: "採購單" }, pochg: { prog: "PURI08", name: "採購變更單" } };
   var erpqCond = {};      // 各頁輸入過的條件(換頁回來還在)
   var erpqInstance = 0;   // 每次進入查詢頁 +1,舊頁面的背景更新看到編號不同就停止
 
@@ -1727,6 +1730,73 @@
     K.fields.forEach(function (f) { if (cond && cond[f[0]]) parts.push(f[1] + "=" + cond[f[0]]); });
     if (cond && cond.confirm) parts.push("確認碼=" + (ERPQ_CONFIRM[cond.confirm] || cond.confirm));
     return parts.join("、");
+  }
+
+  // 查詢結果的勾選與「送簽」:勾選的單據加入待簽核清單(同一張已在清單會略過)
+  function setupErpqSend(box, kind, cols, rows) {
+    var S = ERPQ_SIGN[kind];
+    var prog = (signFormList().filter(function (p) { return p.code === S.prog; })[0] || {});
+    var name = prog.name || S.name;
+    var colOf = function (re) { for (var i = 0; i < cols.length; i++) if (re.test(cols[i])) return i; return -1; };
+    var iType = colOf(/單別$/), iNo = colOf(/單號$/), iVendor = colOf(/^廠商$/);
+    var sendBtn = box.querySelector("#erpq-send"), msgEl = box.querySelector("#erpq-send-msg");
+    var picks = function () { return Array.prototype.slice.call(box.querySelectorAll(".erpq-pick")); };
+    var update = function () {
+      var all = picks(), on = all.filter(function (c) { return c.checked; }).length;
+      sendBtn.disabled = !on;
+      sendBtn.textContent = on ? "送簽(" + on + ")" : "送簽";
+      Array.prototype.forEach.call(box.querySelectorAll(".erpq-all"), function (a) {
+        a.checked = all.length > 0 && on === all.length;
+        a.indeterminate = on > 0 && on < all.length;
+        a.disabled = !all.length;
+      });
+      all.forEach(function (c) { var tr = c.closest("tr"); if (tr) tr.classList.toggle("picked", c.checked); });
+    };
+    box.addEventListener("change", function (e) {
+      if (e.target.classList.contains("erpq-all")) {
+        var on = e.target.checked;
+        picks().forEach(function (c) { c.checked = on; });
+      }
+      if (e.target.classList.contains("erpq-all") || e.target.classList.contains("erpq-pick")) update();
+    });
+    sendBtn.addEventListener("click", function () {
+      var chosen = picks().filter(function (c) { return c.checked; });
+      if (!chosen.length) return;
+      if (iType < 0 || iNo < 0) { msgEl.textContent = "查詢結果沒有單別/單號欄位,無法送簽"; msgEl.className = "erpq-msg bad"; return; }
+      var items = chosen.map(function (c) {
+        var row = rows[+c.getAttribute("data-i")];
+        return { name: name, prog: S.prog, docType: String(row[iType] || "").trim(), docNo: String(row[iNo] || "").trim(),
+                 vendor: iVendor >= 0 ? String(row[iVendor] || "").trim() : "" };
+      });
+      sendBtn.disabled = true;
+      sendBtn.textContent = "送簽中…";
+      api("signforms_add", { items: items }).then(function (res) {
+        if (!res.ok) throw new Error(res.error || "送簽失敗");
+        var skipped = res.skipped || [], skippedDocs = {};
+        skipped.forEach(function (x) { skippedDocs[x.doc] = x.reason; });
+        chosen.forEach(function (c, k) {
+          var key = items[k].docType + "-" + items[k].docNo, cell = c.closest("td");
+          if (skippedDocs[key] === undefined || skippedDocs[key] === "已在待簽核清單中") {
+            cell.innerHTML = '<span class="erpq-sent" title="已送簽(已在待簽核清單)">✓</span>';
+            var trS = cell.closest("tr");
+            if (trS) { trS.classList.remove("picked"); trS.classList.add("sent"); }
+          } else {
+            c.checked = false;
+          }
+        });
+        update();
+        msgEl.className = "erpq-msg" + (skipped.length ? " warn" : " ok");
+        msgEl.innerHTML = "已加入待簽核清單 " + res.added + " 張" +
+          (skipped.length ? ";略過 " + skipped.length + " 張:" + esc(skipped.map(function (x) { return x.doc + "(" + x.reason + ")"; }).join("、")) : "") +
+          ' · <a href="#/erp/sign">前往待簽核表單</a>';
+        if (res.added) showToast("已加入待簽核清單 " + res.added + " 張");
+      }).catch(function (err) {
+        msgEl.className = "erpq-msg bad";
+        msgEl.textContent = err.message;
+        update();
+      });
+    });
+    update();
   }
 
   function renderErpQuery(app, kind) {
@@ -1831,18 +1901,28 @@
         };
         var openAll = rows.length === 1;   // 只有一張單就直接展開
         box.innerHTML = rows.length
-          ? (hasD && rows.length > 1 ? '<div class="erpq-tools"><button type="button" class="btn btn-sm btn-secondary" id="erpq-expand">全部展開</button></div>' : '') +
+          ? '<div class="erpq-tools">' +
+              '<label class="erpq-all-m"><input type="checkbox" class="erpq-all" /> 全選</label>' +
+              '<span class="erpq-tools-r">' +
+                (hasD && rows.length > 1 ? '<button type="button" class="btn btn-sm btn-secondary" id="erpq-expand">全部展開</button>' : '') +
+                '<button type="button" class="btn btn-sm" id="erpq-send" disabled title="把勾選的單據加入「待簽核表單」清單">送簽</button>' +
+              '</span>' +
+            '</div>' +
+            '<p class="erpq-msg" id="erpq-send-msg"></p>' +
             '<div class="erpq-wrap"><table class="lbl-table erpq-table"><thead><tr class="lbl-titles">' +
+              '<th class="c-chk"><input type="checkbox" class="erpq-all" aria-label="全選" title="全選" /></th>' +
               (hasD ? '<th>單身</th>' : '') + cols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join("") + '</tr></thead><tbody>' +
               rows.map(function (row, i) {
                 var n = details[i] ? details[i].length : null;
                 var tg = hasD ? '<td class="erpq-tg" data-k="單身"><span class="erpq-arrow">' + (openAll ? "▾" : "▸") + '</span> <span class="erpq-tgl">單身 </span>' + (n === null ? "-" : n + " 項") + '</td>' : '';
-                return '<tr class="' + (hasD ? "erpq-hrow" : "") + (openAll ? " open" : "") + '" data-i="' + i + '">' + tg +
+                return '<tr class="' + (hasD ? "erpq-hrow" : "erpq-row") + (openAll ? " open" : "") + '" data-i="' + i + '">' +
+                  '<td class="c-chk erpq-chk"><input type="checkbox" class="erpq-pick" data-i="' + i + '" aria-label="選取" /></td>' + tg +
                   cols.map(function (c, j) { return '<td data-k="' + esc(c) + '">' + esc(row[j]) + '</td>'; }).join("") + '</tr>' +
-                  (hasD ? '<tr class="erpq-drow" data-i="' + i + '"' + (openAll ? "" : " hidden") + '><td colspan="' + (cols.length + 1) + '">' +
+                  (hasD ? '<tr class="erpq-drow" data-i="' + i + '"' + (openAll ? "" : " hidden") + '><td colspan="' + (cols.length + 2) + '">' +
                     (openAll ? detailHtml(i) : "") + '</td></tr>' : '');
               }).join("") + '</tbody></table></div>'
           : '<div class="lbl-empty">ERP 查無符合條件的單據</div>';
+        if (rows.length) setupErpqSend(box, kind, cols, rows);
         if (hasD && rows.length) {
           var toggle = function (tr, open) {
             var i = tr.getAttribute("data-i"), drow = box.querySelector('tr.erpq-drow[data-i="' + i + '"]');
@@ -1855,6 +1935,7 @@
             if (ar) ar.textContent = open ? "▾" : "▸";
           };
           box.querySelector("tbody").addEventListener("click", function (e) {
+            if (e.target.closest(".erpq-chk")) return;   // 點核取方塊不展開
             var tr = e.target.closest("tr.erpq-hrow");
             if (tr) toggle(tr);
           });

@@ -616,6 +616,28 @@ function saveSignForm_(body, user) {
   return { ok: true, form: rec };
 }
 
+// 「ERP 查詢」結果勾選送簽:一次加入多張到待簽核清單(同一張已在清單就略過)
+function addSignForms_(body, user) {
+  var items = Array.isArray(body.items) ? body.items.slice(0, 100) : [];
+  if (!items.length) return { ok: false, error: '請先勾選要送簽的單據' };
+  var all = listSignForms_(), added = 0, skipped = [];
+  items.forEach(function (it) {
+    it = it || {};
+    var label = clip_(it.docType, 6) + '-' + clip_(it.docNo, 16);
+    var c = cleanSignFields_(it);
+    if (c.error) { skipped.push({ doc: label, reason: c.error }); return; }
+    if (findSignForm_(all, c.prog, c.docType, c.docNo, '')) { skipped.push({ doc: label, reason: '已在待簽核清單中' }); return; }
+    if (all.length >= MAX_SIGN_FORMS) { skipped.push({ doc: label, reason: '待簽核清單已達上限' }); return; }
+    var rec = { id: newId_(), ts: Date.now(), n: 1, by: user.email, src: '查詢', conf: 'high',
+                name: c.name, prog: c.prog, docType: c.docType, docNo: c.docNo, vendor: c.vendor };
+    props_().setProperty(SIGN_PREFIX + rec.id, JSON.stringify(rec));
+    queueSignNotify_(rec);
+    all.push(rec);
+    added++;
+  });
+  return { ok: true, added: added, skipped: skipped };
+}
+
 function deleteSignForm_(body) {
   if (body.all === true) {
     var n = 0;
@@ -1156,7 +1178,7 @@ function doPost(e) {
       if (!me.perms.erp_receipt) return denied_('進貨單簽核');
       return json_(action === 'puri09_request' ? requestPuri_(me, 'receipt') : puriView_('receipt'));
     }
-    if (action.indexOf('sign') === 0 && ['signprogs_get', 'signprogs_save', 'signprogs_reset', 'signforms_list', 'signforms_save', 'signforms_delete', 'sign_status', 'sign_request',
+    if (action.indexOf('sign') === 0 && ['signprogs_get', 'signprogs_save', 'signprogs_reset', 'signforms_list', 'signforms_save', 'signforms_add', 'signforms_delete', 'sign_status', 'sign_request',
         'signimg_upload', 'signimg_list'].indexOf(action) !== -1) {
       // 待簽核表單頁面所有登入同仁都能用(看清單、上傳截圖、編輯、刪除);erp_sign 權限只管「確認」鍵(sign_request)
       if (action === 'sign_request' && !me.perms.erp_sign) return denied_('待簽核表單確認');
@@ -1168,6 +1190,7 @@ function doPost(e) {
       }
       if (action === 'signforms_list') return json_({ ok: true, forms: listSignForms_() });
       if (action === 'signforms_save') return json_(saveSignForm_(body, me));
+      if (action === 'signforms_add') return json_(addSignForms_(body, me));
       if (action === 'signforms_delete') return json_(deleteSignForm_(body));
       if (action === 'sign_status') return json_(puriView_('sign'));
       if (action === 'sign_request') return json_(requestSign_(body, me));
