@@ -94,9 +94,9 @@ function makeSession_(email) {
 // cost 庫存單位成本(有此權限才在 auth / me 回傳 COST_KEY,網頁才能解開 cost.enc)
 // 帳號記錄裡沒有 perms 的舊帳號 = 只有「儲位編輯」(維持原本能做的事)。主管理者(ADMIN_EMAIL)永遠全部權限。
 
-var PERM_KEYS = ['admin', 'edit', 'receive', 'ret', 'erp_receipt', 'erp_return', 'erp_issue', 'erp_sign', 'erp_wms', 'erp_mo', 'erp_po', 'cost'];
+var PERM_KEYS = ['admin', 'edit', 'receive', 'ret', 'erp_receipt', 'erp_return', 'erp_issue', 'erp_sign', 'erp_wms', 'erp_mo', 'erp_po', 'erp_sales', 'erp_co', 'erp_inv', 'cost'];
 // 沒設定過的項目用預設值:儲位編輯、收料原本所有人都能用,所以舊帳號維持有這兩項
-var PERM_DEFAULTS = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_issue: false, erp_sign: false, erp_wms: false, erp_mo: false, erp_po: false, cost: false };
+var PERM_DEFAULTS = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_issue: false, erp_sign: false, erp_wms: false, erp_mo: false, erp_po: false, erp_sales: false, erp_co: false, erp_inv: false, cost: false };
 
 // 單位成本金鑰:只給有 cost 權限的人
 function costKeyFor_(perms) {
@@ -685,7 +685,11 @@ function signAck_(ts, msg) {
 }
 
 // ---------- ERP 查詢(製令 / 製令變更 / 採購單 / 採購變更):網頁送出條件 → 電腦端在 ERP 查詢 → 清單回傳網頁 ----------
-var ERPQ_PERM = { moq: 'erp_mo', mochg: 'erp_mo', poq: 'erp_po', pochg: 'erp_po' };
+var ERPQ_PERM = { moq: 'erp_mo', mochg: 'erp_mo', miq: 'erp_mo', mrq: 'erp_mo', mfq: 'erp_mo',
+                  poq: 'erp_po', pochg: 'erp_po', prq: 'erp_po',
+                  slq: 'erp_sales', srq: 'erp_sales', coq: 'erp_co', cochg: 'erp_co',
+                  ivi: 'erp_inv', ivz: 'erp_inv', ivs: 'erp_inv' };
+var ERPQ_PERM_NAME = { erp_mo: 'ERP:製造命令', erp_po: 'ERP:採購單', erp_sales: 'ERP:銷貨單', erp_co: 'ERP:客戶訂單', erp_inv: 'ERP:庫存異動' };
 var ERPQ_QUEUE_KEY = 'ERPQ_QUEUE';     // [{id, kind, cond, by, ts, state(queued/running/done/error), msg, parts, n}]
 var ERPQ_RES_PREFIX = 'erpqr_';        // 結果分段存放:erpqr_<id>_<段>
 var ERPQ_KEEP = 12;                    // 只保留最近幾筆查詢(含結果)
@@ -711,7 +715,7 @@ function erpqDropResult_(r) {
 function erpqRequest_(body, me) {
   var kind = String(body.kind || '');
   if (!ERPQ_PERM[kind]) return { ok: false, error: '查詢種類不正確' };
-  if (!me.perms[ERPQ_PERM[kind]]) return { ok: false, error: '您沒有「' + (ERPQ_PERM[kind] === 'erp_mo' ? 'ERP:製造命令' : 'ERP:採購單') + '」的權限' };
+  if (!me.perms[ERPQ_PERM[kind]]) return { ok: false, error: '您沒有「' + ERPQ_PERM_NAME[ERPQ_PERM[kind]] + '」的權限' };
   var c = body.cond || {}, cond = {};
   ['proj', 'prod', 'type', 'no', 'confirm'].forEach(function (k) { var v = clip_(c[k], 40); if (v) cond[k] = v; });
   if (cond.confirm && ['N', 'Y'].indexOf(cond.confirm) < 0) delete cond.confirm;

@@ -138,9 +138,12 @@
     { key: "erp_wms", label: "ERP:WMS更新" },
     { key: "erp_mo", label: "ERP:製造命令查詢" },
     { key: "erp_po", label: "ERP:採購單查詢" },
+    { key: "erp_sales", label: "ERP:銷貨單查詢" },
+    { key: "erp_co", label: "ERP:客戶訂單查詢" },
+    { key: "erp_inv", label: "ERP:庫存異動查詢" },
     { key: "cost", label: "庫存單位成本" }
   ];
-  var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_sign: false, erp_wms: false, erp_mo: false, erp_po: false, cost: false };
+  var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_sign: false, erp_wms: false, erp_mo: false, erp_po: false, erp_sales: false, erp_co: false, erp_inv: false, cost: false };
 
   function can(perm) { return !!(session && session.perms && session.perms[perm]); }
 
@@ -739,6 +742,12 @@
     wms: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 01-14.3 4.9M4 12a8 8 0 0114.3-4.9"/><path d="M18.5 3v4.2h-4.2M5.5 21v-4.2h4.2"/></svg>',
     // 製造命令:工廠
     mo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21V10l6 4V10l6 4V6l6 3v12z"/><path d="M7 18h2M12 18h2M17 18h2"/></svg>',
+    // 銷貨單:卡車
+    sales: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4h13v12H1zM14 8h4l3 3v5h-7"/><circle cx="5.5" cy="18.5" r="2"/><circle cx="17.5" cy="18.5" r="2"/></svg>',
+    // 客戶訂單:文件
+    co: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></svg>',
+    // 庫存異動:上下箭頭
+    inv: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v16M3 8l4-4 4 4M17 20V4M13 16l4 4 4-4"/></svg>',
     // 廠商:大樓
     vendor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V5a2 2 0 012-2h8a2 2 0 012 2v16"/><path d="M16 9h2a2 2 0 012 2v10M2 21h20M8 7h4M8 11h4M8 15h4"/></svg>',
     // 採購單:購物車
@@ -1719,11 +1728,35 @@
     poq:   { group: "採購單", title: "採單查詢", perm: "erp_po", confirm: ["N", "Y"],
              fields: [["type", "採購單別"], ["no", "採購單號"]] },
     pochg: { group: "採購單", title: "變更查詢", perm: "erp_po", confirm: ["N"],
-             fields: [["type", "採購單別"], ["no", "採購單號"]] }
+             fields: [["type", "採購單別"], ["no", "採購單號"]] },
+    prq:   { group: "採購單", title: "請購查詢", perm: "erp_po", confirm: ["N", "Y"],
+             fields: [["type", "請購單別"], ["no", "請購單號"]] },
+    miq:   { group: "製造命令", title: "製令領料", perm: "erp_mo", confirm: ["N", "Y"],
+             fields: [["type", "領料單別"], ["no", "領料單號"]] },
+    mrq:   { group: "製造命令", title: "退料查詢", perm: "erp_mo", confirm: ["N", "Y"],
+             fields: [["type", "退料單別"], ["no", "退料單號"]] },
+    mfq:   { group: "製造命令", title: "生產入庫", perm: "erp_mo", confirm: ["N", "Y"],
+             fields: [["type", "入庫單別"], ["no", "入庫單號"]] },
+    slq:   { group: "銷貨單", title: "銷貨查詢", perm: "erp_sales", confirm: ["N", "Y"],
+             fields: [["type", "銷貨單別"], ["no", "銷貨單號"]] },
+    srq:   { group: "銷貨單", title: "銷退查詢", perm: "erp_sales", confirm: ["N", "Y"],
+             fields: [["type", "銷退單別"], ["no", "銷退單號"]] },
+    coq:   { group: "客戶訂單", title: "訂單查詢", perm: "erp_co", confirm: ["N", "Y"],
+             fields: [["type", "訂單單別"], ["no", "訂單單號"]] },
+    cochg: { group: "客戶訂單", title: "變更查詢", perm: "erp_co", confirm: ["N"],
+             fields: [["type", "訂單單別"], ["no", "訂單單號"]] },
+    ivi:   { group: "庫存異動", title: "庫存領料", perm: "erp_inv", confirm: ["N", "Y"], fields: [["no", "單號"]] },
+    ivz:   { group: "庫存異動", title: "零元入庫", perm: "erp_inv", confirm: ["N", "Y"], fields: [["no", "單號"]] },
+    ivs:   { group: "庫存異動", title: "報廢查詢", perm: "erp_inv", confirm: ["N", "Y"], fields: [["no", "單號"]] }
   };
   // 送簽:查詢種類 → 待簽核清單的程式代碼(表單名稱優先用表單清單裡的名稱)
   var ERPQ_SIGN = { moq: { prog: "MOCI02", name: "製令" }, mochg: { prog: "MOCI12", name: "製令變更" },
-                    poq: { prog: "PURI07", name: "採購單" }, pochg: { prog: "PURI08", name: "採購變更單" } };
+                    poq: { prog: "PURI07", name: "採購單" }, pochg: { prog: "PURI08", name: "採購變更單" },
+                    prq: { prog: "PURI05", name: "請購單" },
+                    miq: { prog: "MOCI03", name: "製令領料單" }, mrq: { prog: "MOCI04", name: "製令退料單" }, mfq: { prog: "MOCI05", name: "生產入庫單" },
+                    slq: { prog: "COPI08", name: "銷貨單" }, srq: { prog: "COPI09", name: "銷退單" },
+                    coq: { prog: "COPI06", name: "客戶訂單" }, cochg: { prog: "COPI07", name: "訂單變更單" },
+                    ivi: { prog: "INVI05", name: "庫存領料單" }, ivz: { prog: "INVI05", name: "零元入庫單" }, ivs: { prog: "INVI05", name: "報廢單" } };
   var erpqCond = {};      // 各頁輸入過的條件(換頁回來還在)
   var erpqInstance = 0;   // 每次進入查詢頁 +1,舊頁面的背景更新看到編號不同就停止
 
@@ -1737,8 +1770,9 @@
   // 查詢結果的勾選與「送簽」:勾選的單據加入待簽核清單(同一張已在清單會略過)
   function setupErpqSend(box, kind, cols, rows) {
     var S = ERPQ_SIGN[kind];
-    var prog = (signFormList().filter(function (p) { return p.code === S.prog; })[0] || {});
-    var name = prog.name || S.name;
+    var sameCode = signFormList().filter(function (p) { return p.code === S.prog; });
+    var exact = sameCode.filter(function (p) { return p.name === S.name; })[0];
+    var name = exact ? exact.name : (sameCode.length === 1 ? sameCode[0].name : S.name);
     var colOf = function (re) { for (var i = 0; i < cols.length; i++) if (re.test(cols[i])) return i; return -1; };
     var iType = colOf(/單別$/), iNo = colOf(/單號$/), iVendor = colOf(/^廠商$/);
     var sendBtn = box.querySelector("#erpq-send"), msgEl = box.querySelector("#erpq-send-msg");
@@ -2117,11 +2151,25 @@
             '<span class="erp-tile-note" id="sign-note"></span></a>' +
           (can("erp_mo")
             ? '<div class="erp-tile erp-tile-group"><span class="erp-tile-icon">' + ERP_ICONS.mo + '</span><span class="erp-tile-title">製造命令</span>' +
-              '<div class="erp-tile-actions"><a class="btn btn-sm" href="#/erp/moq">製令查詢</a><a class="btn btn-sm btn-secondary" href="#/erp/mochg">變更查詢</a></div></div>'
+              '<div class="erp-tile-actions"><a class="btn btn-sm" href="#/erp/moq">製令查詢</a><a class="btn btn-sm" href="#/erp/mochg">變更查詢</a>' +
+                '<a class="btn btn-sm" href="#/erp/mrq">退料查詢</a><a class="btn btn-sm" href="#/erp/miq">製令領料</a><a class="btn btn-sm" href="#/erp/mfq">生產入庫</a></div></div>'
             : '') +
           (can("erp_po")
             ? '<div class="erp-tile erp-tile-group"><span class="erp-tile-icon">' + ERP_ICONS.po + '</span><span class="erp-tile-title">採購單</span>' +
-              '<div class="erp-tile-actions"><a class="btn btn-sm" href="#/erp/poq">採單查詢</a><a class="btn btn-sm btn-secondary" href="#/erp/pochg">變更查詢</a></div></div>'
+              '<div class="erp-tile-actions"><a class="btn btn-sm" href="#/erp/poq">採單查詢</a><a class="btn btn-sm" href="#/erp/pochg">變更查詢</a>' +
+                '<a class="btn btn-sm" href="#/erp/prq">請購查詢</a></div></div>'
+            : '') +
+          (can("erp_sales")
+            ? '<div class="erp-tile erp-tile-group"><span class="erp-tile-icon">' + ERP_ICONS.sales + '</span><span class="erp-tile-title">銷貨單</span>' +
+              '<div class="erp-tile-actions"><a class="btn btn-sm" href="#/erp/slq">銷貨查詢</a><a class="btn btn-sm" href="#/erp/srq">銷退查詢</a></div></div>'
+            : '') +
+          (can("erp_co")
+            ? '<div class="erp-tile erp-tile-group"><span class="erp-tile-icon">' + ERP_ICONS.co + '</span><span class="erp-tile-title">客戶訂單</span>' +
+              '<div class="erp-tile-actions"><a class="btn btn-sm" href="#/erp/coq">訂單查詢</a><a class="btn btn-sm" href="#/erp/cochg">變更查詢</a></div></div>'
+            : '') +
+          (can("erp_inv")
+            ? '<div class="erp-tile erp-tile-group"><span class="erp-tile-icon">' + ERP_ICONS.inv + '</span><span class="erp-tile-title">庫存異動</span>' +
+              '<div class="erp-tile-actions"><a class="btn btn-sm" href="#/erp/ivi">庫存領料</a><a class="btn btn-sm" href="#/erp/ivz">零元入庫</a><a class="btn btn-sm" href="#/erp/ivs">報廢查詢</a></div></div>'
             : '') +
           '<a class="erp-tile" href="#/erp/vendor">' +
             '<span class="erp-tile-icon">' + ERP_ICONS.vendor + '</span><span class="erp-tile-title">廠商清單</span>' +

@@ -1519,3 +1519,6 @@ table.data-table th { font-weight: 800; font-size: 12.5px; box-shadow: inset 0 -
 @media (max-width: 520px) {
   .erp-tile-note { grid-column: 2; }
 }
+/* ERP 項目卡片:查詢鍵多時自動換行 */
+.erp-tile-actions { flex-wrap: wrap; justify-content: center; }
+@media (max-width: 520px) { .erp-tile-actions { justify-content: flex-start; } }

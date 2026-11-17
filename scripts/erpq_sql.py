@@ -5,7 +5,7 @@ puri09_watch.py(每 10 秒)與排程「WMS 儲位編輯寫入」(apply_and_sync.
 
 用法:
   python -I scripts\erpq_sql.py                      取走並處理所有等待中的查詢(沒有就直接結束)
-  python -I scripts\erpq_sql.py --id <id> --kind <moq|mochg|poq|pochg> --cond "<JSON>"
+  python -I scripts\erpq_sql.py --id <id> --kind <moq|mochg|poq|pochg|slq|srq|miq|mrq|mfq|prq|coq|cochg|ivi|ivz|ivs> --cond "<JSON>"
                                                     處理一筆已經被取走的查詢(監看器印出 ERPQ_REQUEST 時用)
   python -I scripts\erpq_sql.py --test <kind> "<JSON>"  只查詢、印出結果,不回傳網站
 連線設定沿用 WMS\WMS一鍵更新\sql_config.json(erp_sql.connect,唯讀連線)。
@@ -136,6 +136,182 @@ KINDS = {
 }
 
 
+# ---------- 2026-11-18 新增:銷貨 / 銷退 / 領料 / 退料 / 生產入庫 / 請購 / 訂單 / 訂單變更 / 庫存異動 ----------
+MOC_ISSUE_KIND = {"54": "54:廠內領料", "55": "55:託外領料", "56": "56:廠內退料", "57": "57:託外退料"}
+
+
+def _doc(a, b, c=None):
+    a, b, c = (a or "").strip(), (b or "").strip(), (c or "").strip() if c is not None else ""
+    return "-".join(x for x in (a, b, c) if x)
+
+
+def _moctc(label, where):
+    """製令領料 / 退料(MOCTC 單頭 + MOCTE 單身),用單據性質區分"""
+    return {
+        "from": "MOCTC WITH (NOLOCK)",
+        "where": where,
+        "cond": {"type": ("TC001", "eq"), "no": ("TC002", "prefix")},
+        "confirm": "TC009",
+        "select": "TC001, TC002, TC003, TC008, TC007, TC009, TC015",
+        "order": "TC001, TC002 DESC",
+        "cols": [label + "單別", label + "單號", label + "日期", "性質", "備註", "確認碼", "確認者"],
+        "row": lambda r: [r.TC001, r.TC002, _ymd(r.TC003), MOC_ISSUE_KIND.get((r.TC008 or "").strip(), r.TC008), r.TC007,
+                          CONFIRM.get((r.TC009 or "").strip(), r.TC009), r.TC015],
+        "key": lambda r: (r.TC001, r.TC002),
+        "detail": {
+            "from": "MOCTE WITH (NOLOCK)", "keycols": ("TE001", "TE002"),
+            "select": "TE001, TE002, TE003, TE004, TE017, TE018, TE005, TE006, TE008, TE011, TE012, TE020, TE013",
+            "order": "TE001, TE002, TE003",
+            "cols": ["序號", "品號", "品名", "規格", "數量", "單位", "庫別", "製令", "專案代號", "備註"],
+            "row": lambda r: [r.TE003, r.TE004, r.TE017, r.TE018, _qty(r.TE005), r.TE006, r.TE008, _doc(r.TE011, r.TE012), r.TE020, r.TE013],
+        },
+    }
+
+
+def _invta(docno):
+    """庫存異動單(INVTA 單頭 + INVTB 單身),單別固定(1101 庫存領料單 / 1102 零元入庫單 / 1199 報廢單)。不顯示金額(成本另有權限)"""
+    return {
+        "from": "INVTA WITH (NOLOCK)",
+        "where": "TA001 = '%s'" % docno,
+        "cond": {"no": ("TA002", "prefix")},
+        "confirm": "TA006",
+        "select": "TA001, TA002, TA003, TA005, TA011, TA006, TA015",
+        "order": "TA002 DESC",
+        "cols": ["單別", "單號", "異動日期", "備註", "數量合計", "確認碼", "確認者"],
+        "row": lambda r: [r.TA001, r.TA002, _ymd(r.TA003), r.TA005, _qty(r.TA011), CONFIRM.get((r.TA006 or "").strip(), r.TA006), r.TA015],
+        "key": lambda r: (r.TA001, r.TA002),
+        "detail": {
+            "from": "INVTB WITH (NOLOCK)", "keycols": ("TB001", "TB002"),
+            "select": "TB001, TB002, TB003, TB004, TB005, TB006, TB007, TB008, TB012",
+            "order": "TB001, TB002, TB003",
+            "cols": ["序號", "品號", "品名", "規格", "數量", "單位", "庫別"],
+            "row": lambda r: [r.TB003, r.TB004, r.TB005, r.TB006, _qty(r.TB007), r.TB008, r.TB012],
+        },
+    }
+
+
+KINDS.update({
+    "slq": {   # 銷貨單 COPTG / COPTH
+        "from": "COPTG WITH (NOLOCK) LEFT JOIN COPMA WITH (NOLOCK) ON MA001 = TG004",
+        "cond": {"type": ("TG001", "eq"), "no": ("TG002", "prefix")},
+        "confirm": "TG023",
+        "select": "TG001, TG002, TG003, TG004, MA002, TG045, TG046, TG023, TG043",
+        "order": "TG001, TG002 DESC",
+        "cols": ["銷貨單別", "銷貨單號", "銷貨日期", "客戶", "未稅金額", "稅額", "確認碼", "確認者"],
+        "row": lambda r: [r.TG001, r.TG002, _ymd(r.TG003), _vendor(r.TG004, r.MA002), _money(r.TG045), _money(r.TG046),
+                          CONFIRM.get((r.TG023 or "").strip(), r.TG023), r.TG043],
+        "key": lambda r: (r.TG001, r.TG002),
+        "detail": {
+            "from": "COPTH WITH (NOLOCK)", "keycols": ("TH001", "TH002"),
+            "select": "TH001, TH002, TH003, TH004, TH005, TH006, TH008, TH009, TH012, TH013, TH007, TH014, TH015, TH016, TH030",
+            "order": "TH001, TH002, TH003",
+            "cols": ["序號", "品號", "品名", "規格", "數量", "單位", "單價", "金額", "庫別", "訂單", "專案代號"],
+            "row": lambda r: [r.TH003, r.TH004, r.TH005, r.TH006, _qty(r.TH008), r.TH009, _money(r.TH012), _money(r.TH013), r.TH007,
+                              _doc(r.TH014, r.TH015, r.TH016), r.TH030],
+        },
+    },
+    "srq": {   # 銷退單 COPTI / COPTJ
+        "from": "COPTI WITH (NOLOCK) LEFT JOIN COPMA WITH (NOLOCK) ON MA001 = TI004",
+        "cond": {"type": ("TI001", "eq"), "no": ("TI002", "prefix")},
+        "confirm": "TI019",
+        "select": "TI001, TI002, TI003, TI004, MA002, TI010, TI011, TI019, TI035",
+        "order": "TI001, TI002 DESC",
+        "cols": ["銷退單別", "銷退單號", "銷退日期", "客戶", "金額", "稅額", "確認碼", "確認者"],
+        "row": lambda r: [r.TI001, r.TI002, _ymd(r.TI003), _vendor(r.TI004, r.MA002), _money(r.TI010), _money(r.TI011),
+                          CONFIRM.get((r.TI019 or "").strip(), r.TI019), r.TI035],
+        "key": lambda r: (r.TI001, r.TI002),
+        "detail": {
+            "from": "COPTJ WITH (NOLOCK)", "keycols": ("TJ001", "TJ002"),
+            "select": "TJ001, TJ002, TJ003, TJ004, TJ005, TJ006, TJ007, TJ008, TJ011, TJ012, TJ013, TJ023, TJ028",
+            "order": "TJ001, TJ002, TJ003",
+            "cols": ["序號", "品號", "品名", "規格", "數量", "單位", "單價", "金額", "庫別", "原因/備註", "專案代號"],
+            "row": lambda r: [r.TJ003, r.TJ004, r.TJ005, r.TJ006, _qty(r.TJ007), r.TJ008, _money(r.TJ011), _money(r.TJ012), r.TJ013,
+                              r.TJ023, r.TJ028],
+        },
+    },
+    "miq": _moctc("領料", "TC008 IN ('54', '55')"),
+    "mrq": _moctc("退料", "TC008 IN ('56', '57')"),
+    "mfq": {   # 生產入庫單 MOCTF / MOCTG
+        "from": "MOCTF WITH (NOLOCK)",
+        "cond": {"type": ("TF001", "eq"), "no": ("TF002", "prefix")},
+        "confirm": "TF006",
+        "select": "TF001, TF002, TF003, TF006, TF013",
+        "order": "TF001, TF002 DESC",
+        "cols": ["入庫單別", "入庫單號", "入庫日期", "確認碼", "確認者"],
+        "row": lambda r: [r.TF001, r.TF002, _ymd(r.TF003), CONFIRM.get((r.TF006 or "").strip(), r.TF006), r.TF013],
+        "key": lambda r: (r.TF001, r.TF002),
+        "detail": {
+            "from": "MOCTG WITH (NOLOCK)", "keycols": ("TG001", "TG002"),
+            "select": "TG001, TG002, TG003, TG004, TG005, TG006, TG011, TG013, TG007, TG010, TG014, TG015, TG021",
+            "order": "TG001, TG002, TG003",
+            "cols": ["序號", "品號", "品名", "規格", "入庫數量", "驗收數量", "單位", "庫別", "製令", "專案代號"],
+            "row": lambda r: [r.TG003, r.TG004, r.TG005, r.TG006, _qty(r.TG011), _qty(r.TG013), r.TG007, r.TG010,
+                              _doc(r.TG014, r.TG015), r.TG021],
+        },
+    },
+    "prq": {   # 請購單 PURTA / PURTB
+        "from": "PURTA WITH (NOLOCK)",
+        "cond": {"type": ("TA001", "eq"), "no": ("TA002", "prefix")},
+        "confirm": "TA007",
+        "select": "TA001, TA002, TA003, TA004, TA012, TA011, TA006, TA007, TA014",
+        "order": "TA001, TA002 DESC",
+        "cols": ["請購單別", "請購單號", "請購日期", "部門", "請購人員", "數量合計", "備註", "確認碼", "確認者"],
+        "row": lambda r: [r.TA001, r.TA002, _ymd(r.TA003), r.TA004, r.TA012, _qty(r.TA011), r.TA006,
+                          CONFIRM.get((r.TA007 or "").strip(), r.TA007), r.TA014],
+        "key": lambda r: (r.TA001, r.TA002),
+        "detail": {
+            "from": "PURTB WITH (NOLOCK) LEFT JOIN PURMA WITH (NOLOCK) ON MA001 = TB010", "keycols": ("TB001", "TB002"),
+            "select": "TB001, TB002, TB003, TB004, TB005, TB006, TB009, TB007, TB011, TB010, MA002, TB043, TB022, TB008",
+            "order": "TB001, TB002, TB003",
+            "cols": ["序號", "品號", "品名", "規格", "請購數量", "單位", "需求日", "廠商", "專案代號", "採購單", "庫別"],
+            "row": lambda r: [r.TB003, r.TB004, r.TB005, r.TB006, _qty(r.TB009), r.TB007, _ymd(r.TB011), _vendor(r.TB010, r.MA002),
+                              r.TB043, r.TB022, r.TB008],
+        },
+    },
+    "coq": {   # 客戶訂單 COPTC / COPTD
+        "from": "COPTC WITH (NOLOCK) LEFT JOIN COPMA WITH (NOLOCK) ON MA001 = TC004",
+        "cond": {"type": ("TC001", "eq"), "no": ("TC002", "prefix")},
+        "confirm": "TC027",
+        "select": "TC001, TC002, TC003, TC004, MA002, TC012, TC008, TC029, TC027, TC040",
+        "order": "TC001, TC002 DESC",
+        "cols": ["訂單單別", "訂單單號", "訂單日期", "客戶", "客戶單號", "幣別", "訂單金額", "確認碼", "確認者"],
+        "row": lambda r: [r.TC001, r.TC002, _ymd(r.TC003), _vendor(r.TC004, r.MA002), r.TC012, r.TC008, _money(r.TC029),
+                          CONFIRM.get((r.TC027 or "").strip(), r.TC027), r.TC040],
+        "key": lambda r: (r.TC001, r.TC002),
+        "detail": {
+            "from": "COPTD WITH (NOLOCK)", "keycols": ("TD001", "TD002"),
+            "select": "TD001, TD002, TD003, TD004, TD005, TD006, TD008, TD009, TD010, TD011, TD012, TD013, TD027, TD016, TD007",
+            "order": "TD001, TD002, TD003",
+            "cols": ["序號", "品號", "品名", "規格", "訂單數量", "已交數量", "單位", "單價", "金額", "預交日", "專案代號", "結案", "庫別"],
+            "row": lambda r: [r.TD003, r.TD004, r.TD005, r.TD006, _qty(r.TD008), _qty(r.TD009), r.TD010, _money(r.TD011),
+                              _money(r.TD012), _ymd(r.TD013), r.TD027, r.TD016, r.TD007],
+        },
+    },
+    "cochg": {   # 訂單變更 COPTE / COPTF(TF1xx = 變更前的值)
+        "from": "COPTE WITH (NOLOCK) LEFT JOIN COPMA WITH (NOLOCK) ON MA001 = TE007",
+        "cond": {"type": ("TE001", "eq"), "no": ("TE002", "prefix")},
+        "confirm": "TE029",
+        "select": "TE001, TE002, TE003, TE004, TE007, MA002, TE006, TE029, TE039",
+        "order": "TE001, TE002 DESC, TE003 DESC",
+        "cols": ["訂單單別", "訂單單號", "變更版次", "變更日期", "客戶", "變更原因", "確認碼", "確認者"],
+        "row": lambda r: [r.TE001, r.TE002, r.TE003, _ymd(r.TE004), _vendor(r.TE007, r.MA002), r.TE006,
+                          CONFIRM.get((r.TE029 or "").strip(), r.TE029), r.TE039],
+        "key": lambda r: (r.TE001, r.TE002, r.TE003),
+        "detail": {
+            "from": "COPTF WITH (NOLOCK)", "keycols": ("TF001", "TF002", "TF003"),
+            "select": "TF001, TF002, TF003, TF004, TF005, TF006, TF007, TF109, TF009, TF010, TF013, TF014, TF115, TF015, TF022, TF018",
+            "order": "TF001, TF002, TF003, TF004",
+            "cols": ["序號", "品號", "品名", "規格", "原數量", "數量", "單位", "單價", "金額", "原預交日", "預交日", "專案代號", "變更原因"],
+            "row": lambda r: [r.TF004, r.TF005, r.TF006, r.TF007, _qty(r.TF109), _qty(r.TF009), r.TF010, _money(r.TF013),
+                              _money(r.TF014), _ymd(r.TF115), _ymd(r.TF015), r.TF022, r.TF018],
+        },
+    },
+    "ivi": _invta("1101"),   # 庫存領料單
+    "ivz": _invta("1102"),   # 零元入庫單
+    "ivs": _invta("1199"),   # 報廢單
+})
+
+
 def _like_escape(v):
     return v.replace("[", "[[]").replace("%", "[%]").replace("_", "[_]")
 
@@ -169,6 +345,8 @@ def build_sql(kind, cond):
             raise ValueError("不支援的條件欄位:%s" % key)
     if not where:
         raise ValueError("至少要有一個查詢條件")
+    if K.get("where"):   # 固定條件(程式內寫死的常數,例如單據性質、固定單別;不含使用者輸入)
+        where.insert(0, K["where"])
     sql = "SELECT TOP %d %s FROM %s WHERE %s ORDER BY %s" % (MAX_ROWS + 1, K["select"], K["from"], " AND ".join(where), K["order"])
     return sql, params
 
