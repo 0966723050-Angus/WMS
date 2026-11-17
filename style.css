@@ -1089,8 +1089,8 @@ table.data-table th, table.data-table td {
 table.data-table tbody tr:last-child td { border-bottom: none; }
 table.data-table td:nth-child(2) { white-space: nowrap; } /* 材料品號不要被切成兩行 */
 table.data-table th {
-  background: var(--brand);
-  color: var(--brand-contrast);
+  background: #f97316;   /* 橘色標題列 */
+  color: #ffffff;
   font-size: 12px;
   letter-spacing: 0.3px;
   position: sticky;
