@@ -2954,6 +2954,18 @@
     '</span>';
   }
 
+  // 物料明細「清除」鍵:清空搜尋欄、篩選恢復成全部,再重畫清單
+  function bindMaterialClear(ids, f, rerender) {
+    document.getElementById(ids.clear).addEventListener("click", function () {
+      f.query = ""; f.status = ""; f.issueStatus = ""; f.poStatus = "";
+      [ids.search, ids.status, ids.issueStatus, ids.poStatus].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.value = "";
+      });
+      rerender();
+    });
+  }
+
   function toolbarHtml(ids, f, exportLabel) {
     return (
       '<div class="toolbar toolbar-material">' +
@@ -2973,6 +2985,7 @@
           '<option value="已下單"' + (f.poStatus === "已下單" ? " selected" : "") + '>已下單</option>' +
           '<option value="未下單"' + (f.poStatus === "未下單" ? " selected" : "") + '>未下單</option>' +
         '</select>' +
+        '<button class="btn btn-secondary btn-mat-clear" id="' + ids.clear + '" type="button" title="清除搜尋欄並把篩選恢復成全部">清除</button>' +
         '<button class="btn btn-export" id="' + ids.exportBtn + '" type="button">' +
           '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>' +
           '<span class="lbl-long">' + esc(exportLabel) + '</span><span class="lbl-short">Excel</span>' +
@@ -2995,7 +3008,8 @@
     var html = '';
     html += '<div class="breadcrumb"><a href="#/">首頁</a> / ' + esc(project.code) + '</div>';
     html += '<h1 class="page-title">' + esc(project.code) + '<span class="sub">' + esc(project.name) + ' · 共 ' + project.orders.length + ' 筆製令</span></h1>';
-    html += toolbarHtml({ search: "project-search", status: "project-status", issueStatus: "project-issue-status", poStatus: "project-po-status", exportBtn: "project-export" }, f, "下載為 Excel (全部製令)");
+    var pIds = { search: "project-search", status: "project-status", issueStatus: "project-issue-status", poStatus: "project-po-status", exportBtn: "project-export", clear: "project-clear" };
+    html += toolbarHtml(pIds, f, "下載為 Excel (全部製令)");
     html += '<p class="result-count" id="project-result-count"></p>';
 
     project.orders.forEach(function (o) {
@@ -3029,6 +3043,7 @@
       getProjectFilterState(code).poStatus = e.target.value;
       renderProjectMaterials(project);
     });
+    bindMaterialClear(pIds, getProjectFilterState(code), function () { renderProjectMaterials(project); });
     document.getElementById("project-export").addEventListener("click", function () {
       exportProjectToExcel(project);
     });
@@ -3081,7 +3096,8 @@
     html += '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/project/' + encodeURIComponent(project.code) + '">' + esc(project.code) + '</a> / ' + esc(orderNo) + '</div>';
     html += '<h1 class="page-title">製令 ' + esc(orderNo) + '<span class="sub">物料明細</span></h1>';
     html += orderInfoPanelHtml(order, orderNo);
-    html += toolbarHtml({ search: "search-input", status: "status-select", issueStatus: "issue-status-select", poStatus: "po-status-select", exportBtn: "export-btn" }, f, "下載為 Excel");
+    var oIds = { search: "search-input", status: "status-select", issueStatus: "issue-status-select", poStatus: "po-status-select", exportBtn: "export-btn", clear: "mat-clear" };
+    html += toolbarHtml(oIds, f, "下載為 Excel");
     html += '<p class="result-count" id="' + sectionIds(orderNo).count + '"></p>';
     html += '<div id="' + sectionIds(orderNo).container + '"></div>';
 
@@ -3103,6 +3119,7 @@
       getFilterState(orderNo).poStatus = e.target.value;
       renderOrderMaterials(orderNo, project, order);
     });
+    bindMaterialClear(oIds, getFilterState(orderNo), function () { renderOrderMaterials(orderNo, project, order); });
     document.getElementById("export-btn").addEventListener("click", function () {
       exportOrderToExcel(orderNo, project, order);
     });
