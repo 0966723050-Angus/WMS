@@ -2045,13 +2045,17 @@
     html += '<div class="breadcrumb"><a href="#/">首頁</a> / 庫存查詢</div>';
     html += '<h1 class="page-title">庫存查詢<span class="sub">材料品號/品名/規格/類別皆可用關鍵字查詢' +
       (can("edit") ? ';點擊卡片可編輯類別/儲放地點/儲位' : '') + '</span></h1>';
-    html += '<div class="toolbar">' +
+    html += '<div class="toolbar storage-toolbar">' +
       '<div class="search-wrap">' +
         '<input type="search" id="storage-search" placeholder="輸入材料品號、品名、規格或類別關鍵字" autocomplete="off" value="' + esc(storageQuery) + '" />' +
         '<button type="button" class="search-clear" id="storage-clear" aria-label="清除搜尋"' + (storageQuery ? '' : ' hidden') + '>' +
           '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>' +
         '</button>' +
       '</div>' +
+      '<button class="btn btn-export" id="storage-export" type="button" title="把目前查詢到的全部結果下載成 Excel" disabled>' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>' +
+        '<span class="lbl-long">下載為 Excel</span><span class="lbl-short">Excel</span>' +
+      '</button>' +
     '</div>';
     html += '<p class="result-count" id="storage-result-count"></p>';
     html += '<div id="storage-container"></div>';
@@ -2071,6 +2075,7 @@
       renderStorageResults();
       searchInput.focus();
     });
+    document.getElementById("storage-export").addEventListener("click", exportStorageToExcel);
     document.getElementById("storage-container").addEventListener("click", function (e) {
       var card = e.target.closest ? e.target.closest(".material-card[data-row]") : null;
       if (!card) return;
@@ -2086,21 +2091,11 @@
     });
   }
 
-  function renderStorageResults() {
-    var rows = state.data.storageItems || [];
+  // 依關鍵字篩出的全部結果(已排序);沒有關鍵字時回傳 null
+  function storageMatches() {
     var q = storageQuery.trim().toLowerCase();
-
-    var countEl = document.getElementById("storage-result-count");
-    var container = document.getElementById("storage-container");
-    if (!container) return;
-
-    if (!q) {
-      if (countEl) countEl.textContent = "";
-      container.innerHTML = '<div class="empty-state">請輸入關鍵字開始查詢</div>';
-      return;
-    }
-
-    var results = rows.map(effectiveItem).filter(function (r) {
+    if (!q) return null;
+    var results = (state.data.storageItems || []).map(effectiveItem).filter(function (r) {
       return r.code.toLowerCase().indexOf(q) !== -1 ||
         r.name.toLowerCase().indexOf(q) !== -1 ||
         r.spec.toLowerCase().indexOf(q) !== -1 ||
@@ -2109,6 +2104,50 @@
     results.sort(function (a, b) {
       return a.code < b.code ? -1 : a.code > b.code ? 1 : (a.row || 0) - (b.row || 0);
     });
+    return results;
+  }
+
+  // 把目前查詢到的全部結果(不受畫面只顯示前幾筆的限制)下載成 Excel
+  function exportStorageToExcel() {
+    var results = storageMatches();
+    if (!results || !results.length) return;
+    var withCost = showCost();
+    var sheetRows = results.map(function (r) {
+      var o = { "材料品號": r.code, "品名": r.name, "規格": r.spec, "庫存數量": r.stockQty };
+      if (withCost) {
+        var c = costOf(r.code);
+        o["單位成本"] = c === null || c === undefined || c === "" || isNaN(Number(c)) ? "" : Number(c);
+      }
+      o["類別"] = r.category;
+      o["儲放地點"] = r.location;
+      o["儲位"] = r.bin;
+      return o;
+    });
+    var ws = XLSX.utils.json_to_sheet(sheetRows);
+    ws["!cols"] = [{ wch: 14 }, { wch: 22 }, { wch: 36 }, { wch: 10 }].concat(withCost ? [{ wch: 10 }] : []).concat([{ wch: 12 }, { wch: 14 }, { wch: 12 }]);
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "庫存查詢");
+    var d = new Date();
+    var kw = storageQuery.trim().replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 30);
+    XLSX.writeFile(wb, "庫存查詢_" + kw + "_" + d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + ".xlsx");
+    showToast("已下載 " + results.length + " 筆庫存資料");
+  }
+
+  function renderStorageResults() {
+    var rows = state.data.storageItems || [];
+
+    var countEl = document.getElementById("storage-result-count");
+    var container = document.getElementById("storage-container");
+    var exportBtn = document.getElementById("storage-export");
+    if (!container) return;
+
+    var results = storageMatches();
+    if (exportBtn) exportBtn.disabled = !(results && results.length);
+    if (!results) {
+      if (countEl) countEl.textContent = "";
+      container.innerHTML = '<div class="empty-state">請輸入關鍵字開始查詢</div>';
+      return;
+    }
 
     var total = results.length;
     var truncated = total > STORAGE_MAX_SHOW;

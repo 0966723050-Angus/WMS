@@ -1428,3 +1428,13 @@ body.scan-open .modal-backdrop { -webkit-backdrop-filter: none; backdrop-filter:
   .lbl-table.erpq-dtable tbody td { font-size: 13.5px; font-weight: 500; }
   .erpq-dnone { padding: 10px 14px; background: var(--surface-alt); border-radius: 12px; }
 }
+
+/* 庫存查詢:搜尋列右側的「下載 Excel」 */
+.storage-toolbar { align-items: center; flex-wrap: nowrap; }
+.storage-toolbar .btn-export { flex: 0 0 auto; height: 42px; }
+.storage-toolbar .btn-export:disabled { opacity: 0.45; cursor: default; box-shadow: none; }
+@media (max-width: 600px) {
+  .storage-toolbar .btn-export { padding: 0 12px; gap: 4px; font-size: 14px; }
+  .storage-toolbar .btn-export .lbl-long { display: none; }
+  .storage-toolbar .btn-export .lbl-short { display: inline; }
+}
