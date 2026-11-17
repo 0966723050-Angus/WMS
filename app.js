@@ -28,6 +28,14 @@
     return n.toLocaleString("zh-Hant");
   }
 
+  // 單位成本:至少 2 位、最多 4 位小數;沒有資料顯示「-」
+  function fmtCost(v) {
+    if (v === null || v === undefined || v === "") return "-";
+    var n = Number(v);
+    if (isNaN(n)) return esc(v);
+    return n.toLocaleString("zh-Hant", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+  }
+
   function joinLines(arr) {
     if (!arr || !arr.length) return "";
     return arr.join("\n");
@@ -1912,7 +1920,8 @@
           '</div>' +
           '<div class="material-grid">' +
             '<div><span class="k">庫存數量:</span> <span class="v">' + fmtNum(r.stockQty) + '</span></div>' +
-            '<div><span class="k">類別:</span> <span class="v">' + esc(r.category) + '</span></div>' +
+            '<div><span class="k">單位成本:</span> <span class="v">' + fmtCost(r.unitCost) + '</span></div>' +
+            '<div class="full"><span class="k">類別:</span> <span class="v">' + esc(r.category) + '</span></div>' +
             '<div class="full"><span class="k">儲放地點:</span> <span class="v">' + esc(r.location) + '</span></div>' +
             '<div class="full"><span class="k">儲位:</span> <span class="v">' + esc(r.bin) + '</span></div>' +
           '</div>' +
@@ -2049,7 +2058,7 @@
             '<div class="material-code">' + esc(item.code) + '</div>' +
             '<div class="material-name">' + esc(item.name) + '</div>' +
             (item.spec ? '<div class="material-spec">' + esc(item.spec) + '</div>' : '') +
-            '<div class="material-spec">庫存數量: ' + fmtNum(item.stockQty) + '</div>' +
+            '<div class="material-spec">庫存數量: ' + fmtNum(item.stockQty) + '　單位成本: ' + fmtCost(item.unitCost) + '</div>' +
           '</div>' +
           comboHtml("category", "類別", item.category) +
           comboHtml("location", "儲放地點", item.location) +

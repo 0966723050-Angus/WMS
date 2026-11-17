@@ -151,12 +151,14 @@ def main():
             if not row or not row[0]:
                 continue
             mat_code, mat_name, spec, stock_qty, category, location, bin_no = row[:7]
+            unit_cost = row[7] if len(row) > 7 else None   # H 欄「單位成本」(WMS 一鍵更新由 ERP INVR17 寫入)
             storage_items.append({
                 "row": row_no,
                 "code": norm(mat_code),
                 "name": norm(mat_name),
                 "spec": norm(spec),
                 "stockQty": stock_qty if stock_qty is not None else 0,
+                "unitCost": unit_cost if isinstance(unit_cost, (int, float)) else None,
                 "category": norm(category),
                 "location": norm(location),
                 "bin": norm(bin_no),
