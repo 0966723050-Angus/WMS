@@ -136,9 +136,11 @@
     { key: "erp_return", label: "ERP:退貨單簽核" },
     { key: "erp_sign", label: "ERP:待簽核表單確認" },
     { key: "erp_wms", label: "ERP:WMS更新" },
+    { key: "erp_mo", label: "ERP:製造命令查詢" },
+    { key: "erp_po", label: "ERP:採購單查詢" },
     { key: "cost", label: "庫存單位成本" }
   ];
-  var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_sign: false, erp_wms: false, cost: false };
+  var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_sign: false, erp_wms: false, erp_mo: false, erp_po: false, cost: false };
 
   function can(perm) { return !!(session && session.perms && session.perms[perm]); }
 
@@ -733,7 +735,11 @@
     // 待簽核表單:打勾的清單
     sign: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3v2h6V3M9 13l2 2 4-4"/></svg>',
     // 更新:循環箭頭
-    wms: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 01-14.3 4.9M4 12a8 8 0 0114.3-4.9"/><path d="M18.5 3v4.2h-4.2M5.5 21v-4.2h4.2"/></svg>'
+    wms: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 01-14.3 4.9M4 12a8 8 0 0114.3-4.9"/><path d="M18.5 3v4.2h-4.2M5.5 21v-4.2h4.2"/></svg>',
+    // 製造命令:工廠
+    mo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21V10l6 4V10l6 4V6l6 3v12z"/><path d="M7 18h2M12 18h2M17 18h2"/></svg>',
+    // 採購單:購物車
+    po: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.6 12.4a1 1 0 001 .8h9.7a1 1 0 001-.8L21 7H6"/></svg>'
   };
 
   var ERP_PAGES = {};   // 目前沒有「建置中」的空白頁
@@ -1699,10 +1705,166 @@
     tickTimer = setTimeout(tick, 10000);
   }
 
+  // ---------- ERP 查詢:製造命令(製令查詢 / 變更查詢)、採購單(採單查詢 / 變更查詢) ----------
+  // 按「確認」把條件送到中繼 → 電腦端監看程式取走 → Claude 在鼎新 ERP 查詢 → 清單回傳,這一頁每 4 秒更新一次狀態。
+  var ERPQ_CONFIRM = { N: "未確認", Y: "已確認" };
+  var ERPQ_KINDS = {
+    moq:   { group: "製造命令", title: "製令查詢", perm: "erp_mo", confirm: ["N", "Y"],
+             fields: [["proj", "專案代號"], ["prod", "產品品號"], ["type", "製令單別"], ["no", "製令單號"]] },
+    mochg: { group: "製造命令", title: "變更查詢", perm: "erp_mo", confirm: ["N"],
+             fields: [["type", "製令單別"], ["no", "製令單號"]] },
+    poq:   { group: "採購單", title: "採單查詢", perm: "erp_po", confirm: ["N", "Y"],
+             fields: [["type", "採購單別"], ["no", "採購單號"]] },
+    pochg: { group: "採購單", title: "變更查詢", perm: "erp_po", confirm: ["N"],
+             fields: [["type", "採購單別"], ["no", "採購單號"]] }
+  };
+  var erpqCond = {};      // 各頁輸入過的條件(換頁回來還在)
+  var erpqInstance = 0;   // 每次進入查詢頁 +1,舊頁面的背景更新看到編號不同就停止
+
+  function erpqCondText(kind, cond) {
+    var K = ERPQ_KINDS[kind], parts = [];
+    K.fields.forEach(function (f) { if (cond && cond[f[0]]) parts.push(f[1] + "=" + cond[f[0]]); });
+    if (cond && cond.confirm) parts.push("確認碼=" + (ERPQ_CONFIRM[cond.confirm] || cond.confirm));
+    return parts.join("、");
+  }
+
+  function renderErpQuery(app, kind) {
+    var K = ERPQ_KINDS[kind];
+    if (!can(K.perm)) { location.hash = "#/erp"; return; }
+    var myInst = ++erpqInstance, timer = null, busy = false;
+    var C = erpqCond[kind] || (erpqCond[kind] = {});
+    var alive = function () { return myInst === erpqInstance && document.body.contains(document.getElementById("erpq-form")); };
+
+    // 專案代號 / 產品品號的輸入建議(來自在線製令資料,也可以自己打)
+    var lists = "";
+    if (kind === "moq") {
+      var seenP = {}, prods = [];
+      (state.data.projects || []).forEach(function (p) {
+        (p.orders || []).forEach(function (o) { if (o.productCode && !seenP[o.productCode]) { seenP[o.productCode] = 1; prods.push(o); } });
+      });
+      lists = '<datalist id="erpq-dl-proj">' + (state.data.projects || []).map(function (p) { return '<option value="' + esc(p.code) + '">' + esc(p.name) + '</option>'; }).join("") + '</datalist>' +
+        '<datalist id="erpq-dl-prod">' + prods.map(function (o) { return '<option value="' + esc(o.productCode) + '">' + esc(o.productName) + '</option>'; }).join("") + '</datalist>';
+    }
+
+    app.innerHTML =
+      '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/erp">ERP</a> / ' + esc(K.group) + ' / ' + esc(K.title) + '</div>' +
+      '<h1 class="page-title">' + esc(K.title) + '<span class="sub">' + esc(K.group) + '</span></h1>' +
+      '<section class="sign-card erpq-card">' +
+        '<form id="erpq-form" class="erpq-form" autocomplete="off">' +
+          K.fields.map(function (f) {
+            var extra = f[0] === "proj" ? ' list="erpq-dl-proj"' : f[0] === "prod" ? ' list="erpq-dl-prod"' :
+              f[0] === "type" ? ' inputmode="numeric" maxlength="6"' : f[0] === "no" ? ' inputmode="numeric" maxlength="14"' : "";
+            return '<label class="erpq-f"><span>' + esc(f[1]) + '</span><input type="text" data-k="' + f[0] + '" value="' + esc(C[f[0]] || "") + '"' + extra + ' spellcheck="false" /></label>';
+          }).join("") +
+          '<label class="erpq-f"><span>確認碼</span><select data-k="confirm"><option value=""></option>' +
+            K.confirm.map(function (v) { return '<option value="' + v + '"' + (C.confirm === v ? " selected" : "") + '>' + ERPQ_CONFIRM[v] + '</option>'; }).join("") +
+          '</select></label>' +
+          '<div class="erpq-btns">' +
+            '<button type="button" class="btn btn-sm btn-secondary" id="erpq-clear">清除</button>' +
+            '<button type="submit" class="btn btn-sm" id="erpq-ok">確認</button>' +
+          '</div>' +
+        '</form>' +
+        '<p class="erpq-msg" id="erpq-msg"></p>' +
+      '</section>' +
+      '<section class="sign-card erpq-card">' +
+        '<h2 class="sign-h">查詢結果</h2>' +
+        '<div class="erpq-status" id="erpq-status">讀取中…</div>' +
+        '<div id="erpq-result"></div>' +
+      '</section>' + lists;
+
+    var form = document.getElementById("erpq-form");
+    function msg(t, bad) { var el = document.getElementById("erpq-msg"); if (el) { el.textContent = t || ""; el.classList.toggle("bad", !!bad); } }
+    function setBusy(b) { busy = b; var ok = document.getElementById("erpq-ok"); if (ok) { ok.disabled = b; ok.textContent = b ? "查詢中…" : "確認"; } }
+
+    form.addEventListener("input", function (e) { var k = e.target.getAttribute("data-k"); if (k) C[k] = e.target.value.trim(); });
+    form.addEventListener("change", function (e) { var k = e.target.getAttribute("data-k"); if (k) C[k] = e.target.value.trim(); });
+    document.getElementById("erpq-clear").addEventListener("click", function () {
+      Object.keys(C).forEach(function (k) { delete C[k]; });
+      var els = form.querySelectorAll("[data-k]");
+      for (var i = 0; i < els.length; i++) els[i].value = "";
+      msg("");
+      var first = form.querySelector("input[data-k]");
+      if (first) first.focus();
+    });
+
+    function showRequest(r) {
+      var st = document.getElementById("erpq-status"), box = document.getElementById("erpq-result");
+      if (!st || !box) return;
+      if (!r) {
+        st.className = "erpq-status";
+        st.textContent = "尚未查詢。輸入條件後按「確認」,電腦會到 ERP 查詢並把清單傳回這裡(約 1~3 分鐘)。";
+        box.innerHTML = "";
+        setBusy(false);
+        return;
+      }
+      var when = new Date(r.ts).toLocaleString("zh-TW", { hour12: false });
+      var head = '<div class="erpq-cond">條件:' + esc(erpqCondText(kind, r.cond) || "(無)") + ' · ' + esc(when) + '</div>';
+      st.className = "erpq-status" + (r.state === "error" ? " bad" : r.state === "done" ? " ok" : " busy");
+      if (r.state === "queued") {
+        st.innerHTML = head + '<b>已送出,等待電腦端開始查詢…</b>' +
+          (Date.now() - r.ts > 5 * 60000 ? '<div class="erpq-hint">超過 5 分鐘還沒開始,可能是電腦端的監看沒有開啟。</div>' : '');
+        box.innerHTML = "";
+      } else if (r.state === "running") {
+        st.innerHTML = head + '<b>電腦正在 ERP 查詢中…</b>';
+        box.innerHTML = "";
+      } else if (r.state === "error") {
+        st.innerHTML = head + '<b>查詢失敗:' + esc(r.msg || "") + '</b>';
+        box.innerHTML = "";
+      } else {
+        var res = r.result || { cols: [], rows: [] };
+        var cols = res.cols || [], rows = res.rows || [];
+        st.innerHTML = head + '<b>查詢完成:共 ' + rows.length + ' 筆</b>' + (r.msg ? '<div class="erpq-hint">' + esc(r.msg) + '</div>' : '');
+        box.innerHTML = rows.length
+          ? '<div class="erpq-wrap"><table class="lbl-table erpq-table"><thead><tr class="lbl-titles">' +
+              cols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join("") + '</tr></thead><tbody>' +
+              rows.map(function (row) {
+                return '<tr>' + cols.map(function (c, i) { return '<td data-k="' + esc(c) + '">' + esc(row[i]) + '</td>'; }).join("") + '</tr>';
+              }).join("") + '</tbody></table></div>'
+          : '<div class="lbl-empty">ERP 查無符合條件的單據</div>';
+      }
+      setBusy(r.state === "queued" || r.state === "running");
+    }
+
+    function poll(id) {
+      clearTimeout(timer);
+      if (!alive()) return;
+      api("erpq_get", id ? { id: id } : { kind: kind }).then(function (res) {
+        if (!alive() || !res.ok) return;
+        showRequest(res.request);
+        var r = res.request;
+        if (r && (r.state === "queued" || r.state === "running")) timer = setTimeout(function () { poll(r.id); }, 4000);
+      }).catch(function () {
+        if (alive()) timer = setTimeout(function () { poll(id); }, 8000);   // 連線失敗就晚一點再試
+      });
+    }
+
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      if (busy) return;
+      var cond = {};
+      K.fields.forEach(function (f) { if (C[f[0]]) cond[f[0]] = C[f[0]]; });
+      if (C.confirm) cond.confirm = C.confirm;
+      if (!Object.keys(cond).length) { msg("請至少輸入一個查詢條件", true); return; }
+      msg("");
+      setBusy(true);
+      api("erpq_request", { kind: kind, cond: cond }).then(function (res) {
+        if (!res.ok) throw new Error(res.error || "送出失敗");
+        showRequest(res.request);
+        poll(res.request.id);
+      }).catch(function (err) {
+        setBusy(false);
+        msg(err.message, true);
+      });
+    });
+
+    poll(null);
+  }
+
   function renderErp(app, sub) {
     if (!canSeeErp()) { location.hash = "#/"; return; } // 沒有任何 ERP 權限
     if (sub === "settings") { renderErpSettings(app); return; }
     if (sub === "sign") { renderErpSign(app); return; }
+    if (ERPQ_KINDS[sub]) { renderErpQuery(app, sub); return; }
     var page = ERP_PAGES[sub];
     if (sub && !page) { location.hash = "#/erp"; return; }
     if (page && !can(page.perm)) { location.hash = "#/erp"; return; } // 沒有這個按鍵的權限
@@ -1733,6 +1895,14 @@
               '<span class="erp-tile-icon">' + ERP_ICONS.wms + '</span><span class="erp-tile-title">WMS更新</span>' +
               '<span class="erp-tile-note" id="wms-update-note"></span>' +
               '<span class="erp-tile-note" id="wms-sched-note"></span></button>'
+            : '') +
+          (can("erp_mo")
+            ? '<div class="erp-tile erp-tile-group"><span class="erp-tile-icon">' + ERP_ICONS.mo + '</span><span class="erp-tile-title">製造命令</span>' +
+              '<div class="erp-tile-actions"><a class="btn btn-sm" href="#/erp/moq">製令查詢</a><a class="btn btn-sm btn-secondary" href="#/erp/mochg">變更查詢</a></div></div>'
+            : '') +
+          (can("erp_po")
+            ? '<div class="erp-tile erp-tile-group"><span class="erp-tile-icon">' + ERP_ICONS.po + '</span><span class="erp-tile-title">採購單</span>' +
+              '<div class="erp-tile-actions"><a class="btn btn-sm" href="#/erp/poq">採單查詢</a><a class="btn btn-sm btn-secondary" href="#/erp/pochg">變更查詢</a></div></div>'
             : '') +
         '</div>';
       if (can("erp_receipt")) setupPuri09("receipt");

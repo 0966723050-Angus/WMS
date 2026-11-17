@@ -94,9 +94,9 @@ function makeSession_(email) {
 // cost 庫存單位成本(有此權限才在 auth / me 回傳 COST_KEY,網頁才能解開 cost.enc)
 // 帳號記錄裡沒有 perms 的舊帳號 = 只有「儲位編輯」(維持原本能做的事)。主管理者(ADMIN_EMAIL)永遠全部權限。
 
-var PERM_KEYS = ['admin', 'edit', 'receive', 'ret', 'erp_receipt', 'erp_return', 'erp_issue', 'erp_sign', 'erp_wms', 'cost'];
+var PERM_KEYS = ['admin', 'edit', 'receive', 'ret', 'erp_receipt', 'erp_return', 'erp_issue', 'erp_sign', 'erp_wms', 'erp_mo', 'erp_po', 'cost'];
 // 沒設定過的項目用預設值:儲位編輯、收料原本所有人都能用,所以舊帳號維持有這兩項
-var PERM_DEFAULTS = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_issue: false, erp_sign: false, erp_wms: false, cost: false };
+var PERM_DEFAULTS = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_issue: false, erp_sign: false, erp_wms: false, erp_mo: false, erp_po: false, cost: false };
 
 // 單位成本金鑰:只給有 cost 權限的人
 function costKeyFor_(perms) {
@@ -662,6 +662,104 @@ function signAck_(ts, msg) {
   return { ok: true, removed: removed };
 }
 
+// ---------- ERP 查詢(製令 / 製令變更 / 採購單 / 採購變更):網頁送出條件 → 電腦端在 ERP 查詢 → 清單回傳網頁 ----------
+var ERPQ_PERM = { moq: 'erp_mo', mochg: 'erp_mo', poq: 'erp_po', pochg: 'erp_po' };
+var ERPQ_QUEUE_KEY = 'ERPQ_QUEUE';     // [{id, kind, cond, by, ts, state(queued/running/done/error), msg, parts, n}]
+var ERPQ_RES_PREFIX = 'erpqr_';        // 結果分段存放:erpqr_<id>_<段>(屬性值有 9KB 上限,中文 1 字 3 bytes)
+var ERPQ_KEEP = 12;                    // 只保留最近幾筆查詢(含結果)
+var ERPQ_CHUNK = 2500;
+var ERPQ_MAX_CHARS = 60000;            // 單次結果上限(太大就截斷列數)
+var ERPQ_STALE_MS = 30 * 60 * 1000;    // 執行中超過 30 分鐘沒回報就當失敗
+
+function erpqQueue_() { return readJson_(ERPQ_QUEUE_KEY) || []; }
+function erpqSave_(q) { props_().setProperty(ERPQ_QUEUE_KEY, JSON.stringify(q)); }
+function erpqDropResult_(r) {
+  for (var i = 0; i < (r.parts || 0); i++) props_().deleteProperty(ERPQ_RES_PREFIX + r.id + '_' + i);
+}
+
+function erpqRequest_(body, me) {
+  var kind = String(body.kind || '');
+  if (!ERPQ_PERM[kind]) return { ok: false, error: '查詢種類不正確' };
+  if (!me.perms[ERPQ_PERM[kind]]) return { ok: false, error: '您沒有「' + (ERPQ_PERM[kind] === 'erp_mo' ? 'ERP:製造命令' : 'ERP:採購單') + '」的權限' };
+  var c = body.cond || {}, cond = {};
+  ['proj', 'prod', 'type', 'no', 'confirm'].forEach(function (k) { var v = clip_(c[k], 40); if (v) cond[k] = v; });
+  if (cond.confirm && ['N', 'Y'].indexOf(cond.confirm) < 0) delete cond.confirm;
+  if (!Object.keys(cond).length) return { ok: false, error: '請至少輸入一個查詢條件' };
+  var q = erpqQueue_();
+  var busy = q.filter(function (r) { return r.by === me.email && r.kind === kind && (r.state === 'queued' || r.state === 'running') && Date.now() - r.ts < ERPQ_STALE_MS; });
+  if (busy.length) return { ok: false, error: '上一筆查詢還在執行中,請稍候' };
+  var rec = { id: Utilities.getUuid().replace(/-/g, '').slice(0, 12), kind: kind, cond: cond, by: me.email, ts: Date.now(), state: 'queued', msg: '', parts: 0, n: 0 };
+  q.push(rec);
+  while (q.length > ERPQ_KEEP) { var old = q.shift(); erpqDropResult_(old); }
+  erpqSave_(q);
+  return { ok: true, request: rec };
+}
+
+function erpqView_(r, withResult) {
+  if (!r) return null;
+  var v = { id: r.id, kind: r.kind, cond: r.cond, by: r.by, ts: r.ts, state: r.state, msg: r.msg, n: r.n, done: r.done || 0 };
+  if ((v.state === 'queued' || v.state === 'running') && Date.now() - r.ts > ERPQ_STALE_MS) { v.state = 'error'; v.msg = '電腦端超過 30 分鐘沒有回報,請再查一次'; }
+  if (withResult && r.state === 'done' && r.parts) {
+    var txt = '';
+    for (var i = 0; i < r.parts; i++) txt += props_().getProperty(ERPQ_RES_PREFIX + r.id + '_' + i) || '';
+    try { v.result = JSON.parse(txt); } catch (err) { v.result = null; v.msg = '結果讀取失敗'; }
+  }
+  return v;
+}
+
+// 網頁:id 指定一筆,或 kind 取這個人這種查詢的最新一筆
+function erpqGet_(body, me) {
+  var q = erpqQueue_(), r = null;
+  if (body.id) r = q.filter(function (x) { return x.id === String(body.id); })[0];
+  else if (body.kind) r = q.filter(function (x) { return x.kind === String(body.kind) && x.by === me.email; }).pop();
+  if (r && r.by !== me.email && !me.isAdmin) r = null;
+  return { ok: true, request: erpqView_(r, true) };
+}
+
+// 電腦端(監看程式):取走最早一筆排隊中的查詢,標記為執行中
+function erpqClaim_() {
+  var q = erpqQueue_();
+  for (var i = 0; i < q.length; i++) {
+    if (q[i].state === 'queued') {
+      q[i].state = 'running';
+      q[i].claimed = Date.now();
+      erpqSave_(q);
+      return { ok: true, pending: true, request: q[i] };
+    }
+  }
+  return { ok: true, pending: false };
+}
+
+// 執行端回報結果:{id, ok, cols:[欄名], rows:[[值...]], msg}
+function erpqResult_(body) {
+  var q = erpqQueue_();
+  var r = q.filter(function (x) { return x.id === String(body.id || ''); })[0];
+  if (!r) return { ok: false, error: '找不到這筆查詢' };
+  erpqDropResult_(r);
+  r.parts = 0; r.n = 0; r.done = Date.now();
+  if (!body.ok) {
+    r.state = 'error';
+    r.msg = clip_(body.msg || '查詢失敗', 200);
+  } else {
+    var cols = (Array.isArray(body.cols) ? body.cols : []).map(function (c) { return clip_(c, 30); });
+    var rows = (Array.isArray(body.rows) ? body.rows : []).map(function (row) {
+      return (Array.isArray(row) ? row : []).slice(0, cols.length).map(function (v) { return v === null || v === undefined ? '' : clip_(v, 80); });
+    });
+    var total = rows.length, txt = JSON.stringify({ cols: cols, rows: rows });
+    while (txt.length > ERPQ_MAX_CHARS && rows.length > 1) {
+      rows = rows.slice(0, Math.floor(rows.length * 0.8));
+      txt = JSON.stringify({ cols: cols, rows: rows });
+    }
+    for (var i = 0; i * ERPQ_CHUNK < txt.length; i++) props_().setProperty(ERPQ_RES_PREFIX + r.id + '_' + i, txt.slice(i * ERPQ_CHUNK, (i + 1) * ERPQ_CHUNK));
+    r.parts = i;
+    r.n = rows.length;
+    r.state = 'done';
+    r.msg = clip_(body.msg || '', 200) + (rows.length < total ? '(共 ' + total + ' 筆,只顯示前 ' + rows.length + ' 筆)' : '');
+  }
+  erpqSave_(q);
+  return { ok: true };
+}
+
 // 執行端(Claude)回報逐張結果:done 的從清單移除;failed 的留著並寫上失敗原因,網頁會標示
 function signResult_(body) {
   var done = Array.isArray(body.done) ? body.done.map(String) : [];
@@ -949,6 +1047,11 @@ function doPost(e) {
 
     // 電腦端回報「收料」工作表內容(用同步金鑰,不是登入工作階段)
     // 電腦端截圖辨識程式送上待簽核表單(用同步金鑰)
+    if (action === 'erpq_result') {   // 電腦端回報 ERP 查詢結果(同步金鑰;結果可能較大所以用 POST)
+      var kerr3 = checkSyncKey_(body.key);
+      if (kerr3) return json_({ ok: false, error: kerr3 });
+      return json_(erpqResult_(body));
+    }
     if (action === 'signforms_push') {
       var kerr2 = checkSyncKey_(body.key);
       if (kerr2) return json_({ ok: false, error: kerr2 });
@@ -1035,6 +1138,8 @@ function doPost(e) {
         return { id: r.id, ts: r.ts, by: r.by, name: r.name, state: r.state, msg: r.msg, n: r.n };
       }) });
     }
+    if (action === 'erpq_request') return json_(erpqRequest_(body, me));
+    if (action === 'erpq_get') return json_(erpqGet_(body, me));
     if (action === 'return_list') {
       if (!me.perms.erp_return) return denied_('退貨單簽核');
       return json_(receiptListView_('ret'));
@@ -1075,7 +1180,7 @@ function doGet(e) {
   try {
     if (p.action === 'pull' || p.action === 'ack' || p.action === 'set_data_key' || p.action === 'set_cost_key' || p.action === 'wms_report' ||
         p.action === 'puri09_claim' || p.action === 'puri09_report' || p.action === 'ret_claim' || p.action === 'ret_report' ||
-        p.action === 'sign_claim' || p.action === 'sign_report' || p.action === 'sign_ack' || p.action === 'sign_notify_ack' || p.action === 'signimg_get' || p.action === 'signimg_report') {
+        p.action === 'sign_claim' || p.action === 'sign_report' || p.action === 'sign_ack' || p.action === 'sign_notify_ack' || p.action === 'signimg_get' || p.action === 'signimg_report' || p.action === 'erpq_claim') {
       var err = checkSyncKey_(p.key);
       if (err) return json_({ ok: false, error: err });
 
@@ -1084,6 +1189,7 @@ function doGet(e) {
       if (p.action === 'ret_claim') return json_(puriClaim_('ret'));
       if (p.action === 'ret_report') return json_(puriReport_(String(p.state || ''), p.msg, 'ret'));
       if (p.action === 'sign_claim') return json_(puriClaim_('sign'));
+      if (p.action === 'erpq_claim') return json_(erpqClaim_());
       if (p.action === 'sign_ack') return json_(signAck_(p.ts, p.msg));
       if (p.action === 'sign_notify_ack') return json_(signNotifyAck_(p.ids));
       if (p.action === 'sign_report') {
