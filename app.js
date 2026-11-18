@@ -3512,7 +3512,8 @@
     { k: "assy", t: "Ass'y", w: 14 }, { k: "code", t: "料號", w: 14 }, { k: "name", t: "品名", w: 22 },
     { k: "spec", t: "規格", w: 36 }, { k: "qty", t: "數量", w: 8 }, { k: "note", t: "備註", w: 16 }, { k: "date", t: "列印日期", w: 12 }
   ];
-  var LABEL_FILTERS = ["projCode", "projName", "orderNo", "assy"];   // 表頭下拉篩選的欄位
+  var LABEL_FILTERS = ["projCode", "projName", "orderNo", "prodCode", "assy"];   // 表格上方的下拉篩選欄位
+  var LABEL_FILTER_NAMES = { projCode: "專案代號", projName: "專案名稱", orderNo: "製令單號", prodCode: "產品品號", assy: "Ass'y" };
   var LABEL_MAX_SHOW = 500;      // 一次最多列出的筆數(太多會拖慢手機)
   var labelSel = null;           // 系統選取頁:篩選、勾選、改過的數量/備註(換頁回來還在)
   var labelManual = null;        // 手動設置頁的各列
@@ -3542,7 +3543,7 @@
         (state.data.materials[o.orderNo] || []).forEach(function (r) {
           out.push({
             key: o.orderNo + "|" + r.seq + "|" + r.materialCode,
-            projCode: p.code, projName: p.name, orderNo: shortOrderNo(o.orderNo), assy: o.productName,
+            projCode: p.code, projName: p.name, orderNo: shortOrderNo(o.orderNo), prodCode: o.productCode || "", assy: o.productName,
             code: r.materialCode, name: r.materialName, spec: r.spec, defQty: r.needQty
           });
         });
@@ -3701,7 +3702,11 @@
 
   // ---- 系統選取(標籤選取) ----
   function renderLabelSelect(app) {
-    if (!labelSel) labelSel = { f: { projCode: "", projName: "", orderNo: "", assy: "" }, q: "", checked: {}, qty: {}, note: {} };
+    if (!labelSel) labelSel = { f: { projCode: "", projName: "", orderNo: "", prodCode: "", assy: "" }, q: "", checked: {}, qty: {}, note: {} };
+    if (labelSel.f.prodCode === undefined) labelSel.f.prodCode = "";
+    // 畫面欄位:比 Excel 多一欄「產品品號」(放在 Ass'y 左邊);Excel 欄位仍依 LABEL_COLS
+    var SEL_COLS = [];
+    LABEL_COLS.forEach(function (c) { if (c.k === "assy") SEL_COLS.push({ k: "prodCode", t: "產品品號" }); SEL_COLS.push(c); });
     var S = labelSel, all = labelSourceRows(), byKey = {}, cur = [], today = todayYmd();
     all.forEach(function (r) { byKey[r.key] = r; });
     Object.keys(S.checked).forEach(function (k) { if (!byKey[k]) delete S.checked[k]; });   // 資料更新後已不存在的列
@@ -3714,12 +3719,12 @@
         '<input type="search" id="lbl-q" placeholder="全文檢索:輸入關鍵字(專案、製令、Ass\'y、料號、品名、規格…)" value="' + esc(S.q) + '" />' +
         '<button type="button" class="btn btn-sm btn-secondary" id="lbl-reset">清除篩選</button>' +
       '</div>' +
+      '<div class="lbl-filterbar" id="lbl-filters"></div>' +
       '<div class="lbl-countrow"><p class="result-count" id="lbl-count"></p>' +
         '<label class="lbl-all-m"><input type="checkbox" id="lbl-all-m" /> 全選</label></div>' +   // 手機版(表頭隱藏時)的全選
       '<div class="lbl-wrap"><table class="lbl-table lbl-sel"><thead>' +
         '<tr class="lbl-titles"><th class="c-chk"><input type="checkbox" id="lbl-all" aria-label="全選" title="全選目前列出的項目" /></th>' +
-          LABEL_COLS.map(function (c) { return '<th class="c-' + c.k + '">' + esc(c.t) + '</th>'; }).join("") + '</tr>' +
-        '<tr class="lbl-filters" id="lbl-filters"></tr>' +
+          SEL_COLS.map(function (c) { return '<th class="c-' + c.k + '">' + esc(c.t) + '</th>'; }).join("") + '</tr>' +
       '</thead><tbody id="lbl-body"></tbody></table></div>';
 
     function match(r, skip) {
@@ -3732,15 +3737,15 @@
     function searchOk(r) {
       var terms = S.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
       if (!terms.length) return true;
-      var hay = [r.projCode, r.projName, r.orderNo, r.assy, r.code, r.name, r.spec, S.note[r.key] || ""].join("\n").toLowerCase();
+      var hay = [r.projCode, r.projName, r.orderNo, r.prodCode, r.assy, r.code, r.name, r.spec, S.note[r.key] || ""].join("\n").toLowerCase();
       return terms.every(function (t) { return hay.indexOf(t) > -1; });
     }
 
     // 下拉選單的選項:依其他篩選與全文檢索的結果列出該欄位有的值
     function renderFilters() {
-      var html = '<th class="c-chk"></th>';
-      LABEL_COLS.forEach(function (c) {
-        if (LABEL_FILTERS.indexOf(c.k) < 0) { html += '<th class="c-' + c.k + ' lbl-f-empty"></th>'; return; }
+      var html = "";
+      LABEL_FILTERS.forEach(function (k) {
+        var c = { k: k, t: LABEL_FILTER_NAMES[k] };
         var seen = {}, opts = [];
         all.forEach(function (r) {
           var v = r[c.k];
@@ -3748,10 +3753,10 @@
         });
         if (S.f[c.k] && !seen[S.f[c.k]]) opts.push(S.f[c.k]);
         opts.sort(function (a, b) { return String(a).localeCompare(String(b), "zh-Hant"); });
-        html += '<th class="c-' + c.k + '"><select data-f="' + c.k + '" aria-label="' + esc(c.t) + ' 篩選">' +
-          '<option value="">' + esc(c.t) + ':全部</option>' +
+        html += '<label class="lbl-f"><span>' + esc(c.t) + '</span><select data-f="' + c.k + '" aria-label="' + esc(c.t) + ' 篩選">' +
+          '<option value="">全部</option>' +
           opts.map(function (v) { return '<option value="' + esc(v) + '"' + (v === S.f[c.k] ? ' selected' : '') + '>' + esc(v) + '</option>'; }).join("") +
-          '</select></th>';
+          '</select></label>';
       });
       document.getElementById("lbl-filters").innerHTML = html;
     }
@@ -3767,6 +3772,7 @@
           '<td class="c-projCode" data-k="專案代號">' + esc(r.projCode) + '</td>' +
           '<td class="c-projName" data-k="專案名稱">' + esc(r.projName) + '</td>' +
           '<td class="c-orderNo" data-k="製令單號">' + esc(r.orderNo) + '</td>' +
+          '<td class="c-prodCode" data-k="產品品號">' + esc(r.prodCode) + '</td>' +
           '<td class="c-assy" data-k="Ass&#39;y">' + esc(r.assy) + '</td>' +
           '<td class="c-code" data-k="料號">' + esc(r.code) + '</td>' +
           '<td class="c-name" data-k="品名">' + esc(r.name) + '</td>' +
@@ -3774,7 +3780,7 @@
           '<td class="c-qty" data-k="數量"><input type="number" class="lbl-qty" inputmode="decimal" min="0" step="any" value="' + esc(qty) + '" aria-label="數量" /></td>' +
           '<td class="c-note" data-k="備註"><input type="text" class="lbl-note" maxlength="60" value="' + esc(S.note[r.key] || "") + '" aria-label="備註" /></td>' +
           '<td class="c-date" data-k="列印日期">' + today + '</td></tr>';
-      }).join("") : '<tr><td colspan="11" class="lbl-empty">沒有符合條件的物料</td></tr>';
+      }).join("") : '<tr><td colspan="12" class="lbl-empty">沒有符合條件的物料</td></tr>';
       updateCount();
     }
 
@@ -3810,6 +3816,7 @@
       // 換了上層條件後,下層的選擇對不上就清掉,避免整張表變空的
       if (!all.some(function (r) { return match(r, null); })) {
         if (k !== "orderNo") S.f.orderNo = "";
+        if (k !== "prodCode") S.f.prodCode = "";
         if (k !== "assy") S.f.assy = "";
       }
       refresh();
@@ -3823,7 +3830,7 @@
     });
 
     document.getElementById("lbl-reset").addEventListener("click", function () {
-      S.f = { projCode: "", projName: "", orderNo: "", assy: "" };
+      S.f = { projCode: "", projName: "", orderNo: "", prodCode: "", assy: "" };
       S.q = "";
       document.getElementById("lbl-q").value = "";
       refresh();
