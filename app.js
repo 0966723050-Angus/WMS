@@ -529,7 +529,7 @@
     recvRows = [];      // 每次重畫重新編號收料鈕
     recvOrderOf = null; // 資料可能重新載入,製令對照表重建
     // 含物料表格的頁面(專案/製令)在寬螢幕上用較寬的版面,避免出現左右捲軸
-    app.classList.toggle("app-wide", route.view === "project" || route.view === "order" || (route.view === "label" && !!route.sub) || (route.view === "erp" && route.sub === "vendor"));
+    app.classList.toggle("app-wide", route.view === "project" || route.view === "order" || (route.view === "label" && !!route.sub) || (route.view === "erp" && !!route.sub));
     // 功能列:目前所在頁面的按鍵反白
     var navOf = { storage: "storage-btn", erp: "erp-btn", admin: "admin-btn", label: "label-btn" };
     var activeNav = navOf[route.view] || "home-btn";
