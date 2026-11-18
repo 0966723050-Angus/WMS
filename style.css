@@ -1539,3 +1539,38 @@ table.data-table th { font-weight: 800; font-size: 12.5px; box-shadow: inset 0 -
   .erp-tile-actions { gap: 6px; }
   .erp-tile-actions .btn { font-size: 13px; padding: 0 2px; }
 }
+
+/* ===== 全站標題列一律橘色底白字(使用者指定);篩選列用淡橘底 ===== */
+table.data-table th,
+.lbl-table thead th,
+.erpq-dtable th,
+.vnd-table thead th { background: #f97316; color: #ffffff; font-weight: 800; }
+.lbl-table thead .lbl-filters th { background: #fff1e6; }
+.sign-headrow { background: #f97316; color: #ffffff; font-weight: 800; border-radius: 8px; padding: 8px 6px; }
+.sign-headrow .sign-all-l, .sign-headrow label { color: #ffffff; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .lbl-table thead .lbl-filters th { background: #3a2412; }
+}
+
+/* ===== 電腦版:表格與欄位文字放大一點 ===== */
+@media (min-width: 721px) {
+  table.data-table { font-size: 14.5px; }
+  table.data-table th { font-size: 13.5px; }
+  .lbl-table { font-size: 14.5px; }
+  .lbl-table thead th { font-size: 13.5px; }
+  .lbl-table select, .lbl-table input[type="text"], .lbl-table input[type="number"], .lbl-table input[type="date"] { font-size: 14.5px; height: 34px; }
+  .erpq-table { font-size: 15px; }
+  .erpq-table th { font-size: 13.5px; }
+  .erpq-dtable { font-size: 14px; }
+  .erpq-dtable th { font-size: 13px; }
+  .erpq-f span { font-size: 13.5px; }
+  .erpq-f input, .erpq-f select { font-size: 16px; }
+  .sign-row { font-size: 15px; }
+  .sign-row input:not([type="checkbox"]), .sign-row select { font-size: 15px; }
+  .sign-headrow { font-size: 13.5px; }
+  .sign-by { font-size: 13.5px; }
+  .sign-img { font-size: 14px; }
+}
+@media (min-width: 700px) and (max-width: 1279px) {
+  table.data-table { font-size: 13.5px; }
+}
