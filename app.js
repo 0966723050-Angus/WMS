@@ -1741,8 +1741,8 @@
              fields: [["type", "銷貨單別"], ["no", "銷貨單號"]] },
     srq:   { group: "銷貨單", title: "銷退查詢", perm: "erp_sales", confirm: ["N", "Y"],
              fields: [["type", "銷退單別"], ["no", "銷退單號"]] },
-    coq:   { group: "客戶訂單", title: "訂單查詢", perm: "erp_co", confirm: ["N", "Y"],
-             fields: [["type", "訂單單別"], ["no", "訂單單號"]] },
+    coq:   { group: "客戶訂單", title: "訂單查詢", perm: "erp_co", confirm: ["N", "Y"],   // proj / prod 鍵借用為客戶單號 / 客戶名稱(erpq_sql.py 對應 TC012 / TC053)
+             fields: [["type", "訂單單別"], ["no", "訂單單號"], ["proj", "客戶單號"], ["prod", "客戶名稱"]] },
     cochg: { group: "客戶訂單", title: "變更查詢", perm: "erp_co", confirm: ["N"],
              fields: [["type", "訂單單別"], ["no", "訂單單號"]] },
     ivi:   { group: "庫存異動", title: "庫存領料", perm: "erp_inv", confirm: ["N", "Y"], fields: [["no", "單號"]] },
@@ -1867,7 +1867,7 @@
       '<section class="sign-card erpq-card">' +
         '<form id="erpq-form" class="erpq-form" autocomplete="off">' +
           K.fields.map(function (f) {
-            var extra = f[0] === "proj" ? ' list="erpq-dl-proj"' : f[0] === "prod" ? ' list="erpq-dl-prod"' :
+            var extra = (kind === "moq" && f[0] === "proj") ? ' list="erpq-dl-proj"' : (kind === "moq" && f[0] === "prod") ? ' list="erpq-dl-prod"' :
               f[0] === "type" ? ' inputmode="numeric" maxlength="6"' : f[0] === "no" ? ' inputmode="numeric" maxlength="14"' : "";
             return '<div class="erpq-f"><span>' + esc(f[1]) + '</span><div class="erpq-in">' + erpqOpSelect(f[0], C["op_" + f[0]]) +
               '<input type="text" data-k="' + f[0] + '" value="' + esc(C[f[0]] || "") + '"' + extra + ' spellcheck="false" aria-label="' + esc(f[1]) + '" /></div></div>';

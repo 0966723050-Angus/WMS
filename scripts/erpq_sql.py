@@ -270,7 +270,8 @@ KINDS.update({
     },
     "coq": {   # 客戶訂單 COPTC / COPTD
         "from": "COPTC WITH (NOLOCK) LEFT JOIN COPMA WITH (NOLOCK) ON MA001 = TC004",
-        "cond": {"type": ("TC001", "eq"), "no": ("TC002", "prefix")},
+        # proj / prod 這兩個條件鍵在訂單查詢借用為「客戶單號(TC012)」「客戶名稱(TC053 客戶全名)」(網頁欄位名稱見 app.js ERPQ_KINDS.coq)
+        "cond": {"type": ("TC001", "eq"), "no": ("TC002", "prefix"), "proj": ("TC012", "prefix"), "prod": ("TC053", "prefix")},
         "confirm": "TC027",
         "select": "TC001, TC002, TC003, TC004, MA002, TC012, TC008, TC029, TC027, TC040",
         "order": "TC001, TC002 DESC",
