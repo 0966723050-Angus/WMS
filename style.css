@@ -1574,3 +1574,9 @@ table.data-table th,
 @media (min-width: 700px) and (max-width: 1279px) {
   table.data-table { font-size: 13.5px; }
 }
+
+/* ===== 物料明細表格(電腦版):各欄置中;規格欄縮窄可換行;材料型態/廠商/預交日不換行(使用者指定) ===== */
+table.data-table th, table.data-table td, table.data-table td.num { text-align: center; }
+table.data-table .cell-actions { justify-content: center; align-items: center; margin: 0 auto; }
+table.data-table th:nth-child(4), table.data-table td:nth-child(4) { width: 220px; max-width: 240px; white-space: normal; word-break: normal; overflow-wrap: anywhere; }
+table.data-table td:nth-child(5), table.data-table td:nth-child(7), table.data-table td:nth-child(9) { white-space: pre; }   /* pre:不自動換行,但多家廠商/多個預交日仍各佔一行 */

@@ -3429,7 +3429,7 @@
           '<td>' + esc(r.seq) + '</td>' +
           '<td>' + esc(r.materialCode) + '</td>' +
           '<td class="material-name-cell">' + esc(r.materialName) + '</td>' +
-          '<td>' + esc(r.spec) + '</td>' +
+          '<td>' + esc(r.spec).replace(/_/g, "_<wbr>") + '</td>' +   // 規格欄較窄:在底線後可換行,不會把單字從中間切開
           '<td>' + esc(r.materialType) + '</td>' +
           '<td>' + esc(joinLines(r.poNos)) + '</td>' +
           '<td>' + esc(joinLines(r.vendors)) + '</td>' +
