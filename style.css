@@ -1612,3 +1612,15 @@ table.data-table td:nth-child(5), table.data-table td:nth-child(7), table.data-t
   .lbl-f select { font-size: 16px; }
   .lbl-table.lbl-sel { min-width: 0; }
 }
+
+/* 標籤下載確認視窗 */
+.lbl-confirm { max-width: 1100px; width: calc(100% - 32px); }
+.lbl-confirm-list { max-height: 52vh; overflow: auto; border: 1px solid var(--border); border-radius: 10px; margin: 8px 0; }
+.lbl-confirm-table th { position: sticky; top: 0; z-index: 1; }
+.lbl-confirm-table td, .lbl-confirm-table th { padding: 7px 8px; }
+.modal.modal-wide.lbl-confirm { max-width: 1100px; width: calc(100vw - 32px); }
+.lbl-confirm-table { min-width: 860px; }
+.lbl-confirm-table td { white-space: nowrap; }
+.lbl-confirm-table td.c-spec, .lbl-confirm-table td.c-name { white-space: normal; }
+@media (max-width: 720px) { .lbl-confirm-table { min-width: 0; } .lbl-confirm-table td { white-space: normal; } }
+.lbl-confirm .modal-msg { color: var(--text-muted); font-weight: 400; }

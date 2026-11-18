@@ -1146,6 +1146,12 @@ function doPost(e) {
     if (action === 'label_serial') {
       var cnt = Math.floor(Number(body.count) || 0);
       if (cnt < 1 || cnt > 5000) return json_({ ok: false, error: '數量不正確' });
+      if (body.mode === 'n8') {   // 8 碼數字流水號(00000001 起),全公司共用、不分日期連續往下編
+        var sp8 = props_(), last8 = Number(sp8.getProperty('LABEL_SERIAL8') || 0) || 0;
+        if (last8 + cnt > 99999999) return json_({ ok: false, error: '流水號已超過 99999999 號' });
+        sp8.setProperty('LABEL_SERIAL8', String(last8 + cnt));
+        return json_({ ok: true, start: last8 + 1, end: last8 + cnt });
+      }
       var day = Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyyMMdd');
       var sp = props_(), cur = null;
       try { cur = JSON.parse(sp.getProperty('LABEL_SERIAL') || 'null'); } catch (err) { cur = null; }

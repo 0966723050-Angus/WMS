@@ -3587,20 +3587,65 @@
     });
   }
 
-  // 工作表「單頭資料」:A 欄流水號(L + 年月日 + 5 位序號,例 L2026111600001),B~K 欄為標籤欄位。
-  // 流水號由伺服器發號:全公司共用、當天連續往下編,隔天從 00001 重新起算。
+  // 工作表「單頭資料」:A 欄流水號(8 碼數字,例 00000001),B~K 欄為標籤欄位。
+  // 流水號由伺服器發號:全公司共用、不分日期連續往下編(Apps Script label_serial mode=n8)。
   var LABEL_FILE_SYSTEM = "export.xlsx";        // 系統選取:固定檔名,資料夾裡已有就直接覆蓋
   var LABEL_FILE_MANUAL = "export-自填.xlsx";   // 手動設置
-  function labelWorkbook(rows, ymd, start) {
+  function labelSerial8(n) { return ("0000000" + n).slice(-8); }
+  function labelWorkbook(rows, start) {
     var aoa = [["流水號"].concat(LABEL_COLS.map(function (c) { return c.t; }))].concat(rows.map(function (r, i) {
-      var sn = "L" + ymd + ("0000" + (start + i)).slice(-5);
+      var sn = labelSerial8(start + i);   // 文字格式,Excel 會保留前面的 0
       return [sn].concat(LABEL_COLS.map(function (c) { return r[c.k] === null || r[c.k] === undefined ? "" : r[c.k]; }));
     }));
     var ws = XLSX.utils.aoa_to_sheet(aoa);   // 字串欄位(製令單號等)保持文字,不會變成數字
-    ws["!cols"] = [{ wch: 16 }].concat(LABEL_COLS.map(function (c) { return { wch: c.w }; }));
+    ws["!cols"] = [{ wch: 12 }].concat(LABEL_COLS.map(function (c) { return { wch: c.w }; }));
     var wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "單頭資料");
     return wb;
+  }
+
+  // 下載前先列出要下載的標籤,顯示檔名與存放位置(依每個人自己的設定),按「確認」才領流水號並下載
+  function confirmLabelDownload(rows, name) {
+    if (!rows.length) return;
+    var cols = [["projCode", "專案代號"], ["orderNo", "製令單號"], ["assy", "Ass'y"], ["code", "料號"], ["name", "品名"], ["spec", "規格"], ["qty", "數量"], ["note", "備註"]];
+    var modal = el(
+      '<div class="modal-backdrop">' +
+        '<div class="modal modal-wide lbl-confirm" role="dialog" aria-modal="true" aria-labelledby="lblc-title">' +
+          '<h2 id="lblc-title">確認下載標籤</h2>' +
+          '<p class="rcv-intro">共 <b>' + rows.length + '</b> 筆 · 檔名 <b>' + esc(name) + '</b> · 存到 <b id="lblc-dir">讀取中…</b></p>' +
+          '<div class="lbl-confirm-list"><table class="lbl-table lbl-confirm-table"><thead><tr class="lbl-titles"><th>#</th>' +
+            cols.map(function (c) { return '<th class="c-' + c[0] + '">' + esc(c[1]) + '</th>'; }).join("") + '</tr></thead><tbody>' +
+            rows.map(function (r, i) {
+              return '<tr><td class="c-chk" data-k="#">' + (i + 1) + '</td>' + cols.map(function (c) {
+                return '<td class="c-' + c[0] + '" data-k="' + esc(c[1]) + '">' + esc(r[c[0]]) + '</td>';
+              }).join("") + '</tr>';
+            }).join("") +
+          '</tbody></table></div>' +
+          '<p class="modal-msg">按「確認」後會取得流水號(8 碼,全公司連續編號)並下載 Excel。</p>' +
+          '<div class="modal-actions">' +
+            '<button type="button" class="btn btn-secondary" id="lblc-cancel">取消</button>' +
+            '<button type="button" class="btn" id="lblc-ok">確認下載</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>'
+    );
+    document.body.appendChild(modal);
+    function close() {
+      document.removeEventListener("keydown", onKey);
+      if (modal.parentNode) modal.parentNode.removeChild(modal);
+    }
+    function onKey(e) { if (e.key === "Escape") close(); }
+    document.addEventListener("keydown", onKey);
+    modal.querySelector("#lblc-cancel").addEventListener("click", close);
+    modal.addEventListener("click", function (e) { if (e.target === modal) close(); });
+    getLabelDir().then(function (dir) {
+      var d = modal.querySelector("#lblc-dir");
+      if (d) d.textContent = dir ? "「" + dir.name + "」資料夾(你的設定)" : "瀏覽器預設的「下載」資料夾(尚未設定下載位置)";
+    });
+    modal.querySelector("#lblc-ok").addEventListener("click", function () {
+      close();
+      saveLabelExcel(rows, name);   // 在按鍵當下呼叫,瀏覽器才允許詢問資料夾寫入權限
+    });
   }
 
   var labelSaving = false;
@@ -3620,13 +3665,14 @@
         })
         .catch(function () { note = "(「" + d.name + "」無法使用,請到標籤頁重新設定下載位置)"; });
     }).then(function () {
-      return api("label_serial", { count: rows.length }).catch(function (err) {
+      return api("label_serial", { count: rows.length, mode: "n8" }).catch(function (err) {
         throw new Error("無法取得流水號(" + err.message + ")");
       });
     }).then(function (res) {
       if (!res.ok) throw new Error(res.error || "無法取得流水號");
-      var wb = labelWorkbook(rows, res.date, res.start);
-      var range = "L" + res.date + ("0000" + res.start).slice(-5) + (rows.length > 1 ? " ~ " + ("0000" + res.end).slice(-5) : "");
+      if (!res.start) throw new Error("伺服器尚未更新流水號功能,請聯絡管理者");
+      var wb = labelWorkbook(rows, res.start);
+      var range = labelSerial8(res.start) + (rows.length > 1 ? " ~ " + labelSerial8(res.end) : "");
       function browserDownload() { XLSX.writeFile(wb, name); return "瀏覽器的「下載」資料夾"; }
       var saved;
       if (!dir) {
@@ -3883,7 +3929,7 @@
           qty: raw === "" ? "" : (isNaN(num) ? raw : num), note: S.note[r.key] || "", date: today
         };
       });
-      if (rows.length) saveLabelExcel(rows, LABEL_FILE_SYSTEM);
+      if (rows.length) confirmLabelDownload(rows, LABEL_FILE_SYSTEM);
     });
 
     refresh();
@@ -4091,7 +4137,7 @@
     document.getElementById("lbl-m-dl").addEventListener("click", function () {
       if (!M.rows.length) return;
       var today = todayYmd();
-      saveLabelExcel(M.rows.map(function (r) { var o = Object.assign({}, r); o.date = today; return o; }), LABEL_FILE_MANUAL);
+      confirmLabelDownload(M.rows.map(function (r) { var o = Object.assign({}, r); o.date = today; return o; }), LABEL_FILE_MANUAL);
     });
 
     renderSaved();
