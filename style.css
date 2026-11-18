@@ -1580,3 +1580,21 @@ table.data-table th, table.data-table td, table.data-table td.num { text-align: 
 table.data-table .cell-actions { justify-content: center; align-items: center; margin: 0 auto; }
 table.data-table th:nth-child(4), table.data-table td:nth-child(4) { width: 220px; max-width: 240px; white-space: normal; word-break: normal; overflow-wrap: anywhere; }
 table.data-table td:nth-child(5), table.data-table td:nth-child(7), table.data-table td:nth-child(9) { white-space: pre; }   /* pre:不自動換行,但多家廠商/多個預交日仍各佔一行 */
+
+/* ===== 電腦版所有表格:標題與內容置中,規格欄內容靠左(使用者指定) ===== */
+@media (min-width: 721px) {
+  table.data-table th, table.data-table td,
+  .lbl-table th, .lbl-table td,
+  .erpq-table th, .erpq-table td,
+  .erpq-dtable th, .erpq-dtable td { text-align: center; }
+  .lbl-table input, .lbl-table select { text-align: center; text-align-last: center; }
+  /* 規格欄:內容靠左(標題仍置中) */
+  table.data-table td:nth-child(4),
+  .lbl-table td.c-spec, .lbl-table td.c-spec input,
+  .erpq-table td[data-k="規格"], .erpq-dtable td[data-k="規格"],
+  .erpq-table td[data-k="材料規格"], .erpq-dtable td[data-k="材料規格"] { text-align: left; }
+  /* 待簽核清單(格狀列):標題與欄位置中 */
+  .sign-headrow > span, .sign-row > span { text-align: center; }
+  .sign-row input:not([type="checkbox"]), .sign-row select { text-align: center; text-align-last: center; }
+  .erpq-table td.c-chk, .lbl-table td.c-chk { text-align: center; }
+}
