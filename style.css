@@ -1624,3 +1624,5 @@ table.data-table td:nth-child(5), table.data-table td:nth-child(7), table.data-t
 .lbl-confirm-table td.c-spec, .lbl-confirm-table td.c-name { white-space: normal; }
 @media (max-width: 720px) { .lbl-confirm-table { min-width: 0; } .lbl-confirm-table td { white-space: normal; } }
 .lbl-confirm .modal-msg { color: var(--text-muted); font-weight: 400; }
+.lbl-toolbar .search-wrap { flex: 1 1 260px; }
+.lbl-toolbar .search-wrap input[type="search"] { width: 100%; }

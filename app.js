@@ -3762,7 +3762,12 @@
       '<h1 class="page-title page-title-row"><span>標籤選取</span>' +
         '<button type="button" class="btn btn-sm" id="lbl-dl" disabled>下載 Excel</button></h1>' +
       '<div class="toolbar lbl-toolbar">' +
-        '<input type="search" id="lbl-q" placeholder="全文檢索:輸入關鍵字(專案、製令、Ass\'y、料號、品名、規格…)" value="' + esc(S.q) + '" />' +
+        '<div class="search-wrap">' +
+          '<input type="search" id="lbl-q" placeholder="全文檢索:輸入關鍵字(專案、製令、Ass\'y、料號、品名、規格…)" value="' + esc(S.q) + '" />' +
+          '<button type="button" class="search-clear" id="lbl-q-clear" aria-label="清除搜尋" title="清除搜尋欄"' + (S.q ? '' : ' hidden') + '>' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>' +
+          '</button>' +
+        '</div>' +
         '<button type="button" class="btn btn-sm btn-secondary" id="lbl-reset">清除篩選</button>' +
       '</div>' +
       '<div class="lbl-filterbar" id="lbl-filters"></div>' +
@@ -3869,17 +3874,31 @@
     });
 
     var qTimer = null;
+    var qClear = document.getElementById("lbl-q-clear");
     document.getElementById("lbl-q").addEventListener("input", function (e) {
       S.q = e.target.value;
+      qClear.hidden = !S.q;
       clearTimeout(qTimer);
       qTimer = setTimeout(refresh, 200);
     });
 
+    // 搜尋欄的 ✕:只清搜尋文字
+    qClear.addEventListener("click", function () {
+      clearTimeout(qTimer);
+      S.q = "";
+      var qi = document.getElementById("lbl-q");
+      qi.value = "";
+      qClear.hidden = true;
+      refresh();
+      qi.focus();
+    });
+    // 清除篩選:下拉篩選與搜尋全部恢復成「全部」,整頁重畫(已勾選的項目保留)
     document.getElementById("lbl-reset").addEventListener("click", function () {
+      clearTimeout(qTimer);
       S.f = { projCode: "", projName: "", orderNo: "", prodCode: "", assy: "" };
       S.q = "";
-      document.getElementById("lbl-q").value = "";
-      refresh();
+      renderLabelSelect(app);
+      showToast("已清除篩選與搜尋");
     });
 
     var body = document.getElementById("lbl-body");
