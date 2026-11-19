@@ -255,33 +255,33 @@ def cmd_read(argv):
 
 
 def build_notice(kind, entries, fail_rows):
-    """進貨單 / 退貨單簽核完成後的釘釘訊息(格式和待簽核表單的簽核結果一致:標題一行 + ✓ 成功 / ✗ 失敗明細)。"""
+    """進貨單 / 退貨單簽核完成後的釘釘訊息(2026-11-19 使用者指定,與待簽核表單的簽核結果同格式、不放連結),每張一段:
+    進貨單
+    3401-20261119001
+    立懋
+    簽核通過!
+    失敗的列(ERP 沒建出單據)改列採購單號,末行「簽核失敗:原因」。"""
     label = "進貨單" if kind == "進貨" else "退貨單"
     docs = {}   # ERP 單據號 -> [entry]
     for e in entries:
         docs.setdefault(e["doc"] or "(單據號未記錄)", []).append(e)
-    lines = ["【ERP %s簽核結果】成功 %d 張%s(%d 列)、失敗 %d 列" % (label, len(docs), label, len(entries), len(fail_rows))]
-
-    def item(e):
-        q = e["qty"]
-        q = int(q) if q == int(q) else q
-        return "%s ×%s" % (e["code"], q)
-
-    for doc, es in list(docs.items())[:15]:
+    blocks = []
+    for doc, es in docs.items():
+        lines = [label, doc]
         vendors = "、".join(sorted({e["vendor"] for e in es if e["vendor"]}))
-        detail = "、".join(item(e) for e in es[:4]) + ("…等 %d 列" % len(es) if len(es) > 4 else "")
-        lines.append("✓ %s %s%s" % (doc, vendors, ":" + detail if detail else ""))
-    if len(docs) > 15:
-        lines.append("…另有 %d 張成功" % (len(docs) - 15))
-    for f in fail_rows[:15]:
+        if vendors:
+            lines.append(vendors)
+        lines.append("簽核通過！")
+        blocks.append("\n".join(lines))
+    for f in fail_rows:
         q = f["qty"]
         q = int(q) if q == int(q) else q
-        lines.append("✗ %s %s %s ×%s\n   原因:%s" % (f["vendor"], f["po"] or "(無採購單號)", f["code"], q, f["reason"]))
-    if len(fail_rows) > 15:
-        lines.append("…另有 %d 列失敗" % (len(fail_rows) - 15))
-    if fail_rows:
-        lines.append("失敗的列仍留在 WMS.xlsx「%s」,狀態欄有原因,處理後可再按確認重跑。" % ("收料" if kind == "進貨" else "退料"))
-    return "\n".join(lines)
+        lines = [label, "採購單 %s" % (f["po"] or "(無採購單號)")]
+        if f["vendor"]:
+            lines.append(f["vendor"])
+        lines.append("簽核失敗:%s(%s ×%s)" % (f["reason"], f["code"], q))
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 def notify_dingtalk(kind, entries, fail_rows):
