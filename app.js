@@ -3587,11 +3587,12 @@
     });
   }
 
-  // 工作表「單頭資料」:A 欄流水號(8 碼數字,例 00000001),B~K 欄為標籤欄位。
-  // 流水號由伺服器發號:全公司共用、不分日期連續往下編(Apps Script label_serial mode=n8)。
+  // 工作表「單頭資料」:A 欄流水號(8 碼數字 = 月日 4 碼 + 當天流水號 4 碼,例 11190001),B~K 欄為標籤欄位。
+  // 流水號由伺服器發號:全公司共用、當天接續往下編,隔天從 0001 起(Apps Script label_serial mode=md4)。
   var LABEL_FILE_SYSTEM = "export.xlsx";        // 系統選取:固定檔名,資料夾裡已有就直接覆蓋
   var LABEL_FILE_MANUAL = "export-自填.xlsx";   // 手動設置
-  function labelSerial8(n) { return ("0000000" + n).slice(-8); }
+  var labelMd = "";   // 這次發號的月日(4 碼),由伺服器決定(台北時間)
+  function labelSerial8(n) { return labelMd + ("000" + n).slice(-4); }   // 例 1119 + 0001 = 11190001
   function labelWorkbook(rows, start) {
     var aoa = [["流水號"].concat(LABEL_COLS.map(function (c) { return c.t; }))].concat(rows.map(function (r, i) {
       var sn = labelSerial8(start + i);   // 文字格式,Excel 會保留前面的 0
@@ -3605,7 +3606,7 @@
   }
 
   // 下載前先列出要下載的標籤,顯示檔名與存放位置(依每個人自己的設定),按「確認」才領流水號並下載
-  function confirmLabelDownload(rows, name) {
+  function confirmLabelDownload(rows, name, onDone) {
     if (!rows.length) return;
     var cols = [["projCode", "專案代號"], ["orderNo", "製令單號"], ["assy", "Ass'y"], ["code", "料號"], ["name", "品名"], ["spec", "規格"], ["qty", "數量"], ["note", "備註"]];
     var modal = el(
@@ -3621,7 +3622,7 @@
               }).join("") + '</tr>';
             }).join("") +
           '</tbody></table></div>' +
-          '<p class="modal-msg">按「確認」後會取得流水號(8 碼,全公司連續編號)並下載 Excel。</p>' +
+          '<p class="modal-msg">按「確認」後會取得流水號(月日 4 碼 + 當天流水號 4 碼,全公司接續編號)並下載 Excel。</p>' +
           '<div class="modal-actions">' +
             '<button type="button" class="btn btn-secondary" id="lblc-cancel">取消</button>' +
             '<button type="button" class="btn" id="lblc-ok">確認下載</button>' +
@@ -3644,14 +3645,14 @@
     });
     modal.querySelector("#lblc-ok").addEventListener("click", function () {
       close();
-      saveLabelExcel(rows, name);   // 在按鍵當下呼叫,瀏覽器才允許詢問資料夾寫入權限
+      saveLabelExcel(rows, name, onDone);   // 在按鍵當下呼叫,瀏覽器才允許詢問資料夾寫入權限
     });
   }
 
   var labelSaving = false;
   // 先確認資料夾權限(要在按鍵當下詢問),再向伺服器領流水號,最後寫檔:
   // 有設定資料夾就直接寫進去(同名檔案直接覆蓋);沒設定、不支援或沒給權限,就用瀏覽器一般下載
-  function saveLabelExcel(rows, name) {
+  function saveLabelExcel(rows, name, onDone) {
     if (labelSaving) return Promise.resolve();
     labelSaving = true;
     var dir = null, note = "";
@@ -3665,12 +3666,13 @@
         })
         .catch(function () { note = "(「" + d.name + "」無法使用,請到標籤頁重新設定下載位置)"; });
     }).then(function () {
-      return api("label_serial", { count: rows.length, mode: "n8" }).catch(function (err) {
+      return api("label_serial", { count: rows.length, mode: "md4" }).catch(function (err) {
         throw new Error("無法取得流水號(" + err.message + ")");
       });
     }).then(function (res) {
       if (!res.ok) throw new Error(res.error || "無法取得流水號");
-      if (!res.start) throw new Error("伺服器尚未更新流水號功能,請聯絡管理者");
+      if (!res.start || !res.md) throw new Error("伺服器尚未更新流水號功能,請聯絡管理者");
+      labelMd = res.md;
       var wb = labelWorkbook(rows, res.start);
       var range = labelSerial8(res.start) + (rows.length > 1 ? " ~ " + labelSerial8(res.end) : "");
       function browserDownload() { XLSX.writeFile(wb, name); return "瀏覽器的「下載」資料夾"; }
@@ -3687,6 +3689,7 @@
       }
       return saved.then(function (where) {
         showToast("已下載 " + rows.length + " 筆標籤(流水號 " + range + "):" + name + ",存到" + where);
+        if (typeof onDone === "function") onDone();   // 例如系統選取:下載完成後自動清除勾選
       });
     }).catch(function (err) {
       window.alert("下載失敗:" + ((err && err.message) || err));
@@ -3948,7 +3951,11 @@
           qty: raw === "" ? "" : (isNaN(num) ? raw : num), note: S.note[r.key] || "", date: today
         };
       });
-      if (rows.length) confirmLabelDownload(rows, LABEL_FILE_SYSTEM);
+      if (rows.length) confirmLabelDownload(rows, LABEL_FILE_SYSTEM, function () {
+        // 下載完成:清除這次勾選的項目(連同改過的數量 / 備註),畫面還在這一頁才重畫
+        S.checked = {}; S.qty = {}; S.note = {};
+        if (document.getElementById("lbl-body")) renderBody();
+      });
     });
 
     refresh();

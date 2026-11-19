@@ -1146,6 +1146,15 @@ function doPost(e) {
     if (action === 'label_serial') {
       var cnt = Math.floor(Number(body.count) || 0);
       if (cnt < 1 || cnt > 5000) return json_({ ok: false, error: '數量不正確' });
+      if (body.mode === 'md4') {   // 8 碼數字 = 月日 4 碼 + 當天流水號 4 碼(例 11190001),全公司共用、每天從 0001 起算
+        var dayMd = Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyyMMdd');
+        var spm = props_(), curm = null;
+        try { curm = JSON.parse(spm.getProperty('LABEL_SERIAL_MD') || 'null'); } catch (err) { curm = null; }
+        var lastm = curm && curm.d === dayMd ? Number(curm.n) || 0 : 0;
+        if (lastm + cnt > 9999) return json_({ ok: false, error: '今天的流水號已超過 9999 號' });
+        spm.setProperty('LABEL_SERIAL_MD', JSON.stringify({ d: dayMd, n: lastm + cnt }));
+        return json_({ ok: true, md: dayMd.slice(4), start: lastm + 1, end: lastm + cnt });
+      }
       if (body.mode === 'n8') {   // 8 碼數字流水號(00000001 起),全公司共用、不分日期連續往下編
         var sp8 = props_(), last8 = Number(sp8.getProperty('LABEL_SERIAL8') || 0) || 0;
         if (last8 + cnt > 99999999) return json_({ ok: false, error: '流水號已超過 99999999 號' });
