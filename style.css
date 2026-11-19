@@ -1645,3 +1645,8 @@ table.data-table td:nth-child(5), table.data-table td:nth-child(7), table.data-t
   .lbl-sel th.c-spec, .lbl-sel td.c-spec { width: 266px; min-width: 266px; max-width: 266px; }
   .lbl-sel th.c-name, .lbl-sel td.c-name { width: 133px; min-width: 133px; max-width: 133px; white-space: normal; overflow-wrap: anywhere; }
 }
+/* 手機:輸入欄字體至少 16px。iPhone Safari 在字體小於 16px 的欄位取得焦點時會自動放大頁面,
+   放大後頁面就能左右移動(例:ERP 待簽核表單「手動新增」)。16px 就不會自動放大,畫面保持固定。 */
+@media (max-width: 720px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]), select, textarea { font-size: 16px !important; }
+}
