@@ -132,25 +132,22 @@ def reason_of(status):
 
 
 def build_report(done, failed, pending_rows, total):
-    lines = ["【ERP 簽核結果】共 %d 張:成功 %d、失敗 %d" % (total, len(done), len(failed) + len(pending_rows)) + ("、未處理 %d" % len(pending_rows) if pending_rows else "")]
+    """新格式(2026-11-19 使用者指定),每張一段、不放連結:
+    採購單
+    3303-20261111002
+    立懋
+    簽核通過!"""
+    def one(d, tail):
+        lines = [(d.get("表單名稱") or d.get("程式代碼") or "表單").strip(), "%s-%s" % (d["單別"], d["單號"])]
+        if (d.get("廠商") or "").strip():
+            lines.append(d["廠商"].strip())
+        lines.append(tail)
+        return "\n".join(lines)
 
-    def one(d):
-        s = "%s %s %s-%s" % (d["表單名稱"] or d["程式代碼"], d["程式代碼"], d["單別"], d["單號"])
-        if d.get("廠商"):
-            s += " · " + d["廠商"]
-        return s
-
-    for d in done[:15]:
-        lines.append("✓ " + one(d))
-    if len(done) > 15:
-        lines.append("…另有 %d 張成功" % (len(done) - 15))
-    for d in failed[:15]:
-        lines.append("✗ %s\n   原因:%s" % (one(d), d["_reason"]))
-    for d in pending_rows[:10]:
-        lines.append("… %s\n   原因:簽核程序沒有處理到這一列" % one(d))
-    if failed or pending_rows:
-        lines.append("失敗的表單仍留在 WMS.xlsx「待簽核清單」,狀態欄有原因,處理後可再按確認重跑。")
-    return "\n".join(lines)
+    blocks = [one(d, "簽核通過！") for d in done]
+    blocks += [one(d, "簽核失敗:" + d["_reason"]) for d in failed]
+    blocks += [one(d, "未處理:簽核程序沒有處理到這一張") for d in pending_rows]
+    return "\n\n".join(blocks)
 
 
 def parse_keys(text, with_reason=False):

@@ -552,7 +552,9 @@ function pushSignForms_(body, by) {
 var SIGN_NOTIFY_KEY = 'SIGN_NOTIFY';
 function queueSignNotify_(rec) {
   var q = readJson_(SIGN_NOTIFY_KEY) || [];
-  q.push({ id: rec.id, ts: rec.ts, name: rec.name || '', prog: rec.prog, docType: rec.docType, docNo: rec.docNo, vendor: rec.vendor || '', by: rec.by || '', src: rec.src || '', img: rec.imgUrl || '' });
+  var byName = '';
+  try { var bu = JSON.parse(props_().getProperty(USER_PREFIX + String(rec.by || '').trim().toLowerCase()) || 'null'); byName = (bu && bu.name) || ''; } catch (err) { byName = ''; }
+  q.push({ id: rec.id, ts: rec.ts, name: rec.name || '', prog: rec.prog, docType: rec.docType, docNo: rec.docNo, vendor: rec.vendor || '', by: rec.by || '', byName: byName, src: rec.src || '', img: rec.imgUrl || '' });
   if (q.length > 100) q = q.slice(q.length - 100);
   props_().setProperty(SIGN_NOTIFY_KEY, JSON.stringify(q));
 }

@@ -31,20 +31,27 @@ def _signed_url(webhook, secret):
     return "%s&timestamp=%s&sign=%s" % (webhook, ts, sign)
 
 
-def send_text(cfg, text):
-    """送一則文字訊息。成功回傳 (True, ''),失敗回傳 (False, 原因)。"""
+def _post(cfg, text):
     webhook = (cfg.get("dingtalkWebhook") or "").strip()
-    if not webhook:
-        return False, "未設定 dingtalkWebhook"
-    kw = (cfg.get("dingtalkKeyword") or "").strip()
-    if kw and kw not in text:
-        text = kw + " " + text
     body = json.dumps({"msgtype": "text", "text": {"content": text}}, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(_signed_url(webhook, (cfg.get("dingtalkSecret") or "").strip()), data=body,
                                  headers={"Content-Type": "application/json;charset=utf-8"}, method="POST")
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def send_text(cfg, text):
+    """送一則文字訊息。成功回傳 (True, ''),失敗回傳 (False, 原因)。
+    機器人若設了「自訂關鍵字」(dingtalkKeyword,可用逗號分隔多個):訊息含任一關鍵字就照原樣送;
+    不含時先照原樣送(機器人可能另外設了訊息裡有的字,例如「簽」),被釘釘以關鍵字不符(310000)退回才在開頭補上關鍵字重送。"""
+    webhook = (cfg.get("dingtalkWebhook") or "").strip()
+    if not webhook:
+        return False, "未設定 dingtalkWebhook"
+    kws = [k.strip() for k in (cfg.get("dingtalkKeyword") or "").replace("，", ",").split(",") if k.strip()]
     try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            res = json.loads(resp.read().decode("utf-8"))
+        res = _post(cfg, text)
+        if res.get("errcode") == 310000 and kws and not any(k in text for k in kws):
+            res = _post(cfg, kws[0] + "\n" + text)
     except Exception as ex:
         return False, "連線失敗: %s" % ex
     if res.get("errcode") == 0:
@@ -52,25 +59,45 @@ def send_text(cfg, text):
     return False, "釘釘回應 %s: %s" % (res.get("errcode"), res.get("errmsg"))
 
 
+def who_of(it):
+    """送簽人顯示名稱:使用者名單的名稱;沒有就用 email @ 前面那段。"""
+    n = (it.get("byName") or "").strip()
+    if n:
+        return n
+    by = (it.get("by") or "").strip()
+    return by.split("@")[0] if by else "(未知)"
+
+
 def build_text(items, total=None):
-    lines = ["【WMS 待簽核清單】新增 %d 張" % len(items)]
-    for i, it in enumerate(items[:MAX_LISTED], start=1):
-        head = (it.get("name") or it.get("prog") or "").strip()
-        s = "%d. %s %s-%s" % (i, head, it.get("docType", ""), it.get("docNo", ""))
-        if it.get("vendor"):
-            s += " · " + it["vendor"]
-        by = it.get("by") or ""
-        if by:
-            s += "(%s)" % by
-        lines.append(s)
-        if it.get("img"):
-            lines.append("   圖片: " + it["img"])
-    if len(items) > MAX_LISTED:
-        lines.append("…另有 %d 張" % (len(items) - MAX_LISTED))
-    if total:
-        lines.append("目前清單共 %d 張待簽核" % total)
-    lines.append(SITE_URL)
-    return "\n".join(lines)
+    """新格式(2026-11-19 使用者指定),依送簽人、表單名稱分組,不放任何連結:
+    Amber:
+    送簽了1張採購單
+    3303-20261111002
+    立懋"""
+    groups = []   # [(送簽人, [(表單名稱, [item...])])],照送簽時間先後
+    for it in items:
+        who = who_of(it)
+        g = next((x for x in groups if x[0] == who), None)
+        if not g:
+            g = (who, [])
+            groups.append(g)
+        form = (it.get("name") or it.get("prog") or "表單").strip()
+        f = next((x for x in g[1] if x[0] == form), None)
+        if not f:
+            f = (form, [])
+            g[1].append(f)
+        f[1].append(it)
+    blocks = []
+    for who, forms in groups:
+        lines = [who + "："]
+        for form, lst in forms:
+            lines.append("送簽了%d張%s" % (len(lst), form))
+            for it in lst:
+                lines.append("%s-%s" % (it.get("docType", ""), it.get("docNo", "")))
+                if (it.get("vendor") or "").strip():
+                    lines.append(it["vendor"].strip())
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 def process(endpoint, key, cfg, items, total, call, log=print):
