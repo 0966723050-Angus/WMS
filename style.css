@@ -1640,3 +1640,8 @@ table.data-table td:nth-child(5), table.data-table td:nth-child(7), table.data-t
   .lbl-wrap:has(.lbl-sel) { overflow: visible; }
   .lbl-sel thead th { position: sticky; top: calc(var(--header-height, 0px) + var(--toolbar-height, 0px)); z-index: 4; }
 }
+/* 標籤選取(電腦版):規格 + 品名原合計約 400px,改成規格 2/3(266px)、品名 1/3(133px) */
+@media (min-width: 721px) {
+  .lbl-sel th.c-spec, .lbl-sel td.c-spec { width: 266px; min-width: 266px; max-width: 266px; }
+  .lbl-sel th.c-name, .lbl-sel td.c-name { width: 133px; min-width: 133px; max-width: 133px; white-space: normal; overflow-wrap: anywhere; }
+}
