@@ -11,6 +11,11 @@
   // per-project search / status-filter state, keyed by project code (used by the project page)
   var projectFilterState = {};
 
+  // Excel 輸出設定:文字一律寫進共用字串表(sharedStrings)並壓縮,和 Excel 自己存的格式一樣。
+  // SheetJS 預設把文字寫成 t="str"(公式結果字串)且沒有共用字串表,BarTender 讀取會出現
+  // 「無法將類型 'rxo190c.TWL' 的物件轉換為類型 'rxo190c.TBd'」,要先用 Excel 開啟存檔才讀得到。
+  var XLSX_OPTS = { bookSST: true, compression: true };
+
   function esc(v) {
     if (v === null || v === undefined) return "";
     return String(v)
@@ -2369,7 +2374,7 @@
     XLSX.utils.book_append_sheet(wb, ws, "庫存查詢");
     var d = new Date();
     var kw = storageQuery.trim().replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 30);
-    XLSX.writeFile(wb, "庫存查詢_" + kw + "_" + d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + ".xlsx");
+    XLSX.writeFile(wb, "庫存查詢_" + kw + "_" + d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + ".xlsx", XLSX_OPTS);
     showToast("已下載 " + results.length + " 筆庫存資料");
   }
 
@@ -3484,7 +3489,7 @@
     ];
     var wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "物料明細");
-    XLSX.writeFile(wb, filename);
+    XLSX.writeFile(wb, filename, XLSX_OPTS);
   }
 
   function exportOrderToExcel(orderNo, project, order) {
@@ -3675,12 +3680,12 @@
       labelMd = res.md;
       var wb = labelWorkbook(rows, res.start);
       var range = labelSerial8(res.start) + (rows.length > 1 ? " ~ " + labelSerial8(res.end) : "");
-      function browserDownload() { XLSX.writeFile(wb, name); return "瀏覽器的「下載」資料夾"; }
+      function browserDownload() { XLSX.writeFile(wb, name, XLSX_OPTS); return "瀏覽器的「下載」資料夾"; }
       var saved;
       if (!dir) {
         saved = Promise.resolve(browserDownload() + note);
       } else {
-        var data = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+        var data = XLSX.write(wb, Object.assign({ bookType: "xlsx", type: "array" }, XLSX_OPTS));
         saved = dir.getFileHandle(name, { create: true })
           .then(function (fh) { return fh.createWritable(); })
           .then(function (w) { return w.write(new Blob([data])).then(function () { return w.close(); }); })
