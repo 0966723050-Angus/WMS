@@ -3830,7 +3830,7 @@
           '<td class="c-assy" data-k="Ass&#39;y">' + esc(r.assy) + '</td>' +
           '<td class="c-code" data-k="料號">' + esc(r.code) + '</td>' +
           '<td class="c-name" data-k="品名">' + esc(r.name) + '</td>' +
-          '<td class="c-spec" data-k="規格">' + esc(r.spec) + '</td>' +
+          '<td class="c-spec" data-k="規格">' + esc(r.spec).replace(/_/g, "_<wbr>") + '</td>' +   // 規格欄窄:底線後可換行
           '<td class="c-qty" data-k="數量"><input type="number" class="lbl-qty" inputmode="decimal" min="0" step="any" value="' + esc(qty) + '" aria-label="數量" /></td>' +
           '<td class="c-note" data-k="備註"><input type="text" class="lbl-note" maxlength="60" value="' + esc(S.note[r.key] || "") + '" aria-label="備註" /></td>' +
           '<td class="c-date" data-k="列印日期">' + today + '</td></tr>';
