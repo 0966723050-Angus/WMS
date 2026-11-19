@@ -1632,3 +1632,11 @@ table.data-table td:nth-child(5), table.data-table td:nth-child(7), table.data-t
   .lbl-sel th.c-spec, .lbl-sel td.c-spec { width: 210px; max-width: 230px; white-space: normal; word-break: normal; overflow-wrap: anywhere; }
   .lbl-sel td.c-prodCode, .lbl-sel td.c-assy, .lbl-sel td.c-orderNo, .lbl-sel td.c-code, .lbl-sel td.c-projCode, .lbl-sel td.c-date { white-space: nowrap; }
 }
+/* 標籤選取(電腦版):規格再縮 1/3、產品品號加寬;專案名稱、品名靠左;捲動時標題列固定在搜尋列下方 */
+@media (min-width: 721px) {
+  .lbl-sel th.c-spec, .lbl-sel td.c-spec { width: 140px; max-width: 150px; }
+  .lbl-sel th.c-prodCode, .lbl-sel td.c-prodCode { min-width: 130px; }
+  .lbl-sel td.c-projName, .lbl-sel td.c-name { text-align: left; }
+  .lbl-wrap:has(.lbl-sel) { overflow: visible; }
+  .lbl-sel thead th { position: sticky; top: calc(var(--header-height, 0px) + var(--toolbar-height, 0px)); z-index: 4; }
+}
