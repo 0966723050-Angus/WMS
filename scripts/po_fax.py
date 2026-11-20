@@ -1,4 +1,4 @@
-"""採購單傳真(不經 ERP 畫面):ERP SQL 讀採購單 → 依 ERP「工程採購單」版面自己畫 → FX 驅動程式以一般列印模式輸出成檔案
+"""採購單傳真(不經 ERP 畫面):ERP SQL 讀採購單 → 依 ERP「工程採購單」版面(A4 直向)自己畫 → FX 驅動程式以一般列印模式輸出成檔案
 → 換成「傳真」PJL 表頭(含廠商傳真號碼)→ 直接送到事務機 10.8.8.228:9100 撥出。
 
 傳真 PJL 的格式是 2026-11-20 用驅動程式「工作類型=傳真」輸出到檔案比對出來的:
@@ -29,7 +29,6 @@ PRINTER = "FX DocuCentre-V C2263 PCL 6"
 DEVICE_IP = "10.8.8.228"
 DEVICE_PORT = 9100
 LOCAL_AREA = "06"           # 公司在台南:同區碼不撥區碼
-LOGO = os.path.join(os.path.dirname(HERE), "icons", "atk-logo.png")
 LOG = os.path.join(HERE, "po_fax.log")
 
 COMPANY = "銓行應用材料股份有限公司"
@@ -140,8 +139,8 @@ winspool.DocumentPropertiesW.argtypes = [W.HWND, W.HANDLE, W.LPCWSTR, ctypes.c_v
 DT_LEFT, DT_CENTER, DT_RIGHT, DT_VCENTER, DT_SINGLELINE, DT_NOPREFIX, DT_END_ELLIPSIS, DT_WORDBREAK = 0, 1, 2, 4, 0x20, 0x800, 0x8000, 0x10
 
 
-def landscape_devmode(printer):
-    """取印表機預設 DEVMODE,改成 A4 橫向(不改印表機本身的設定)。"""
+def page_devmode(printer):
+    """取印表機預設 DEVMODE,改成 A4 直向(不改印表機本身的設定)。"""
     h = W.HANDLE()
     if not winspool.OpenPrinterW(printer, ctypes.byref(h), None):
         raise RuntimeError("找不到印表機:%s" % printer)
@@ -151,7 +150,7 @@ def landscape_devmode(printer):
         winspool.DocumentPropertiesW(None, h, printer, buf, None, 2)          # DM_OUT_BUFFER
         fields = int.from_bytes(buf.raw[72:76], "little") | 0x1 | 0x2          # DM_ORIENTATION | DM_PAPERSIZE
         ctypes.memmove(ctypes.addressof(buf) + 72, fields.to_bytes(4, "little"), 4)
-        ctypes.memmove(ctypes.addressof(buf) + 76, (2).to_bytes(2, "little"), 2)   # DMORIENT_LANDSCAPE
+        ctypes.memmove(ctypes.addressof(buf) + 76, (1).to_bytes(2, "little"), 2)   # DMORIENT_PORTRAIT
         ctypes.memmove(ctypes.addressof(buf) + 78, (9).to_bytes(2, "little"), 2)   # DMPAPER_A4
         out = ctypes.create_string_buffer(size)
         winspool.DocumentPropertiesW(None, h, printer, out, buf, 2 | 8)       # DM_OUT_BUFFER | DM_IN_BUFFER
@@ -160,7 +159,13 @@ def landscape_devmode(printer):
         winspool.ClosePrinter(h)
 
 
+TA_LEFT, TA_RIGHT, TA_CENTER, TA_BASELINE = 0, 2, 6, 24
+gdi.ExtTextOutW.argtypes = [W.HDC, ctypes.c_int, ctypes.c_int, W.UINT, ctypes.POINTER(RECT), W.LPCWSTR, W.UINT, ctypes.c_void_p]
+
+
 class Canvas:
+    """座標一律用 mm(紙張左上角為原點);文字 y 為基線位置(與 ERP 匯出 PDF 量到的一致)。"""
+
     def __init__(self, hdc):
         self.hdc = hdc
         self.dpi = gdi.GetDeviceCaps(hdc, 88)                 # LOGPIXELSX
@@ -179,153 +184,143 @@ class Canvas:
                                             0, 0, 0, 136, 0, 0, 2, 0, face)
         gdi.SelectObject(self.hdc, self.fonts[k])
 
-    def text(self, x, y, w, h, s, pt=9, bold=False, align=DT_LEFT, face="細明體", wrap=False):
-        self.font(pt, bold, face)
-        r = RECT(self.px(x), self.px(y, 1), self.px(x + w), self.px(y + h, 1))
-        flags = align | DT_NOPREFIX | (DT_WORDBREAK if wrap else (DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS))
+    def text(self, x, y, s, pt=9, align=TA_LEFT, face="細明體", clip=None, bold=False):
+        """x,y = 基線起點(mm);clip=(x1, x2) 超出欄寬就截掉。"""
         s = str(s if s is not None else "")
-        user32.DrawTextW(self.hdc, s, len(s), ctypes.byref(r), flags)
+        if not s:
+            return
+        self.font(pt, bold, face)
+        gdi.SetTextAlign(self.hdc, align | TA_BASELINE)
+        if clip:
+            r = RECT(self.px(clip[0]), self.px(y - pt * 0.4, 1), self.px(clip[1]), self.px(y + pt * 0.15, 1))
+            gdi.ExtTextOutW(self.hdc, self.px(x), self.px(y, 1), 4, ctypes.byref(r), s, len(s), None)   # ETO_CLIPPED
+        else:
+            gdi.ExtTextOutW(self.hdc, self.px(x), self.px(y, 1), 0, None, s, len(s), None)
 
-    def line(self, x1, y1, x2, y2, width_mm=0.2):
-        pen = gdi.CreatePen(0, max(1, int(width_mm * self.dpi / 25.4)), 0)
+    def line(self, x1, y1, x2, y2, width_mm=0.35):
+        pen = gdi.CreatePen(0, max(1, int(round(width_mm * self.dpi / 25.4))), 0)
         old = gdi.SelectObject(self.hdc, pen)
         gdi.MoveToEx(self.hdc, self.px(x1), self.px(y1, 1), None)
         gdi.LineTo(self.hdc, self.px(x2), self.px(y2, 1))
         gdi.SelectObject(self.hdc, old)
         gdi.DeleteObject(pen)
 
-    def rect(self, x, y, w, h, width_mm=0.2):
-        self.line(x, y, x + w, y, width_mm); self.line(x + w, y, x + w, y + h, width_mm)
-        self.line(x + w, y + h, x, y + h, width_mm); self.line(x, y + h, x, y, width_mm)
-
-    def image(self, path, x, y, h_mm):
+    def image(self, path, x, y, w_mm, h_mm):
         from PIL import Image
-        im = Image.open(path)
-        if im.mode in ("RGBA", "LA", "P"):
-            im = im.convert("RGBA")
-            bg = Image.new("RGB", im.size, (255, 255, 255))
-            bg.paste(im, mask=im.split()[-1])
-            im = bg
-        im = im.convert("RGB")
+        im = Image.open(path).convert("RGB")
         w_px, h_px = im.size
-        data = im.transpose(Image.FLIP_TOP_BOTTOM).tobytes("raw", "BGR")
         stride = (w_px * 3 + 3) & ~3
+        raw = im.transpose(Image.FLIP_TOP_BOTTOM).tobytes("raw", "BGR")
         if stride != w_px * 3:
-            rows = [data[i * w_px * 3:(i + 1) * w_px * 3] + b"\0" * (stride - w_px * 3) for i in range(h_px)]
-            data = b"".join(rows)
-        bmi = BITMAPINFOHEADER(ctypes.sizeof(BITMAPINFOHEADER), w_px, h_px, 1, 24, 0, len(data), 0, 0, 0, 0)
-        w_mm = h_mm * w_px / h_px
+            raw = b"".join(raw[i * w_px * 3:(i + 1) * w_px * 3] + b"\0" * (stride - w_px * 3) for i in range(h_px))
+        bmi = BITMAPINFOHEADER(ctypes.sizeof(BITMAPINFOHEADER), w_px, h_px, 1, 24, 0, len(raw), 0, 0, 0, 0)
+        gdi.SetStretchBltMode(self.hdc, 4)   # HALFTONE
         gdi.StretchDIBits(self.hdc, self.px(x), self.px(y, 1), self.px(x + w_mm) - self.px(x), self.px(y + h_mm, 1) - self.px(y, 1),
-                          0, 0, w_px, h_px, data, ctypes.byref(bmi), 0, 0x00CC0020)
-        return w_mm
+                          0, 0, w_px, h_px, raw, ctypes.byref(bmi), 0, 0x00CC0020)
 
 
-# 版面(mm,A4 橫向 297 x 210)
-LM, TM, PW = 10, 8, 277
-COLS = [("序號", 9), ("品號\n品名\n規格", 86), ("採購數量\n已交數量", 26), ("單位\n庫別", 13), ("採購單價\n採購金額", 28),
-        ("預 交 日", 22), ("專案代號\n來源單號\n備 註", 79), ("急料\n來源", 14)]
-ROW_H = 4.4          # 每一行文字高
-ITEM_H = ROW_H * 3   # 每個品項三行
-PER_PAGE = 7
+# ---- 版面:A4 直向,位置取自 ERP 匯出的採購單 PDF(2026-11-20,3303-20261111006)----
+BANNER = os.path.join(HERE, "po_banner.jpg")   # ERP 憑證上的公司抬頭圖
+X0, X1 = 10.65, 200.75                       # 表格左右框線
+VLINES = [18.3, 78.4, 100.8, 113.4, 138.3, 155.9, 188.4]
+ROW_TOPS = [93.5, 106.2, 118.55, 131.6, 143.95, 157.0, 169.35, 182.4, 194.75, 207.8, 220.15, 232.5]   # 12 格品項
+ROW_BOTTOM = 244.85
+PER_PAGE = len(ROW_TOPS)
 SRC = {"1": "請購", "2": "訂單", "3": "製令", "9": "其他"}
 
 
 def draw_page(c, h, items, page, pages, last, totals):
-    # 公司抬頭
-    lw = c.image(LOGO, LM + 50, TM, 12) if os.path.exists(LOGO) else 0
-    x0 = LM + 50 + lw + 3
-    c.text(x0, TM, 90, 7, COMPANY, 15, True, face="新細明體")
-    c.text(x0, TM + 7, 90, 5, COMPANY_EN, 10, True, face="Arial")
-    c.text(x0 + 92, TM + 0.5, 100, 5, ADDR1, 9)
-    c.text(x0 + 92, TM + 5, 100, 3.5, ADDR2, 6.5, face="Arial")
-    c.text(x0 + 92, TM + 8.5, 100, 3.5, ADDR3, 6.5, face="Arial")
-    c.text(LM, TM + 17, PW, 7, h.get("MQ002") or "採購單", 14, align=DT_CENTER, face="新細明體")
-    c.text(LM + PW - 45, TM + 25, 45, 5, "頁    次:  %d / %d" % (page, pages), 9)
+    if os.path.exists(BANNER):
+        c.image(BANNER, 10.0, 10.0, 177.4, 10.4)
+    else:
+        c.text(10, 18, COMPANY, 15, face="新細明體", bold=True)
+    c.text(97.3, 33.2, h.get("MQ002") or "採購單", 12, face="新細明體")
+    c.text(168.3, 43.3, "頁    次:", 9)
+    c.text(183.8, 43.3, "%d /%d" % (page, pages), 9)
 
     # 單頭框
-    y = TM + 31
-    hb = 8 * 4.0 + 1.5
-    c.rect(LM, y, PW, hb)
-    L = [("採購單別", h["TC001"]), ("採購單號", h["TC002"]), ("單據日期", _ymd(h["TC024"])), ("廠商名稱", h.get("MA003") or h.get("MA002")),
-         ("廠商地址", h.get("MA014")), ("聯 絡 人", h.get("TC052")), ("送貨地址", h.get("TC021")), ("備    註", h.get("TC009"))]
+    c.line(X0, 45.1, X1, 45.1); c.line(X0, 80.0, X1, 80.0)
+    c.line(X0, 45.1, X0, 80.0); c.line(X1, 45.1, X1, 80.0)
+    base = [48.3, 52.5, 56.6, 60.7, 64.8, 69.0, 73.1, 77.2]
+    L = [("採購單別:", h["TC001"]), ("採購單號:", h["TC002"]), ("單據日期:", _ymd(h["TC024"])), ("廠商名稱:", h.get("MA003") or h.get("MA002")),
+         ("廠商地址:", h.get("MA014")), ("聯 絡 人:", h.get("TC052")), ("送貨地址:", h.get("TC021")), ("備    註:", h.get("TC009"))]
+    for (k, v), y in zip(L, base):
+        c.text(11.2, y, k)
+        c.text(25.6, y, v, clip=(25.6, 77.5) if y in (base[0], base[1], base[2], base[5]) else (25.6, 200))
     rate = h.get("TC026")
-    M = [("交易幣別", h.get("TC005")), ("營業稅率", ("%g%%" % (float(rate) * 100)) if rate not in (None, "") else ""), ("採購人員", h.get("MV002") or "")]
-    R = [("交易方式", {"1": "一般"}.get(str(h.get("TC048") or ""), str(h.get("TC048") or ""))), ("付款條件", h.get("TC008"))]
-    rh = hb / 8
-    for i, (k, v) in enumerate(L):
-        c.text(LM + 1, y + 0.5 + i * rh, 16, rh, k + ":", 9)
-        c.text(LM + 17, y + 0.5 + i * rh, 105 if i not in (3, 4, 6, 7) else 230, rh, v, 9)
-    for i, (k, v) in enumerate(M):
-        c.text(LM + 122, y + 0.5 + i * rh, 16, rh, k + ":", 9)
-        c.text(LM + 138, y + 0.5 + i * rh, 70, rh, v, 9)
-    for i, (k, v) in enumerate(R):
-        c.text(LM + 205, y + 0.5 + i * rh, 16, rh, k + ":", 9)
-        c.text(LM + 221, y + 0.5 + i * rh, 55, rh, v, 9)
-    c.text(LM + 122, y + 0.5 + 5 * rh, 16, rh, "廠商電話:", 9)
-    c.text(LM + 138, y + 0.5 + 5 * rh, 65, rh, h.get("MA008"), 9)
-    c.text(LM + 205, y + 0.5 + 5 * rh, 16, rh, "廠商傳真:", 9)
-    c.text(LM + 221, y + 0.5 + 5 * rh, 55, rh, h.get("MA010"), 9)
+    M = [(0, "交易幣別:", h.get("TC005")), (1, "營業稅率:", ("%g%%" % (float(rate) * 100)) if rate not in (None, "") else ""),
+         (2, "採購人員:", h.get("MV002") or ""), (5, "廠商電話:", h.get("MA008"))]
+    for i, k, v in M:
+        c.text(78.3, base[i], k)
+        c.text(92.3, base[i], v, clip=(92.3, 138))
+    R = [(0, "交易方式:", {"1": "一般"}.get(str(h.get("TC048") or ""), str(h.get("TC048") or ""))), (1, "付款條件:", h.get("TC008")),
+         (5, "廠商傳真:", h.get("MA010"))]
+    for i, k, v in R:
+        c.text(138.8, base[i], k)
+        c.text(152.9, base[i], v, clip=(152.9, 200))
 
-    # 表身標題
-    y += hb
-    th = ROW_H * 3
-    c.rect(LM, y, PW, th)
-    x = LM
-    for title, w in COLS:
-        parts = title.split("\n")
-        for j, p in enumerate(parts):
-            al = DT_LEFT if title.startswith("品號") else (DT_RIGHT if j == len(parts) - 1 and title.startswith(("採購", "單位")) else DT_LEFT)
-            if title.startswith(("預", "專案", "急料")):
-                al = DT_CENTER
-            c.text(x + 0.8, y + j * ROW_H, w - 1.6, ROW_H, p, 9, align=al)
-        if x > LM:
-            c.line(x, y, x, y + th)
-        x += w
-    y += th
+    # 表格框線:標題列 80.0~93.5、12 格品項、合計列
+    for y in [80.0, 93.5] + ROW_TOPS[1:] + [ROW_BOTTOM, 250.75]:
+        c.line(X0, y, X1, y)
+    c.line(X0, 80.0, X0, 250.75); c.line(X1, 80.0, X1, 250.75)
+    for x in VLINES:
+        c.line(x, 80.0, x, ROW_BOTTOM)
+
+    # 標題列
+    t1, t2, t3 = 83.2, 87.3, 91.5
+    c.text(11.2, t1, "序號")
+    c.text(18.7, t1, "品號"); c.text(18.7, t2, "品名"); c.text(18.7, t3, "規格")
+    c.text(78.7, t1, "採購數量"); c.text(100.3, t3, "已交數量", align=TA_RIGHT)
+    c.text(101.2, t1, "單位"); c.text(112.9, t3, "庫別", align=TA_RIGHT)
+    c.text(113.7, t1, "採購單價"); c.text(137.8, t3, "採購金額", align=TA_RIGHT)
+    c.text(147.1, t1, "預 交 日", align=TA_CENTER)
+    c.text(172.15, t1, "專案代號", align=TA_CENTER); c.text(172.15, t2, "來源單號", align=TA_CENTER); c.text(172.15, t3, "備    註", align=TA_CENTER)
+    c.text(194.6, t1, "急料", align=TA_CENTER); c.text(194.6, t2, "來源", align=TA_CENTER)
 
     # 品項
-    for it in items:
-        x = LM
-        cells = [
-            [it["TD003"]],
-            ["%-14s %-3s %s" % (it["TD004"], it.get("TD040") or "", it.get("TD039") or ""), it["TD005"], it["TD006"]],
-            [_num(it["TD008"], 1), "", _num(it.get("TD015"), 1)],
-            [it["TD009"], "", it["TD007"]],
-            [_num(it["TD010"], 1), "", _num(it["TD011"])],
-            [_ymd(it["TD012"])],
-            [it.get("TD022") or "", it.get("TD024") or "", it.get("TD014") or ""],
-            [it.get("TD025") or "", "", SRC.get(str(it.get("TD034") or ""), "")],
-        ]
-        for ci, (title, w) in enumerate(COLS):
-            for j, v in enumerate(cells[ci]):
-                al = DT_LEFT
-                if ci in (2, 4) and j == 2:
-                    al = DT_RIGHT
-                if ci == 7:
-                    al = DT_CENTER
-                c.text(x + 0.8, y + j * ROW_H, w - 1.6, ROW_H, v, 9)  if al == DT_LEFT else c.text(x + 0.8, y + j * ROW_H, w - 1.6, ROW_H, v, 9, align=al)
-            if x > LM:
-                c.line(x, y, x, y + ITEM_H)
-            x += w
-        c.line(LM, y, LM, y + ITEM_H)
-        c.line(LM + PW, y, LM + PW, y + ITEM_H)
-        c.line(LM, y + ITEM_H, LM + PW, y + ITEM_H)
-        y += ITEM_H
+    for i, it in enumerate(items):
+        T = ROW_TOPS[i]
+        b1, b2, b3 = T + 2.7, T + 6.6, T + 10.6
+        c.text(11.0, b1, it["TD003"])
+        c.text(19.3, b1, it["TD004"], clip=(19, 37))
+        c.text(37.5, b1, it.get("TD040") or "")
+        c.text(44.7, b1, it.get("TD039") or "", clip=(44.7, 78))
+        c.text(19.0, b2, it["TD005"], clip=(19, 78))
+        c.text(19.0, b3, it["TD006"], clip=(19, 78))
+        c.text(80.1, b1, _num(it["TD008"], 1), clip=(79, 100.5))
+        c.text(99.9, b3, _num(it.get("TD015"), 1), align=TA_RIGHT)
+        c.text(101.6, b1, it["TD009"], clip=(101.2, 113))
+        c.text(107.6, b3 + 0.3, it["TD007"])
+        c.text(115.0, b1, _num(it["TD010"], 1), clip=(114, 138))
+        c.text(136.3, b3, _num(it["TD011"]), align=TA_RIGHT)
+        c.text(138.9, b1, _ymd(it["TD012"]))
+        c.text(156.6, b1, it.get("TD022") or "", clip=(156.3, 188))
+        c.text(156.6, b2 + 0.3, (it.get("TD024") or "")[:18], 8)
+        c.text(156.3, b3, it.get("TD014") or "", clip=(156.2, 188))
+        c.text(194.6, b1, it.get("TD025") or "", align=TA_CENTER)
+        c.text(194.6, b2, SRC.get(str(it.get("TD034") or ""), ""), align=TA_CENTER)
+    if last and len(items) < PER_PAGE:
+        c.text(19.3, ROW_TOPS[len(items)] + 3.4, "以下空白//")
 
+    # 合計列(最後一頁)
     if last:
-        c.text(LM + 10, y + 0.5, 80, ROW_H, "以下空白//", 9)
-        y += ROW_H + 2
-        c.rect(LM, y, PW, 7)
         amt, tax, qty = totals
-        c.text(LM + 2, y, 60, 7, "數量合計: " + _num(qty, 1), 9.5)
-        c.text(LM + 70, y, 65, 7, "採購金額: " + _num(amt), 9.5)
-        c.text(LM + 140, y, 60, 7, "稅額: " + _num(tax), 9.5)
-        c.text(LM + 205, y, 70, 7, "金額合計: " + _num(float(amt or 0) + float(tax or 0)), 9.5, True)
+        y = 248.1
+        c.text(25.6, y, "數量合計:" + _num(qty, 1))
+        c.text(66.9, y, "採購金額: " + _num(amt))
+        c.text(110.3, y, "稅額: " + _num(tax))
+        c.text(147.3, y, "金額合計:" + _num(float(amt or 0) + float(tax or 0)))
+
+    # 頁尾說明與簽核欄
+    c.text(10.2, 256.7, "1.請確認交期並回簽訂單、2.出貨單請備註訂單號碼。")
+    c.text(10.2, 261.0, "1.Please confirm the delivery date and sign back PO to us. 2.PO No. must be indicated on the delivery note.")
+    c.text(10.2, 269.2, "部門主管:"); c.text(68.5, 269.2, "會簽單位:"); c.text(126.7, 269.2, "申請人:")
+    c.text(10.2, 282.4, "總經理：")
 
 
 def render(h, lines, printer, out_path):
     """畫出整張採購單,用指定印表機(一般列印模式)輸出到 out_path。回傳頁數。"""
-    dm = landscape_devmode(printer)
+    dm = page_devmode(printer)
     hdc = gdi.CreateDCW("WINSPOOL", printer, None, dm)
     if not hdc:
         raise RuntimeError("CreateDC 失敗(%d)" % ctypes.get_last_error())
