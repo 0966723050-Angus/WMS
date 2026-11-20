@@ -131,7 +131,31 @@ def reason_of(status):
     return s or "原因不明"
 
 
-def build_report(done, failed, pending_rows, total):
+FAX_PROGS = {"PURI07"}   # 核准確認成功後要傳真給廠商的程式(採購單)
+
+
+def fax_done(done, cfg):
+    """採購單在 ERP 確認成功後,用 po_fax.py 傳真給廠商(edit_config.json 的 poFaxEnabled 要是 true)。
+    回傳 {key_of(item): po_fax 的結果 dict}。每張獨立執行,一張失敗不影響其他張。"""
+    res = {}
+    if not cfg.get("poFaxEnabled"):
+        return res
+    import subprocess
+    for it in done:
+        if str(it.get("程式代碼") or "").upper() not in FAX_PROGS:
+            continue
+        try:
+            p = subprocess.run([sys.executable, "-I", os.path.join(HERE, "po_fax.py"), "send", it["單別"], it["單號"]],
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180)
+            last = [x for x in (p.stdout or "").splitlines() if x.strip().startswith("{")]
+            r = json.loads(last[-1]) if last else {"ok": False, "error": (p.stderr or "沒有輸出").strip()[-200:]}
+        except Exception as ex:
+            r = {"ok": False, "error": str(ex)}
+        res[key_of(it)] = r
+    return res
+
+
+def build_report(done, failed, pending_rows, total, faxes=None):
     """新格式(2026-11-19 使用者指定),每張一段、不放連結:
     採購單
     3303-20261111002
@@ -144,7 +168,16 @@ def build_report(done, failed, pending_rows, total):
         lines.append(tail)
         return "\n".join(lines)
 
-    blocks = [one(d, "簽核通過！") for d in done]
+    faxes = faxes or {}
+
+    def ok_block(d):
+        b = one(d, "簽核通過！")
+        r = faxes.get(key_of(d))
+        if r is not None:
+            b += "\n" + ("已傳真:%s" % (r.get("fax") or r.get("sentTo")) if r.get("ok") else "傳真失敗:%s" % (r.get("error") or "原因不明"))
+        return b
+
+    blocks = [ok_block(d) for d in done]
     blocks += [one(d, "簽核失敗:" + d["_reason"]) for d in failed]
     blocks += [one(d, "未處理:簽核程序沒有處理到這一張") for d in pending_rows]
     return "\n\n".join(blocks)
@@ -237,7 +270,11 @@ def cmd_finish(argv):
             else:
                 pending_rows.append(it)
     total = len(items)
-    text = build_report(done, failed, pending_rows, total)
+    try:
+        faxes = fax_done(done, load_cfg())
+    except Exception as ex:
+        faxes = {key_of(d): {"ok": False, "error": str(ex)} for d in done if str(d.get("程式代碼") or "").upper() in FAX_PROGS}
+    text = build_report(done, failed, pending_rows, total, faxes)
 
     sent = False
     sent_err = ""
@@ -268,6 +305,7 @@ def cmd_finish(argv):
     return out({"ok": True, "applied": ({"deleted": applied[0], "marked": applied[1]} if applied else None),
                 "total": total, "success": len(done), "failed": len(failed), "unprocessed": len(pending_rows),
                 "dingtalk": sent, "dingtalkError": sent_err, "site": site_ok,
+                "fax": [dict(r, key=k) for k, r in faxes.items()],
                 "failures": [{"doc": "%s-%s" % (d["單別"], d["單號"]), "prog": d["程式代碼"], "reason": d["_reason"]} for d in failed]})
 
 
