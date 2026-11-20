@@ -12,6 +12,7 @@ puri09_watch.py(每 10 秒)與排程「WMS 儲位編輯寫入」(apply_and_sync.
 """
 import datetime
 import json
+import re
 import os
 import sys
 import urllib.parse
@@ -191,6 +192,45 @@ def _invta(docno):
 
 
 KINDS.update({
+    # ---- 2026-11-20 新增:進貨查詢 / 退貨查詢(採購單底下);proj / prod 條件鍵借用為「供應廠商」「進貨(退貨)日期」----
+    "rcq": {   # 進貨單 PURTG / PURTH
+        "from": "PURTG WITH (NOLOCK) LEFT JOIN PURMA WITH (NOLOCK) ON MA001 = TG005",
+        "cond": {"type": ("TG001", "eq"), "no": ("TG002", "prefix"), "proj": (("TG005", "MA002"), "vendor"), "prod": ("TG003", "date")},
+        "confirm": "TG013",
+        "select": "TG001, TG002, TG003, TG005, MA002, TG026, TG017, TG019, TG013",
+        "order": "TG001, TG002 DESC",
+        "cols": ["進貨單別", "進貨單號", "進貨日期", "廠商", "數量合計", "進貨金額", "稅額", "確認碼"],
+        "row": lambda r: [r.TG001, r.TG002, _ymd(r.TG003), _vendor(r.TG005, r.MA002), _qty(r.TG026), _money(r.TG017),
+                          _money(r.TG019), CONFIRM.get((r.TG013 or "").strip(), r.TG013)],
+        "key": lambda r: (r.TG001, r.TG002),
+        "detail": {
+            "from": "PURTH WITH (NOLOCK)", "keycols": ("TH001", "TH002"),
+            "select": "TH001, TH002, TH003, TH004, TH005, TH006, TH007, TH015, TH008, TH018, TH019, TH009, TH011, TH012, TH013, TH042",
+            "order": "TH001, TH002, TH003",
+            "cols": ["序號", "品號", "品名", "規格", "進貨數量", "驗收數量", "單位", "單價", "金額", "庫別", "採購單", "專案代號"],
+            "row": lambda r: [r.TH003, r.TH004, r.TH005, r.TH006, _qty(r.TH007), _qty(r.TH015), r.TH008, _money(r.TH018),
+                              _money(r.TH019), r.TH009, _doc(r.TH011, r.TH012, r.TH013), r.TH042],
+        },
+    },
+    "rtq": {   # 退貨單 PURTI / PURTJ
+        "from": "PURTI WITH (NOLOCK) LEFT JOIN PURMA WITH (NOLOCK) ON MA001 = TI004",
+        "cond": {"type": ("TI001", "eq"), "no": ("TI002", "prefix"), "proj": (("TI004", "MA002"), "vendor"), "prod": ("TI003", "date")},
+        "confirm": "TI013",
+        "select": "TI001, TI002, TI003, TI004, MA002, TI022, TI011, TI015, TI012, TI013, TI026",
+        "order": "TI001, TI002 DESC",
+        "cols": ["退貨單別", "退貨單號", "退貨日期", "廠商", "數量合計", "退貨金額", "稅額", "備註", "確認碼", "確認者"],
+        "row": lambda r: [r.TI001, r.TI002, _ymd(r.TI003), _vendor(r.TI004, r.MA002), _qty(r.TI022), _money(r.TI011),
+                          _money(r.TI015), r.TI012, CONFIRM.get((r.TI013 or "").strip(), r.TI013), r.TI026],
+        "key": lambda r: (r.TI001, r.TI002),
+        "detail": {
+            "from": "PURTJ WITH (NOLOCK)", "keycols": ("TJ001", "TJ002"),
+            "select": "TJ001, TJ002, TJ003, TJ004, TJ005, TJ006, TJ009, TJ007, TJ008, TJ010, TJ011, TJ019, TJ029",
+            "order": "TJ001, TJ002, TJ003",
+            "cols": ["序號", "品號", "品名", "規格", "退貨數量", "單位", "單價", "金額", "庫別", "退貨原因", "專案代號"],
+            "row": lambda r: [r.TJ003, r.TJ004, r.TJ005, r.TJ006, _qty(r.TJ009), r.TJ007, _money(r.TJ008), _money(r.TJ010),
+                              r.TJ011, r.TJ019, r.TJ029],
+        },
+    },
     "slq": {   # 銷貨單 COPTG / COPTH
         "from": "COPTG WITH (NOLOCK) LEFT JOIN COPMA WITH (NOLOCK) ON MA001 = TG004",
         "cond": {"type": ("TG001", "eq"), "no": ("TG002", "prefix")},
@@ -344,17 +384,22 @@ def build_sql(kind, cond):
             if len(val) > 40:
                 raise ValueError("條件太長:%s" % key)
             col, how = K["cond"][key]
-            default = "=" if how == "eq" else "like%"   # 舊版網頁沒送比較方式時:單別相同、單號開頭相同
+            default = "=" if how in ("eq", "date", "vendor") else "like%"   # 舊版網頁沒送比較方式時:單別相同、單號開頭相同
+            if how == "date":   # 日期欄是 yyyyMMdd:2026-11-20、2026/11/20 都轉成 20261120
+                val = re.sub(r"[-/.\s]", "", val)
         else:
             raise ValueError("不支援的條件欄位:%s" % key)
         op = op or default
+        cols = col if isinstance(col, tuple) else (col,)   # 多欄 = 任一欄符合(例:供應廠商代號或簡稱)
         if op in ("=", ">=", "<=", "<>"):
-            where.append("%s %s ?" % (col, op))   # op 只會是 OPS 裡的固定字串
-            params.append(val)
+            joiner = " AND " if op == "<>" else " OR "
+            where.append("(" + joiner.join("%s %s ?" % (c, op) for c in cols) + ")")   # op 只會是 OPS 裡的固定字串
+            params.extend([val] * len(cols))
         else:
-            where.append("%s LIKE ?" % col)
             v = _like_escape(val)
-            params.append(("%" + v + "%") if op == "%like%" else ("%" + v) if op == "%like" else (v + "%"))
+            pv = ("%" + v + "%") if op == "%like%" else ("%" + v) if op == "%like" else (v + "%")
+            where.append("(" + " OR ".join("%s LIKE ?" % c for c in cols) + ")")
+            params.extend([pv] * len(cols))
     if not where:
         raise ValueError("至少要有一個查詢條件")
     if K.get("where"):   # 固定條件(程式內寫死的常數,例如單據性質、固定單別;不含使用者輸入)

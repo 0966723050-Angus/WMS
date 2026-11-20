@@ -1736,6 +1736,11 @@
              fields: [["type", "採購單別"], ["no", "採購單號"]] },
     prq:   { group: "採購單", title: "請購查詢", perm: "erp_po", confirm: ["N", "Y"],
              fields: [["type", "請購單別"], ["no", "請購單號"]] },
+    // 進貨 / 退貨查詢:proj / prod 鍵借用為「供應廠商(代號或簡稱)」「日期(yyyyMMdd,可打 2026-11-20)」(erpq_sql.py 對應 TG005 / TG003、TI004 / TI003)
+    rcq:   { group: "採購單", title: "進貨查詢", perm: "erp_po", confirm: ["N", "Y"],
+             fields: [["type", "進貨單別"], ["no", "進貨單號"], ["proj", "供應廠商"], ["prod", "進貨日期"]] },
+    rtq:   { group: "採購單", title: "退貨查詢", perm: "erp_po", confirm: ["N", "Y"],
+             fields: [["type", "退貨單別"], ["no", "退貨單號"], ["proj", "供應廠商"], ["prod", "退貨日期"]] },
     miq:   { group: "製造命令", title: "製令領料", perm: "erp_mo", confirm: ["N", "Y"],
              fields: [["type", "領料單別"], ["no", "領料單號"]] },
     mrq:   { group: "製造命令", title: "退料查詢", perm: "erp_mo", confirm: ["N", "Y"],
@@ -1757,7 +1762,7 @@
   // 送簽:查詢種類 → 待簽核清單的程式代碼(表單名稱優先用表單清單裡的名稱)
   var ERPQ_SIGN = { moq: { prog: "MOCI02", name: "製令" }, mochg: { prog: "MOCI12", name: "製令變更" },
                     poq: { prog: "PURI07", name: "採購單" }, pochg: { prog: "PURI08", name: "採購變更單" },
-                    prq: { prog: "PURI05", name: "請購單" },
+                    prq: { prog: "PURI05", name: "請購單" }, rcq: { prog: "PURI09", name: "進貨單" }, rtq: { prog: "PURI11", name: "退貨單" },
                     miq: { prog: "MOCI03", name: "製令領料單" }, mrq: { prog: "MOCI04", name: "製令退料單" }, mfq: { prog: "MOCI05", name: "生產入庫單" },
                     slq: { prog: "COPI08", name: "銷貨單" }, srq: { prog: "COPI09", name: "銷退單" },
                     coq: { prog: "COPI06", name: "客戶訂單" }, cochg: { prog: "COPI07", name: "訂單變更單" },
@@ -1873,7 +1878,9 @@
         '<form id="erpq-form" class="erpq-form" autocomplete="off">' +
           K.fields.map(function (f) {
             var extra = (kind === "moq" && f[0] === "proj") ? ' list="erpq-dl-proj"' : (kind === "moq" && f[0] === "prod") ? ' list="erpq-dl-prod"' :
-              f[0] === "type" ? ' inputmode="numeric" maxlength="6"' : f[0] === "no" ? ' inputmode="numeric" maxlength="14"' : "";
+              f[0] === "type" ? ' inputmode="numeric" maxlength="6"' : f[0] === "no" ? ' inputmode="numeric" maxlength="14"' :
+              ((kind === "rcq" || kind === "rtq") && f[0] === "prod") ? ' inputmode="numeric" maxlength="10" placeholder="例 20261120"' :
+              ((kind === "rcq" || kind === "rtq") && f[0] === "proj") ? ' placeholder="代號或簡稱"' : "";
             return '<div class="erpq-f"><span>' + esc(f[1]) + '</span><div class="erpq-in">' + erpqOpSelect(f[0], C["op_" + f[0]]) +
               '<input type="text" data-k="' + f[0] + '" value="' + esc(C[f[0]] || "") + '"' + extra + ' spellcheck="false" aria-label="' + esc(f[1]) + '" /></div></div>';
           }).join("") +
@@ -2172,7 +2179,8 @@
           (can("erp_po")
             ? '<div class="erp-tile erp-tile-group"><span class="erp-tile-icon">' + ERP_ICONS.po + '</span><span class="erp-tile-title">採購單</span>' +
               '<div class="erp-tile-actions"><a class="btn btn-sm" href="#/erp/poq">採單查詢</a><a class="btn btn-sm" href="#/erp/pochg">變更查詢</a>' +
-                '<a class="btn btn-sm" href="#/erp/prq">請購查詢</a></div></div>'
+                '<a class="btn btn-sm" href="#/erp/prq">請購查詢</a><a class="btn btn-sm" href="#/erp/rcq">進貨查詢</a>' +
+                '<a class="btn btn-sm" href="#/erp/rtq">退貨查詢</a></div></div>'
             : '') +
           (can("erp_sales")
             ? '<div class="erp-tile erp-tile-group"><span class="erp-tile-icon">' + ERP_ICONS.sales + '</span><span class="erp-tile-title">銷貨單</span>' +

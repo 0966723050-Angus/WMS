@@ -688,7 +688,7 @@ function signAck_(ts, msg) {
 
 // ---------- ERP 查詢(製令 / 製令變更 / 採購單 / 採購變更):網頁送出條件 → 電腦端在 ERP 查詢 → 清單回傳網頁 ----------
 var ERPQ_PERM = { moq: 'erp_mo', mochg: 'erp_mo', miq: 'erp_mo', mrq: 'erp_mo', mfq: 'erp_mo',
-                  poq: 'erp_po', pochg: 'erp_po', prq: 'erp_po',
+                  poq: 'erp_po', pochg: 'erp_po', prq: 'erp_po', rcq: 'erp_po', rtq: 'erp_po',
                   slq: 'erp_sales', srq: 'erp_sales', coq: 'erp_co', cochg: 'erp_co',
                   ivi: 'erp_inv', ivz: 'erp_inv', ivs: 'erp_inv' };
 var ERPQ_PERM_NAME = { erp_mo: 'ERP:製造命令', erp_po: 'ERP:採購單', erp_sales: 'ERP:銷貨單', erp_co: 'ERP:客戶訂單', erp_inv: 'ERP:庫存異動' };
