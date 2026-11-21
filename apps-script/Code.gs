@@ -1164,7 +1164,7 @@ function doPost(e) {
       return json_({ ok: true, email: me.email, name: me.name, isAdmin: me.isAdmin, perms: me.perms, costKey: costKeyFor_(me.perms), session: ns.token, exp: ns.exp });
     }
 
-    // 標籤待列印清單:哪些「料號|製令單號」已從標籤頁下載過 Excel(全公司共用,保留 180 天)
+    // 標籤「自動選取」:哪些「料號|製令單號」已在自動選取頁下載過 Excel(全公司共用,保留 180 天)
     if (action === 'label_dl_check') {
       var ks = (Array.isArray(body.keys) ? body.keys : []).slice(0, 5000), dm = labelDlRead_();
       return json_({ ok: true, done: ks.filter(function (k) { return dm[String(k)]; }) });

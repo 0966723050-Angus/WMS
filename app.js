@@ -3528,7 +3528,7 @@
   var LABEL_FILTERS = ["projCode", "projName", "orderNo", "prodCode", "assy"];   // 表格上方的下拉篩選欄位
   var LABEL_FILTER_NAMES = { projCode: "專案代號", projName: "專案名稱", orderNo: "製令單號", prodCode: "產品品號", assy: "Ass'y" };
   var LABEL_MAX_SHOW = 500;      // 一次最多列出的筆數(太多會拖慢手機)
-  var labelSel = null;           // 系統選取頁:篩選、勾選、改過的數量/備註(換頁回來還在)
+  var labelSel = null;           // 半自動選取頁:篩選、勾選、改過的數量/備註(換頁回來還在)
   var labelManual = null;        // 手動設置頁的各列
   var LABEL_DIR_OK = typeof window.showDirectoryPicker === "function";   // 電腦版 Chrome / Edge 才能指定資料夾
   var LABEL_ICONS = {
@@ -3603,7 +3603,7 @@
 
   // 工作表「單頭資料」:A 欄流水號(8 碼數字 = 月日 4 碼 + 當天流水號 4 碼,例 11190001),B~K 欄為標籤欄位。
   // 流水號由伺服器發號:全公司共用、當天接續往下編,隔天從 0001 起(Apps Script label_serial mode=md4)。
-  var LABEL_FILE_SYSTEM = "export.xlsx";        // 系統選取:固定檔名,資料夾裡已有就直接覆蓋
+  var LABEL_FILE_SYSTEM = "export.xlsx";        // 半自動 / 自動選取:固定檔名,資料夾裡已有就直接覆蓋
   var LABEL_FILE_MANUAL = "export-自填.xlsx";   // 手動設置
   var labelMd = "";   // 這次發號的月日(4 碼),由伺服器決定(台北時間)
   function labelSerial8(n) { return labelMd + ("000" + n).slice(-4); }   // 例 1119 + 0001 = 11190001
@@ -3663,7 +3663,7 @@
     });
   }
 
-  // 標籤頁任何一種下載(系統選取 / 手動設置 / 待列印清單)都把「料號|製令單號」記成已下載(全公司共用,伺服器保留 180 天)
+  // 只有「自動選取」頁的下載會把「料號|製令單號」記成已下載(全公司共用,伺服器保留 180 天);半自動選取、手動設置不記
   function labelDlKey(code, orderNo) { return String(code || "").trim() + "|" + shortOrderNo(String(orderNo || "").trim()); }
   function markLabelDownloaded(rows) {
     var seen = {}, keys = [];
@@ -3676,7 +3676,7 @@
     api("label_dl_mark", { keys: keys }).then(function (res) {
       if (!res.ok) throw new Error(res.error || "");
     }).catch(function (err) {
-      window.alert("標籤已下載,但「已下載」紀錄沒有存成功(" + ((err && err.message) || err) + "),待列印清單可能會再列出這些物料。");
+      window.alert("標籤已下載,但「已下載」紀錄沒有存成功(" + ((err && err.message) || err) + "),自動選取可能會再列出這些物料。");
     });
   }
 
@@ -3720,15 +3720,14 @@
       }
       return saved.then(function (where) {
         showToast("已下載 " + rows.length + " 筆標籤(流水號 " + range + "):" + name + ",存到" + where);
-        markLabelDownloaded(rows);   // 待列印清單用:料號 + 製令單號 下載過就不再列出
-        if (typeof onDone === "function") onDone();   // 例如系統選取:下載完成後自動清除勾選
+        if (typeof onDone === "function") onDone();   // 例如半自動選取:下載完成後自動清除勾選
       });
     }).catch(function (err) {
       window.alert("下載失敗:" + ((err && err.message) || err));
     }).then(function () { labelSaving = false; });
   }
 
-  // ---- 待列印清單:指定日期(今天 / 區間)已確認的進貨單物料 ∩ 在線製令的物料,已下載過的自動剔除 ----
+  // ---- 自動選取(待列印清單):指定日期(今天 / 區間)已確認的進貨單物料 ∩ 在線製令的物料,已下載過的自動剔除 ----
   // 進貨資料由公司電腦即時查 ERP(erpq 種類 lbr);「已下載」紀錄存在 Apps Script(label_dl_check / label_dl_mark),全公司共用
   var labelPend = null;
   function ymdCompact(s) { return String(s || "").replace(/[^0-9]/g, ""); }
@@ -3759,8 +3758,8 @@
     if (!labelPend) labelPend = { from: "", to: "", rows: [], qty: {}, note: {}, info: "", busy: false, asked: false };
     var P = labelPend, today = todayYmd();
     app.innerHTML =
-      '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/label">標籤</a> / 待列印清單</div>' +
-      '<h1 class="page-title page-title-row"><span>待列印標籤清單</span>' +
+      '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/label">標籤</a> / 自動選取</div>' +
+      '<h1 class="page-title page-title-row"><span>自動選取</span>' +
         '<button type="button" class="btn btn-sm" id="lp-dl" disabled>下載 Excel</button></h1>' +
       '<div class="toolbar lp-toolbar">' +
         '<button type="button" class="btn btn-sm" id="lp-today">今天</button>' +
@@ -3769,7 +3768,7 @@
           '<div class="lp-cal" id="lp-cal" hidden></div></div>' +
         '<button type="button" class="btn btn-sm btn-secondary" id="lp-ok">確認</button>' +
       '</div>' +
-      '<p class="lp-note">列出期間內已確認的進貨單物料,只列在線製令裡有的料號;標籤頁下載過的(同料號 + 製令單號)會自動剔除。數量預設為驗收數量,可修改,也可刪除不印的列。</p>' +
+      '<p class="lp-note">列出期間內已確認的進貨單物料,只列在線製令裡有的料號;在這一頁下載過的(同料號 + 製令單號)會自動剔除。數量預設為驗收數量,可修改,也可刪除不印的列。</p>' +
       '<div class="lbl-countrow"><p class="result-count" id="lp-count"></p></div>' +
       '<div class="lbl-wrap"><table class="lbl-table lp-table"><thead><tr class="lbl-titles">' +
         '<th class="c-rcvDate">進貨日期</th><th class="c-rcvDoc">進貨單</th><th class="c-vendor">廠商</th>' +
@@ -3923,7 +3922,7 @@
       renderBody();
     });
 
-    // ---- 下載:檔名、存放位置、流水號同「系統選取」;下載完成後記成已下載並從清單移除 ----
+    // ---- 下載:檔名、存放位置、流水號同「半自動選取」;下載完成後記成已下載並從清單移除 ----
     document.getElementById("lp-dl").addEventListener("click", function () {
       var rows = P.rows.map(function (r) {
         var q = P.qty[r.key] !== undefined ? P.qty[r.key] : r.defQty;
@@ -3932,6 +3931,7 @@
       }).filter(function (r) { return r.qty !== 0; });
       if (!rows.length) { window.alert("沒有要下載的項目(數量為 0 的列不會下載)"); return; }
       confirmLabelDownload(rows, LABEL_FILE_SYSTEM, function () {
+        markLabelDownloaded(rows);   // 料號 + 製令單號 記成已下載,之後查詢不再列出
         var gone = {};
         rows.forEach(function (r) { gone[labelDlKey(r.code, r.orderNo)] = 1; });   // 同料號 + 製令的列一起移除
         P.rows = P.rows.filter(function (r) { return !gone[labelDlKey(r.code, r.orderNo)]; });
@@ -3951,11 +3951,11 @@
       '<h1 class="page-title">標籤</h1>' +
       '<div class="erp-grid">' +
         '<a class="erp-tile" href="#/label/select"><span class="erp-tile-icon">' + LABEL_ICONS.select + '</span>' +
-          '<span class="erp-tile-title">系統選取</span><span class="erp-tile-note">從在線製令的物料勾選要印的標籤</span></a>' +
+          '<span class="erp-tile-title">半自動選取</span><span class="erp-tile-note">從在線製令的物料勾選要印的標籤</span></a>' +
         '<a class="erp-tile" href="#/label/manual"><span class="erp-tile-icon">' + LABEL_ICONS.manual + '</span>' +
           '<span class="erp-tile-title">手動設置</span><span class="erp-tile-note">自行輸入標籤內容</span></a>' +
         '<a class="erp-tile" href="#/label/pending"><span class="erp-tile-icon">' + LABEL_ICONS.pending + '</span>' +
-          '<span class="erp-tile-title">待列印清單</span><span class="erp-tile-note">今天 / 指定期間已核准進貨的物料,下載過的自動剔除</span></a>' +
+          '<span class="erp-tile-title">自動選取</span><span class="erp-tile-note">今天 / 指定期間已核准進貨的物料,這裡下載過的自動剔除</span></a>' +
       '</div>' +
       '<section class="sign-card lbl-dir-card">' +
         '<h2 class="sign-h">Excel 下載位置</h2>' +
@@ -3996,7 +3996,7 @@
     });
   }
 
-  // ---- 系統選取(標籤選取) ----
+  // ---- 半自動選取(原系統選取) ----
   function renderLabelSelect(app) {
     if (!labelSel) labelSel = { f: { projCode: "", projName: "", orderNo: "", prodCode: "", assy: "" }, q: "", checked: {}, qty: {}, note: {} };
     if (labelSel.f.prodCode === undefined) labelSel.f.prodCode = "";
@@ -4008,8 +4008,8 @@
     Object.keys(S.checked).forEach(function (k) { if (!byKey[k]) delete S.checked[k]; });   // 資料更新後已不存在的列
 
     app.innerHTML =
-      '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/label">標籤</a> / 系統選取</div>' +
-      '<h1 class="page-title page-title-row"><span>標籤選取</span>' +
+      '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/label">標籤</a> / 半自動選取</div>' +
+      '<h1 class="page-title page-title-row"><span>半自動選取</span>' +
         '<button type="button" class="btn btn-sm" id="lbl-dl" disabled>下載 Excel</button></h1>' +
       '<div class="toolbar lbl-toolbar">' +
         '<div class="search-wrap">' +
