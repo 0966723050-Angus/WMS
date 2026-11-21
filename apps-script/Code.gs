@@ -308,7 +308,7 @@ var WMS_REQ_KEY = 'WMS_REQ';
 var WMS_STATUS_KEY = 'WMS_STATUS';
 var WMS_STALE_MS = 2 * 60 * 60 * 1000;   // 執行中狀態超過 2 小時視為已失效(避免本機當掉後按鈕永遠鎖住)
 
-// 標籤「已下載」紀錄:{單別-單號-序號: yyyyMMdd},gzip+base64 後分段存在 Script Properties(每段 8000 字),保留 180 天
+// 標籤「已下載」紀錄:{料號|製令單號: yyyyMMdd},gzip+base64 後分段存在 Script Properties(每段 8000 字),保留 180 天
 function labelDlRead_() {
   var p = props_(), n = Number(p.getProperty('LABEL_DL_N') || 0), b64 = '';
   if (!n) return {};
@@ -1164,7 +1164,7 @@ function doPost(e) {
       return json_({ ok: true, email: me.email, name: me.name, isAdmin: me.isAdmin, perms: me.perms, costKey: costKeyFor_(me.perms), session: ns.token, exp: ns.exp });
     }
 
-    // 標籤待列印清單:哪些進貨單身(單別-單號-序號)已經下載過標籤(全公司共用,保留 180 天)
+    // 標籤待列印清單:哪些「料號|製令單號」已從標籤頁下載過 Excel(全公司共用,保留 180 天)
     if (action === 'label_dl_check') {
       var ks = (Array.isArray(body.keys) ? body.keys : []).slice(0, 5000), dm = labelDlRead_();
       return json_({ ok: true, done: ks.filter(function (k) { return dm[String(k)]; }) });

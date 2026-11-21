@@ -3663,6 +3663,23 @@
     });
   }
 
+  // 標籤頁任何一種下載(系統選取 / 手動設置 / 待列印清單)都把「料號|製令單號」記成已下載(全公司共用,伺服器保留 180 天)
+  function labelDlKey(code, orderNo) { return String(code || "").trim() + "|" + shortOrderNo(String(orderNo || "").trim()); }
+  function markLabelDownloaded(rows) {
+    var seen = {}, keys = [];
+    rows.forEach(function (r) {
+      if (!r.code || !r.orderNo) return;
+      var k = labelDlKey(r.code, r.orderNo);
+      if (!seen[k]) { seen[k] = 1; keys.push(k); }
+    });
+    if (!keys.length) return;
+    api("label_dl_mark", { keys: keys }).then(function (res) {
+      if (!res.ok) throw new Error(res.error || "");
+    }).catch(function (err) {
+      window.alert("標籤已下載,但「已下載」紀錄沒有存成功(" + ((err && err.message) || err) + "),待列印清單可能會再列出這些物料。");
+    });
+  }
+
   var labelSaving = false;
   // 先確認資料夾權限(要在按鍵當下詢問),再向伺服器領流水號,最後寫檔:
   // 有設定資料夾就直接寫進去(同名檔案直接覆蓋);沒設定、不支援或沒給權限,就用瀏覽器一般下載
@@ -3703,6 +3720,7 @@
       }
       return saved.then(function (where) {
         showToast("已下載 " + rows.length + " 筆標籤(流水號 " + range + "):" + name + ",存到" + where);
+        markLabelDownloaded(rows);   // 待列印清單用:料號 + 製令單號 下載過就不再列出
         if (typeof onDone === "function") onDone();   // 例如系統選取:下載完成後自動清除勾選
       });
     }).catch(function (err) {
@@ -3751,7 +3769,7 @@
           '<div class="lp-cal" id="lp-cal" hidden></div></div>' +
         '<button type="button" class="btn btn-sm btn-secondary" id="lp-ok">確認</button>' +
       '</div>' +
-      '<p class="lp-note">列出期間內已確認的進貨單物料,只列在線製令裡有的料號;已下載過的會自動剔除。數量預設為驗收數量,可修改,也可刪除不印的列。</p>' +
+      '<p class="lp-note">列出期間內已確認的進貨單物料,只列在線製令裡有的料號;標籤頁下載過的(同料號 + 製令單號)會自動剔除。數量預設為驗收數量,可修改,也可刪除不印的列。</p>' +
       '<div class="lbl-countrow"><p class="result-count" id="lp-count"></p></div>' +
       '<div class="lbl-wrap"><table class="lbl-table lp-table"><thead><tr class="lbl-titles">' +
         '<th class="c-rcvDate">進貨日期</th><th class="c-rcvDoc">進貨單</th><th class="c-vendor">廠商</th>' +
@@ -3816,12 +3834,12 @@
         });
       }).then(function (result) {
         var built = pendBuild(result);
-        var keys = built.rows.map(function (r) { return r.key; });
+        var keys = built.rows.map(function (r) { return labelDlKey(r.code, r.orderNo); });
         return (keys.length ? api("label_dl_check", { keys: keys }) : Promise.resolve({ ok: true, done: [] })).then(function (ck) {
           if (!ck.ok) throw new Error(ck.error || "無法讀取下載紀錄");
           var done = {};
           (ck.done || []).forEach(function (k) { done[k] = 1; });
-          P.rows = built.rows.filter(function (r) { return !done[r.key]; });
+          P.rows = built.rows.filter(function (r) { return !done[labelDlKey(r.code, r.orderNo)]; });
           var nDone = built.rows.length - P.rows.length;
           P.info = [nDone ? "已下載過 " + nDone + " 筆已剔除" : "", built.skipped ? "不在在線製令的進貨物料 " + built.skipped + " 筆未列出" : ""].filter(Boolean).join(" · ");
         });
@@ -3914,15 +3932,10 @@
       }).filter(function (r) { return r.qty !== 0; });
       if (!rows.length) { window.alert("沒有要下載的項目(數量為 0 的列不會下載)"); return; }
       confirmLabelDownload(rows, LABEL_FILE_SYSTEM, function () {
-        var keys = rows.map(function (r) { return r.key; }), gone = {};
-        keys.forEach(function (k) { gone[k] = 1; });
-        P.rows = P.rows.filter(function (r) { return !gone[r.key]; });
+        var gone = {};
+        rows.forEach(function (r) { gone[labelDlKey(r.code, r.orderNo)] = 1; });   // 同料號 + 製令的列一起移除
+        P.rows = P.rows.filter(function (r) { return !gone[labelDlKey(r.code, r.orderNo)]; });
         if (alive()) renderBody();
-        api("label_dl_mark", { keys: keys }).then(function (res) {
-          if (!res.ok) throw new Error(res.error || "");
-        }).catch(function (err) {
-          window.alert("標籤已下載,但「已下載」紀錄沒有存成功(" + ((err && err.message) || err) + "),下次查詢可能會再列出這些項目。");
-        });
       });
     });
   }
