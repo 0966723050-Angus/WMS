@@ -15,6 +15,10 @@
   python -I erp_check.py po-receipt <採購單別-單號-序號,...> [--days 1]
       建立進貨單後查:這些採購序號今天(或最近 --days 天)被哪張進貨單引用、進貨數量、確認碼。
       回傳每列對應的進貨單與可直接給 puri09_cleanup.py clear 用的 doneArg(只含已確認的)。
+  python -I erp_check.py wt-precheck [--file ERP-WT.xlsx]
+      專案報工(PJTI03):讀 ERP-WT.xlsx 分組(專案代號+費用歸屬一張),檢查專案 / 員工是否存在、ERP 是否已有同日同專案同歸屬的報工。
+  python -I erp_check.py wt-verify [--proj 專案代號 --cost 費用歸屬] [--file ...]
+      存檔後核對 ERP(PJTMD / PJTME)與 Excel 是否一致;不給 --proj 就核對整份。
 """
 import datetime
 import json
@@ -238,8 +242,168 @@ def cmd_po_receipt(argv):
     return out({"ok": True, "lines": res, "doneArg": ",".join(done)})
 
 
+# ---------------- 專案報工(PJTI03):單頭 PJTMD(MD001 費用歸屬、MD002 專案代號、MD003 日期)、單身 PJTME(ME004 員工、ME005 工時)----------------
+WT_XLSX = r"C:\ATK\Project\AI Agent\ERP\ERP-WT.xlsx"
+COST_LABEL = {"1": "1.研發", "2": "2.維修"}
+
+
+def _num_s(v):
+    try:
+        f = float(v)
+    except Exception:
+        return 0.0
+    return round(f, 2)
+
+
+def wt_read(path):
+    """讀 ERP-WT.xlsx → (程式代碼, 日期 yyyyMMdd, [單據]);同「專案代號 + 費用歸屬」合成一張(ERP 這三個值是唯一鍵,分開存會重複),
+    同一張裡同一員工出現多次就把工時加總。單據順序依 Excel 第一次出現的順序。"""
+    import openpyxl
+    wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    ws = wb["Sheet1"] if "Sheet1" in wb.sheetnames else wb.worksheets[0]
+    rows = list(ws.iter_rows(min_row=2, values_only=True))
+    wb.close()
+    if not rows:
+        return "", "", [], []
+    prog = _s(rows[0][0]) or "PJTI03"
+    d = rows[0][1]
+    if isinstance(d, (datetime.date, datetime.datetime)):
+        ymd = d.strftime("%Y%m%d")
+    else:
+        ymd = "".join(ch for ch in _s(d) if ch.isdigit())
+        if len(ymd) == 8:
+            pass
+        else:
+            parts = [p for p in _s(d).replace("-", "/").split("/") if p]
+            ymd = "%04d%02d%02d" % tuple(int(x) for x in parts[:3]) if len(parts) >= 3 else ""
+    docs, idx, notes = [], {}, []
+    for i, r in enumerate(rows, start=2):
+        r = list(r) + [None] * 7
+        proj = _s(r[2])
+        if not proj:
+            break
+        cost = _s(r[3]).split(".")[0]
+        emp, name, hrs = _s(r[5]), _s(r[4]), _num_s(r[6])
+        k = (proj, cost)
+        if k not in idx:
+            idx[k] = len(docs)
+            docs.append({"proj": proj, "cost": cost, "costLabel": COST_LABEL.get(cost, cost), "lines": [], "rows": []})
+        doc = docs[idx[k]]
+        doc["rows"].append(i)
+        same = [ln for ln in doc["lines"] if ln["emp"] == emp]
+        if same:
+            same[0]["hours"] = round(same[0]["hours"] + hrs, 2)
+            notes.append("第 %d 列:%s %s 在同一張單重複,工時已加總" % (i, proj, emp))
+        else:
+            doc["lines"].append({"emp": emp, "name": name, "hours": hrs, "row": i})
+    return prog, ymd, docs, notes
+
+
+def wt_erp_doc(cur, cost, proj, ymd):
+    cur.execute("SELECT COUNT(*) FROM PJTMD WITH (NOLOCK) WHERE MD001 = ? AND MD002 = ? AND MD003 = ?", [cost, proj, ymd])
+    if not cur.fetchone()[0]:
+        return None
+    cur.execute("SELECT ME004, ME005 FROM PJTME WITH (NOLOCK) WHERE ME001 = ? AND ME002 = ? AND ME003 = ?", [cost, proj, ymd])
+    return {_s(a): _num_s(b) for a, b in cur.fetchall()}
+
+
+def _same_lines(doc, erp):
+    want = {ln["emp"]: ln["hours"] for ln in doc["lines"]}
+    return erp is not None and want == erp
+
+
+def cmd_wt_precheck(argv):
+    path = argv[argv.index("--file") + 1] if "--file" in argv else WT_XLSX
+    prog, ymd, docs, notes = wt_read(path)
+    if not docs:
+        return out({"ok": True, "date": ymd, "todo": [], "done": [], "fail": [], "message": "ERP-WT.xlsx 沒有資料列"})
+    if len(ymd) != 8:
+        return out({"ok": False, "error": "B2 日期無法辨識"}, 1)
+    todo, done, fail, names = [], [], [], []
+    cn = connect()
+    try:
+        cur = cn.cursor()
+        for doc in docs:
+            label = "%s %s" % (doc["proj"], doc["costLabel"])
+            if doc["cost"] not in COST_LABEL:
+                fail.append(dict(doc, reason="費用歸屬只能是 1 或 2"))
+                continue
+            cur.execute("SELECT NB002 FROM CMSNB WITH (NOLOCK) WHERE NB001 = ?", [doc["proj"]])
+            r = cur.fetchone()
+            if not r:
+                fail.append(dict(doc, reason="ERP 查無專案代號"))
+                continue
+            doc["projName"] = _s(r[0])
+            bad = []
+            for ln in doc["lines"]:
+                cur.execute("SELECT MV002 FROM CMSMV WITH (NOLOCK) WHERE MV001 = ?", [ln["emp"]])
+                m = cur.fetchone()
+                if not m:
+                    bad.append(ln["emp"])
+                    continue
+                ln["erpName"] = _s(m[0])
+                if ln["name"] and ln["erpName"] != ln["name"]:
+                    names.append("%s:Excel「%s」/ERP「%s」(%s)" % (ln["emp"], ln["name"], ln["erpName"], label))
+            if bad:
+                fail.append(dict(doc, reason="ERP 查無員工代號:" + "、".join(bad)))
+                continue
+            doc["hours"] = round(sum(ln["hours"] for ln in doc["lines"]), 2)
+            erp = wt_erp_doc(cur, doc["cost"], doc["proj"], ymd)
+            if erp is None:
+                todo.append(doc)
+            elif _same_lines(doc, erp):
+                done.append(dict(doc, note="ERP 已有相同的報工(未操作)"))
+            else:
+                fail.append(dict(doc, reason="ERP 已有這張報工但內容不同(%d 人),請在 ERP 確認後再處理,避免重複" % len(erp)))
+    finally:
+        cn.close()
+    return out({"ok": True, "prog": prog, "date": ymd, "dateDash": "%s-%s-%s" % (ymd[:4], ymd[4:6], ymd[6:]),
+                "docCount": len(docs), "needUi": len(todo), "todoHours": round(sum(d["hours"] for d in todo), 2),
+                "todo": todo, "done": done, "fail": fail, "nameMismatch": names, "notes": notes})
+
+
+def cmd_wt_verify(argv):
+    """存檔後核對:不給 --proj 就核對整份 Excel;給 --proj X --cost C 只核對那一張。"""
+    path = argv[argv.index("--file") + 1] if "--file" in argv else WT_XLSX
+    proj = argv[argv.index("--proj") + 1] if "--proj" in argv else None
+    cost = argv[argv.index("--cost") + 1] if "--cost" in argv else None
+    prog, ymd, docs, _ = wt_read(path)
+    if proj:
+        docs = [d for d in docs if d["proj"] == proj and (cost is None or d["cost"] == cost)]
+        if not docs:
+            return out({"ok": False, "error": "Excel 裡沒有這張:%s %s" % (proj, cost or "")}, 1)
+    okl, bad = [], []
+    cn = connect()
+    try:
+        cur = cn.cursor()
+        for d in docs:
+            erp = wt_erp_doc(cur, d["cost"], d["proj"], ymd)
+            label = "%s %s" % (d["proj"], COST_LABEL.get(d["cost"], d["cost"]))
+            if erp is None:
+                bad.append({"doc": label, "reason": "ERP 沒有這張(未存檔)"})
+            elif _same_lines(d, erp):
+                okl.append(label)
+            else:
+                want = {ln["emp"]: ln["hours"] for ln in d["lines"]}
+                diff = ["%s Excel %s / ERP %s" % (e, want.get(e, "-"), erp.get(e, "-")) for e in sorted(set(want) | set(erp)) if want.get(e) != erp.get(e)]
+                bad.append({"doc": label, "reason": "內容不符:" + ";".join(diff)})
+    finally:
+        cn.close()
+    return out({"ok": not bad, "date": ymd, "okCount": len(okl), "ok_docs": okl, "bad": bad}, 0 if not bad else 1)
+
+
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else ""
+    if cmd == "wt-precheck":
+        try:
+            return cmd_wt_precheck(argv)
+        except Exception as ex:
+            return out({"ok": False, "error": "%s: %s" % (type(ex).__name__, ex)}, 1)
+    if cmd == "wt-verify":
+        try:
+            return cmd_wt_verify(argv)
+        except Exception as ex:
+            return out({"ok": False, "error": "%s: %s" % (type(ex).__name__, ex)}, 1)
     try:
         if cmd == "sign-precheck":
             return cmd_sign_precheck(argv)
