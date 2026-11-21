@@ -149,9 +149,10 @@
     { key: "cost", label: "庫存單位成本" },
     { key: "label", label: "標籤" },
     { key: "scan", label: "掃描收料(手機)" },
-    { key: "sign_progs", label: "待簽核:編輯表單清單" }
+    { key: "sign_progs", label: "待簽核:編輯表單清單" },
+    { key: "sign_del", label: "待簽核:刪除項目" }
   ];
-  var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_sign: false, erp_wms: false, erp_mo: false, erp_po: false, erp_sales: false, erp_co: false, erp_inv: false, cost: false, label: true, scan: true, sign_progs: false };
+  var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_sign: false, erp_wms: false, erp_mo: false, erp_po: false, erp_sales: false, erp_co: false, erp_inv: false, cost: false, label: true, scan: true, sign_progs: false, sign_del: false };
 
   function can(perm) { return !!(session && session.perms && session.perms[perm]); }
 
@@ -1224,7 +1225,11 @@
   // 表單名稱 / 程式代碼對照:網頁上編輯過的清單(存在伺服器,所有人共用)優先,沒編輯過就用對照表 Excel 的預設清單
   var signProgs = null;
   function signFormList() { return signProgs || (state.data && state.data.signForms) || []; }
-  function canEditProgs() { return can("sign_progs"); }   // 權限「待簽核:編輯表單清單」
+  function canEditProgs() { return can("sign_progs"); }
+  // 待簽核清單的刪除:有權限 sign_del,或是這一張的上傳者本人
+  function canDelSign(f) {
+    return can("sign_del") || !!(session && f && String(f.by || "").trim().toLowerCase() === String(session.email || "").trim().toLowerCase());
+  }   // 權限「待簽核:編輯表單清單」
   function signCodeOfName(name) {
     var f = signFormList().filter(function (x) { return x.name === name; })[0];
     return f ? f.code : "";
@@ -1333,7 +1338,7 @@
         '<input class="sign-vendor" value="' + esc(f.vendor) + '" maxlength="30" autocomplete="off" placeholder="廠商" aria-label="廠商" />' +
         '<span class="sign-by" title="' + esc(f.by || "") + '"><i class="sign-by-l">上傳者:</i>' + esc(f.byName || String(f.by || "").split("@")[0] || "—") + '</span>' +
         '<span class="sign-img">' + (f.imgUrl && /^https:\/\//.test(f.imgUrl) ? '<a href="' + esc(f.imgUrl) + '" target="_blank" rel="noopener noreferrer" title="開啟這張表單的來源截圖"><i class="sign-img-l">圖片:</i>查看</a>' : '') + '</span>' +
-        '<button type="button" class="rcv-del sign-del" aria-label="刪除這一張">刪除</button>' +
+        (canDelSign(f) ? '<button type="button" class="rcv-del sign-del" aria-label="刪除這一張">刪除</button>' : '<span></span>') +
         '<div class="sign-meta">' + metaHtml(f) + '</div>' +
       '</div>';
     }
@@ -1344,6 +1349,7 @@
       $("sign-ok").title = canConfirm ? "" : "需要「ERP:待簽核表單確認」權限,請聯絡管理者";
       $("sign-ok").textContent = n ? "確認(" + n + " 張)" : "確認";
       $("sign-clear").disabled = !forms.length;
+      $("sign-clear").hidden = !can("sign_del");   // 全部清除只限有「刪除項目」權限的人
       $("sign-all").checked = forms.length > 0 && n === forms.length;
       $("sign-count").textContent = forms.length ? "共 " + forms.length + " 張" : "";
     }

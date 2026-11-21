@@ -94,9 +94,9 @@ function makeSession_(email) {
 // cost 庫存單位成本(有此權限才在 auth / me 回傳 COST_KEY,網頁才能解開 cost.enc)
 // 帳號記錄裡沒有 perms 的舊帳號 = 只有「儲位編輯」(維持原本能做的事)。主管理者(ADMIN_EMAIL)永遠全部權限。
 
-var PERM_KEYS = ['admin', 'edit', 'receive', 'ret', 'erp_receipt', 'erp_return', 'erp_issue', 'erp_sign', 'erp_wms', 'erp_mo', 'erp_po', 'erp_sales', 'erp_co', 'erp_inv', 'cost', 'label', 'scan', 'sign_progs'];
+var PERM_KEYS = ['admin', 'edit', 'receive', 'ret', 'erp_receipt', 'erp_return', 'erp_issue', 'erp_sign', 'erp_wms', 'erp_mo', 'erp_po', 'erp_sales', 'erp_co', 'erp_inv', 'cost', 'label', 'scan', 'sign_progs', 'sign_del'];
 // 沒設定過的項目用預設值:儲位編輯、收料、標籤、掃描原本所有人都能用,所以舊帳號維持有這幾項
-var PERM_DEFAULTS = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_issue: false, erp_sign: false, erp_wms: false, erp_mo: false, erp_po: false, erp_sales: false, erp_co: false, erp_inv: false, cost: false, label: true, scan: true, sign_progs: false };
+var PERM_DEFAULTS = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_issue: false, erp_sign: false, erp_wms: false, erp_mo: false, erp_po: false, erp_sales: false, erp_co: false, erp_inv: false, cost: false, label: true, scan: true, sign_progs: false, sign_del: false };
 
 // 單位成本金鑰:只給有 cost 權限的人
 function costKeyFor_(perms) {
@@ -674,14 +674,22 @@ function addSignForms_(body, user) {
   return { ok: true, added: added, skipped: skipped };
 }
 
-function deleteSignForm_(body) {
+// 刪除:需要權限 sign_del(待簽核:刪除項目);例外:上傳者可以刪除自己上傳的那一張。全部清除只限有權限的人
+function deleteSignForm_(body, me) {
   if (body.all === true) {
+    if (!me.perms.sign_del) return { ok: false, error: '您沒有「待簽核:刪除項目」的權限' };
     var n = 0;
     listSignForms_().forEach(function (r) { props_().deleteProperty(SIGN_PREFIX + r.id); n++; });
     return { ok: true, removed: n };
   }
   var id = String(body.id || '');
-  if (!id || props_().getProperty(SIGN_PREFIX + id) === null) return { ok: false, error: '這筆已經不存在,請重新整理' };
+  var raw = id ? props_().getProperty(SIGN_PREFIX + id) : null;
+  if (raw === null) return { ok: false, error: '這筆已經不存在,請重新整理' };
+  if (!me.perms.sign_del) {
+    var rec = null;
+    try { rec = JSON.parse(raw); } catch (err) { rec = null; }
+    if (!rec || normEmail_(rec.by) !== normEmail_(me.email)) return { ok: false, error: '只能刪除自己上傳的表單(刪除別人的需要「待簽核:刪除項目」權限)' };
+  }
   props_().deleteProperty(SIGN_PREFIX + id);
   return { ok: true, removed: 1 };
 }
@@ -1270,7 +1278,7 @@ function doPost(e) {
       if (action === 'signforms_list') return json_({ ok: true, forms: listSignForms_().map(function (f) { f.byName = displayName_(f.by); return f; }) });
       if (action === 'signforms_save') return json_(saveSignForm_(body, me));
       if (action === 'signforms_add') return json_(addSignForms_(body, me));
-      if (action === 'signforms_delete') return json_(deleteSignForm_(body));
+      if (action === 'signforms_delete') return json_(deleteSignForm_(body, me));
       if (action === 'sign_status') return json_(puriView_('sign'));
       if (action === 'sign_request') return json_(requestSign_(body, me));
       if (action === 'signimg_upload') return json_(uploadSignImage_(body, me));
