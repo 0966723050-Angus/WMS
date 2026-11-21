@@ -1330,7 +1330,7 @@
         '<input class="sign-dt" value="' + esc(f.docType) + '" inputmode="numeric" maxlength="6" autocomplete="off" aria-label="單別" />' +
         '<input class="sign-dn" value="' + esc(f.docNo) + '" inputmode="numeric" maxlength="16" autocomplete="off" aria-label="單號" />' +
         '<input class="sign-vendor" value="' + esc(f.vendor) + '" maxlength="30" autocomplete="off" placeholder="廠商" aria-label="廠商" />' +
-        '<span class="sign-by" title="' + esc(f.by || "") + '"><i class="sign-by-l">上傳者:</i>' + esc(f.by || "—") + '</span>' +
+        '<span class="sign-by" title="' + esc(f.by || "") + '"><i class="sign-by-l">上傳者:</i>' + esc(f.byName || String(f.by || "").split("@")[0] || "—") + '</span>' +
         '<span class="sign-img">' + (f.imgUrl && /^https:\/\//.test(f.imgUrl) ? '<a href="' + esc(f.imgUrl) + '" target="_blank" rel="noopener noreferrer" title="開啟這張表單的來源截圖"><i class="sign-img-l">圖片:</i>查看</a>' : '') + '</span>' +
         '<button type="button" class="rcv-del sign-del" aria-label="刪除這一張">刪除</button>' +
         '<div class="sign-meta">' + metaHtml(f) + '</div>' +
@@ -1667,7 +1667,7 @@
         $("sign-imgs").innerHTML = todayImgs.length ? todayImgs.map(function (r) {
           var cls = r.state === "error" ? " bad" : r.state === "done" ? " ok" : "";
           return '<div class="sign-img-row' + cls + '"><span class="t">' + esc(new Date(r.ts).toLocaleTimeString("zh-TW", { hour12: false })) +
-            ' · ' + esc(whoShort(r.by)) + '</span><span>' + esc(imgText(r)) + '</span></div>';
+            ' · ' + esc(r.byName || whoShort(r.by)) + '</span><span>' + esc(imgText(r)) + '</span></div>';
         }).join("") : '<div class="sign-img-empty">今天還沒有上傳紀錄</div>';
         var finished = imgs.some(function (r) { return prevBusy[r.id] && (r.state === "done" || r.state === "error"); });
         if (finished) loadForms(true);   // 剛辨識完:清單馬上更新

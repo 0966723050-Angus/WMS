@@ -514,6 +514,20 @@ var MAX_SIGN_ITEMS = 40;   // 一次簽核請求最多幾張(請求存在單一�
 
 function newId_() { return Date.now() + '_' + Math.random().toString(36).slice(2, 8); }
 
+// 帳號 Email → 使用者名單上的「名稱」(沒填名稱就回空字串);同一次執行內快取
+var USER_NAME_CACHE_ = null;
+function userName_(email) {
+  if (!USER_NAME_CACHE_) {
+    USER_NAME_CACHE_ = {};
+    listUsers_().forEach(function (u) { USER_NAME_CACHE_[normEmail_(u.email)] = u.name || ''; });
+  }
+  return USER_NAME_CACHE_[normEmail_(email)] || '';
+}
+// 對外顯示用:上傳者一律用姓名(沒有名稱才用 Email @ 前面那段)
+function displayName_(email) {
+  return userName_(email) || String(email || '').split('@')[0];
+}
+
 function listSignForms_() {
   var out = listByPrefix_(SIGN_PREFIX);
   out.sort(function (a, b) { return b.ts - a.ts; });   // 新的在前
@@ -571,8 +585,7 @@ function pushSignForms_(body, by) {
 var SIGN_NOTIFY_KEY = 'SIGN_NOTIFY';
 function queueSignNotify_(rec) {
   var q = readJson_(SIGN_NOTIFY_KEY) || [];
-  var byName = '';
-  try { var bu = JSON.parse(props_().getProperty(USER_PREFIX + String(rec.by || '').trim().toLowerCase()) || 'null'); byName = (bu && bu.name) || ''; } catch (err) { byName = ''; }
+  var byName = userName_(rec.by);
   q.push({ id: rec.id, ts: rec.ts, name: rec.name || '', prog: rec.prog, docType: rec.docType, docNo: rec.docNo, vendor: rec.vendor || '', by: rec.by || '', byName: byName, src: rec.src || '', img: rec.imgUrl || '' });
   if (q.length > 100) q = q.slice(q.length - 100);
   props_().setProperty(SIGN_NOTIFY_KEY, JSON.stringify(q));
@@ -685,7 +698,7 @@ function requestSign_(body, user) {
   for (var i = 0; i < ids.length; i++) {
     var r = byId[ids[i]];
     if (!r) return { ok: false, error: '有表單已經不存在,請重新整理後再勾選' };
-    items.push({ id: r.id, name: r.name || '', prog: r.prog, docType: r.docType, docNo: r.docNo, vendor: r.vendor || '', img: r.imgUrl || '' });
+    items.push({ id: r.id, name: r.name || '', prog: r.prog, docType: r.docType, docNo: r.docNo, vendor: r.vendor || '', by: displayName_(r.by), img: r.imgUrl || '' });   // by = 上傳者姓名(寫進待簽核清單「上傳者」欄)
   }
   props_().setProperty(KINDS.sign.reqKey, JSON.stringify({ ts: Date.now(), by: user.email, items: items }));
   return { ok: true, count: items.length };
@@ -1252,7 +1265,7 @@ function doPost(e) {
         if (action === 'signprogs_reset') { props_().deleteProperty(SIGN_PROGS_KEY); return json_({ ok: true, progs: null }); }
         return json_(saveSignProgs_(body));
       }
-      if (action === 'signforms_list') return json_({ ok: true, forms: listSignForms_() });
+      if (action === 'signforms_list') return json_({ ok: true, forms: listSignForms_().map(function (f) { f.byName = displayName_(f.by); return f; }) });
       if (action === 'signforms_save') return json_(saveSignForm_(body, me));
       if (action === 'signforms_add') return json_(addSignForms_(body, me));
       if (action === 'signforms_delete') return json_(deleteSignForm_(body));
@@ -1260,7 +1273,7 @@ function doPost(e) {
       if (action === 'sign_request') return json_(requestSign_(body, me));
       if (action === 'signimg_upload') return json_(uploadSignImage_(body, me));
       return json_({ ok: true, images: listSignImages_().slice(0, 12).map(function (r) {
-        return { id: r.id, ts: r.ts, by: r.by, name: r.name, state: r.state, msg: r.msg, n: r.n };
+        return { id: r.id, ts: r.ts, by: r.by, byName: displayName_(r.by), name: r.name, state: r.state, msg: r.msg, n: r.n };
       }) });
     }
     if (action === 'erpq_request') return json_(erpqRequest_(body, me));
