@@ -308,6 +308,25 @@ var WMS_REQ_KEY = 'WMS_REQ';
 var WMS_STATUS_KEY = 'WMS_STATUS';
 var WMS_STALE_MS = 2 * 60 * 60 * 1000;   // 執行中狀態超過 2 小時視為已失效(避免本機當掉後按鈕永遠鎖住)
 
+// 標籤「已下載」紀錄:{單別-單號-序號: yyyyMMdd},gzip+base64 後分段存在 Script Properties(每段 8000 字),保留 180 天
+function labelDlRead_() {
+  var p = props_(), n = Number(p.getProperty('LABEL_DL_N') || 0), b64 = '';
+  if (!n) return {};
+  for (var i = 0; i < n; i++) b64 += p.getProperty('LABEL_DL_' + i) || '';
+  try { return JSON.parse(Utilities.ungzip(Utilities.newBlob(Utilities.base64Decode(b64), 'application/x-gzip')).getDataAsString('UTF-8')); }
+  catch (err) { return {}; }
+}
+function labelDlWrite_(m) {
+  var cut = Utilities.formatDate(new Date(Date.now() - 180 * 86400000), 'Asia/Taipei', 'yyyyMMdd');
+  Object.keys(m).forEach(function (k) { if (String(m[k]) < cut) delete m[k]; });
+  var b64 = Utilities.base64Encode(Utilities.gzip(Utilities.newBlob(JSON.stringify(m), 'application/json')).getBytes());
+  var p = props_(), old = Number(p.getProperty('LABEL_DL_N') || 0), set = {}, n = 0;
+  for (var i = 0; i < b64.length; i += 8000) set['LABEL_DL_' + (n++)] = b64.slice(i, i + 8000);
+  set.LABEL_DL_N = String(n);
+  p.setProperties(set);
+  for (var j = n; j < old; j++) p.deleteProperty('LABEL_DL_' + j);
+}
+
 function readJson_(key) {
   try { return JSON.parse(props_().getProperty(key) || 'null'); } catch (err) { return null; }
 }
@@ -688,7 +707,7 @@ function signAck_(ts, msg) {
 
 // ---------- ERP 查詢(製令 / 製令變更 / 採購單 / 採購變更):網頁送出條件 → 電腦端在 ERP 查詢 → 清單回傳網頁 ----------
 var ERPQ_PERM = { moq: 'erp_mo', mochg: 'erp_mo', miq: 'erp_mo', mrq: 'erp_mo', mfq: 'erp_mo',
-                  poq: 'erp_po', pochg: 'erp_po', prq: 'erp_po', rcq: 'erp_po', rtq: 'erp_po',
+                  poq: 'erp_po', pochg: 'erp_po', prq: 'erp_po', rcq: 'erp_po', rtq: 'erp_po', lbr: '*',
                   slq: 'erp_sales', srq: 'erp_sales', coq: 'erp_co', cochg: 'erp_co',
                   ivi: 'erp_inv', ivz: 'erp_inv', ivs: 'erp_inv' };
 var ERPQ_PERM_NAME = { erp_mo: 'ERP:製造命令', erp_po: 'ERP:採購單', erp_sales: 'ERP:銷貨單', erp_co: 'ERP:客戶訂單', erp_inv: 'ERP:庫存異動' };
@@ -717,7 +736,8 @@ function erpqDropResult_(r) {
 function erpqRequest_(body, me) {
   var kind = String(body.kind || '');
   if (!ERPQ_PERM[kind]) return { ok: false, error: '查詢種類不正確' };
-  if (!me.perms[ERPQ_PERM[kind]]) return { ok: false, error: '您沒有「' + ERPQ_PERM_NAME[ERPQ_PERM[kind]] + '」的權限' };
+  // lbr(標籤待列印清單的進貨物料)所有登入的人都能用,其他依各自的權限
+  if (ERPQ_PERM[kind] !== '*' && !me.perms[ERPQ_PERM[kind]]) return { ok: false, error: '您沒有「' + ERPQ_PERM_NAME[ERPQ_PERM[kind]] + '」的權限' };
   var c = body.cond || {}, cond = {};
   ['proj', 'prod', 'type', 'no', 'confirm'].forEach(function (k) { var v = clip_(c[k], 40); if (v) cond[k] = v; });
   if (cond.confirm && ['N', 'Y'].indexOf(cond.confirm) < 0) delete cond.confirm;
@@ -1142,6 +1162,20 @@ function doPost(e) {
     if (action === 'me') {
       var ns = makeSession_(me.email);   // 每次開啟網頁順延有效期,沒登出就不必重新登入
       return json_({ ok: true, email: me.email, name: me.name, isAdmin: me.isAdmin, perms: me.perms, costKey: costKeyFor_(me.perms), session: ns.token, exp: ns.exp });
+    }
+
+    // 標籤待列印清單:哪些進貨單身(單別-單號-序號)已經下載過標籤(全公司共用,保留 180 天)
+    if (action === 'label_dl_check') {
+      var ks = (Array.isArray(body.keys) ? body.keys : []).slice(0, 5000), dm = labelDlRead_();
+      return json_({ ok: true, done: ks.filter(function (k) { return dm[String(k)]; }) });
+    }
+    if (action === 'label_dl_mark') {
+      var mk = (Array.isArray(body.keys) ? body.keys : []).slice(0, 5000);
+      if (!mk.length) return json_({ ok: false, error: '沒有項目' });
+      var dm2 = labelDlRead_(), dayDl = Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyyMMdd');
+      mk.forEach(function (k) { k = clip_(k, 40); if (k) dm2[k] = dayDl; });
+      labelDlWrite_(dm2);
+      return json_({ ok: true, n: mk.length });
     }
 
     // 標籤流水號:全公司共用、每天從 1 重新起算。一次保留 count 個號碼,回傳第一個號碼(doPost 已加鎖,不會重複)

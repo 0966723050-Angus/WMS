@@ -3533,7 +3533,8 @@
   var LABEL_DIR_OK = typeof window.showDirectoryPicker === "function";   // 電腦版 Chrome / Edge 才能指定資料夾
   var LABEL_ICONS = {
     select: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="5" height="5" rx="1"/><path d="M4.5 6.5l1 1 1.5-2"/><path d="M11 6.5h10"/><rect x="3" y="14" width="5" height="5" rx="1"/><path d="M4.5 16.5l1 1 1.5-2"/><path d="M11 16.5h10"/></svg>',
-    manual: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg>'
+    manual: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg>',
+    pending: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M7 14h10v7H7z"/><path d="M17.5 12h.01"/></svg>'
   };
 
   function todayYmd() {
@@ -3709,9 +3710,227 @@
     }).then(function () { labelSaving = false; });
   }
 
+  // ---- 待列印清單:指定日期(今天 / 區間)已確認的進貨單物料 ∩ 在線製令的物料,已下載過的自動剔除 ----
+  // 進貨資料由公司電腦即時查 ERP(erpq 種類 lbr);「已下載」紀錄存在 Apps Script(label_dl_check / label_dl_mark),全公司共用
+  var labelPend = null;
+  function ymdCompact(s) { return String(s || "").replace(/[^0-9]/g, ""); }
+  function ymdDash(s) { s = ymdCompact(s); return s.length === 8 ? s.slice(0, 4) + "-" + s.slice(4, 6) + "-" + s.slice(6) : s; }
+
+  // 進貨單身 → 標籤列:同專案代號的在線製令有這個料號才列出(進貨沒有專案代號時,任何在線製令有就列出)
+  function pendBuild(res) {
+    var cols = res.cols || [], idx = {};
+    cols.forEach(function (c, i) { idx[c] = i; });
+    var get = function (row, c) { return idx[c] === undefined ? "" : (row[idx[c]] || ""); };
+    var byCode = {};
+    labelSourceRows().forEach(function (r) { (byCode[r.code] = byCode[r.code] || []).push(r); });
+    var out = [], skipped = 0;
+    (res.rows || []).forEach(function (row) {
+      var code = get(row, "品號"), proj = get(row, "專案代號"), cands = byCode[code] || [];
+      var m = proj ? cands.filter(function (r) { return r.projCode === proj; })[0] : cands[0];
+      if (!m) { skipped++; return; }
+      out.push({
+        key: get(row, "key"), rcvDate: ymdDash(get(row, "進貨日期")), rcvDoc: get(row, "進貨單"), vendor: get(row, "廠商"),
+        projCode: m.projCode, projName: m.projName, orderNo: m.orderNo, prodCode: m.prodCode, assy: m.assy,
+        code: code, name: get(row, "品名") || m.name, spec: get(row, "規格") || m.spec, defQty: Number(get(row, "驗收數量")) || 0
+      });
+    });
+    return { rows: out, skipped: skipped };
+  }
+
+  function renderLabelPending(app) {
+    if (!labelPend) labelPend = { from: "", to: "", rows: [], qty: {}, note: {}, info: "", busy: false, asked: false };
+    var P = labelPend, today = todayYmd();
+    app.innerHTML =
+      '<div class="breadcrumb"><a href="#/">首頁</a> / <a href="#/label">標籤</a> / 待列印清單</div>' +
+      '<h1 class="page-title page-title-row"><span>待列印標籤清單</span>' +
+        '<button type="button" class="btn btn-sm" id="lp-dl" disabled>下載 Excel</button></h1>' +
+      '<div class="toolbar lp-toolbar">' +
+        '<button type="button" class="btn btn-sm" id="lp-today">今天</button>' +
+        '<div class="lp-range-wrap"><input type="text" id="lp-range" class="lp-range" readonly placeholder="點這裡選擇日期區間" ' +
+          'value="' + esc(P.from ? (P.from === P.to ? P.from : P.from + " ~ " + P.to) : "") + '" aria-label="日期區間" />' +
+          '<div class="lp-cal" id="lp-cal" hidden></div></div>' +
+        '<button type="button" class="btn btn-sm btn-secondary" id="lp-ok">確認</button>' +
+      '</div>' +
+      '<p class="lp-note">列出期間內已確認的進貨單物料,只列在線製令裡有的料號;已下載過的會自動剔除。數量預設為驗收數量,可修改,也可刪除不印的列。</p>' +
+      '<div class="lbl-countrow"><p class="result-count" id="lp-count"></p></div>' +
+      '<div class="lbl-wrap"><table class="lbl-table lp-table"><thead><tr class="lbl-titles">' +
+        '<th class="c-rcvDate">進貨日期</th><th class="c-rcvDoc">進貨單</th><th class="c-vendor">廠商</th>' +
+        '<th class="c-projCode">專案代號</th><th class="c-projName">專案名稱</th><th class="c-orderNo">製令單號</th>' +
+        '<th class="c-prodCode">產品品號</th><th class="c-assy">Ass\'y</th><th class="c-code">料號</th><th class="c-name">品名</th>' +
+        '<th class="c-spec">規格</th><th class="c-qty">數量</th><th class="c-note">備註</th><th class="c-del">刪除</th>' +
+      '</tr></thead><tbody id="lp-body"></tbody></table></div>';
+
+    function alive() { return document.getElementById("lp-body"); }
+    function renderBody() {
+      var b = document.getElementById("lp-body");
+      if (!b) return;
+      b.innerHTML = P.rows.length ? P.rows.map(function (r, i) {
+        var qty = P.qty[r.key] !== undefined ? P.qty[r.key] : r.defQty;
+        return '<tr data-i="' + i + '">' +
+          '<td class="c-rcvDate" data-k="進貨日期">' + esc(r.rcvDate) + '</td>' +
+          '<td class="c-rcvDoc" data-k="進貨單">' + esc(r.rcvDoc) + '</td>' +
+          '<td class="c-vendor" data-k="廠商">' + esc(r.vendor) + '</td>' +
+          '<td class="c-projCode" data-k="專案代號">' + esc(r.projCode) + '</td>' +
+          '<td class="c-projName" data-k="專案名稱">' + esc(r.projName) + '</td>' +
+          '<td class="c-orderNo" data-k="製令單號">' + esc(r.orderNo) + '</td>' +
+          '<td class="c-prodCode" data-k="產品品號">' + esc(r.prodCode) + '</td>' +
+          '<td class="c-assy" data-k="Ass&#39;y">' + esc(r.assy) + '</td>' +
+          '<td class="c-code" data-k="料號">' + esc(r.code) + '</td>' +
+          '<td class="c-name" data-k="品名">' + esc(r.name) + '</td>' +
+          '<td class="c-spec" data-k="規格">' + esc(r.spec).replace(/_/g, "_<wbr>") + '</td>' +
+          '<td class="c-qty" data-k="數量"><input type="number" class="lp-qty" inputmode="decimal" min="0" step="any" value="' + esc(qty) + '" aria-label="數量" /></td>' +
+          '<td class="c-note" data-k="備註"><input type="text" class="lp-note-in" maxlength="60" value="' + esc(P.note[r.key] || "") + '" aria-label="備註" /></td>' +
+          '<td class="c-del" data-k="刪除"><button type="button" class="lp-del" title="從清單刪除這一列(不會記成已下載)" aria-label="刪除">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></td>' +
+        '</tr>';
+      }).join("") : '<tr><td colspan="14" class="lbl-empty">' + (P.busy ? "查詢中…" : P.asked ? "這段期間沒有要列印的進貨物料" : "請按「今天」,或選擇日期區間後按「確認」") + '</td></tr>';
+      var c = document.getElementById("lp-count");
+      if (c) c.textContent = (P.busy ? "查詢中(公司電腦查 ERP,約 10~30 秒)…" : (P.asked ? "共 " + P.rows.length + " 筆" : "")) + (P.info ? " · " + P.info : "");
+      var dl = document.getElementById("lp-dl");
+      if (dl) { dl.textContent = "下載 Excel" + (P.rows.length ? "(" + P.rows.length + ")" : ""); dl.disabled = !P.rows.length || P.busy; }
+      ["lp-today", "lp-ok"].forEach(function (id) { var x = document.getElementById(id); if (x) x.disabled = P.busy; });
+    }
+    renderBody();
+
+    // 查詢:送到中繼 → 公司電腦用 SQL 查 → 每 3 秒問一次結果 → 比對在線製令、剔除已下載
+    function run(from, to) {
+      if (P.busy) return;
+      P.from = from; P.to = to; P.busy = true; P.asked = true; P.rows = []; P.info = "";
+      var rg = document.getElementById("lp-range");
+      if (rg) rg.value = from === to ? from : from + " ~ " + to;
+      renderBody();
+      api("erpq_request", { kind: "lbr", cond: { prod: ymdCompact(from), op_prod: ">=", proj: ymdCompact(to), op_proj: "<=" } }).then(function (res) {
+        if (!res.ok) throw new Error(res.error || "送出失敗");
+        return new Promise(function (resolve, reject) {
+          var tries = 0;
+          (function poll() {
+            if (!alive()) { reject(new Error("")); return; }
+            api("erpq_get", { id: res.request.id }).then(function (g) {
+              var r = g && g.request;
+              if (r && r.state === "done") resolve(r.result || { cols: [], rows: [] });
+              else if (r && r.state === "error") reject(new Error(r.msg || "查詢失敗"));
+              else if (++tries > 100) reject(new Error("公司電腦沒有回應,請稍後再試"));
+              else setTimeout(poll, 3000);
+            }).catch(function () { if (++tries > 100) reject(new Error("連線失敗")); else setTimeout(poll, 5000); });
+          })();
+        });
+      }).then(function (result) {
+        var built = pendBuild(result);
+        var keys = built.rows.map(function (r) { return r.key; });
+        return (keys.length ? api("label_dl_check", { keys: keys }) : Promise.resolve({ ok: true, done: [] })).then(function (ck) {
+          if (!ck.ok) throw new Error(ck.error || "無法讀取下載紀錄");
+          var done = {};
+          (ck.done || []).forEach(function (k) { done[k] = 1; });
+          P.rows = built.rows.filter(function (r) { return !done[r.key]; });
+          var nDone = built.rows.length - P.rows.length;
+          P.info = [nDone ? "已下載過 " + nDone + " 筆已剔除" : "", built.skipped ? "不在在線製令的進貨物料 " + built.skipped + " 筆未列出" : ""].filter(Boolean).join(" · ");
+        });
+      }).catch(function (err) {
+        if (err && err.message) window.alert("查詢失敗:" + err.message);
+      }).then(function () { P.busy = false; renderBody(); });
+    }
+
+    document.getElementById("lp-today").addEventListener("click", function () { closeCal(); run(today, today); });
+    document.getElementById("lp-ok").addEventListener("click", function () {
+      closeCal();
+      if (!calFrom) { window.alert("請先點日期區間欄位選擇日期"); return; }
+      run(calFrom, calTo || calFrom);
+    });
+
+    // ---- 日期區間日曆:第一下選起日、第二下選迄日 ----
+    var calFrom = P.from, calTo = P.to, calMonth = null;
+    var cal = document.getElementById("lp-cal"), rng = document.getElementById("lp-range");
+    function closeCal() { cal.hidden = true; }
+    function drawCal() {
+      var d = calMonth, y = d.getFullYear(), m = d.getMonth();
+      var first = new Date(y, m, 1).getDay(), days = new Date(y, m + 1, 0).getDate();
+      var h = '<div class="lp-cal-head"><button type="button" data-nav="-1" aria-label="上個月">‹</button><b>' + y + ' 年 ' + (m + 1) + ' 月</b>' +
+        '<button type="button" data-nav="1" aria-label="下個月">›</button></div><div class="lp-cal-grid">' +
+        ["日", "一", "二", "三", "四", "五", "六"].map(function (w) { return '<span class="w">' + w + '</span>'; }).join("");
+      for (var i = 0; i < first; i++) h += '<span></span>';
+      for (var dd = 1; dd <= days; dd++) {
+        var s = y + "-" + pad2(m + 1) + "-" + pad2(dd), cls = [];
+        if (s === today) cls.push("t");
+        if (calFrom && s === calFrom || calTo && s === calTo) cls.push("sel");
+        else if (calFrom && calTo && s > calFrom && s < calTo) cls.push("in");
+        h += '<button type="button" data-d="' + s + '" class="' + cls.join(" ") + '">' + dd + '</button>';
+      }
+      h += '</div><div class="lp-cal-foot"><span>' + (calFrom ? calFrom + (calTo && calTo !== calFrom ? " ~ " + calTo : " ~ (請點迄日)") : "請點起日") + '</span>' +
+        '<button type="button" class="btn btn-sm btn-secondary" data-act="clear">清除</button><button type="button" class="btn btn-sm" data-act="done">完成</button></div>';
+      cal.innerHTML = h;
+    }
+    rng.addEventListener("click", function () {
+      if (!cal.hidden) { closeCal(); return; }
+      var base = calFrom || today;
+      calMonth = new Date(Number(base.slice(0, 4)), Number(base.slice(5, 7)) - 1, 1);
+      cal.hidden = false;
+      drawCal();
+    });
+    cal.addEventListener("click", function (e) {
+      var b = e.target.closest("button");
+      if (!b) return;
+      e.stopPropagation();
+      if (b.dataset.nav) { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + Number(b.dataset.nav), 1); drawCal(); return; }
+      if (b.dataset.d) {
+        var s = b.dataset.d;
+        if (!calFrom || calTo) { calFrom = s; calTo = ""; }
+        else if (s < calFrom) { calTo = calFrom; calFrom = s; }
+        else calTo = s;
+        rng.value = calFrom + (calTo && calTo !== calFrom ? " ~ " + calTo : "");
+        drawCal();
+        return;
+      }
+      if (b.dataset.act === "clear") { calFrom = ""; calTo = ""; rng.value = ""; drawCal(); return; }
+      if (b.dataset.act === "done") { if (calFrom && !calTo) calTo = calFrom; closeCal(); }
+    });
+    document.addEventListener("click", function onDoc(e) {
+      if (!document.getElementById("lp-cal")) { document.removeEventListener("click", onDoc); return; }
+      if (!cal.hidden && !e.target.closest(".lp-range-wrap")) closeCal();
+    });
+
+    // ---- 清單:改數量 / 備註、刪除 ----
+    var body = document.getElementById("lp-body");
+    body.addEventListener("input", function (e) {
+      var tr = e.target.closest("tr[data-i]");
+      if (!tr) return;
+      var r = P.rows[Number(tr.dataset.i)];
+      if (e.target.classList.contains("lp-qty")) P.qty[r.key] = e.target.value;
+      if (e.target.classList.contains("lp-note-in")) P.note[r.key] = e.target.value;
+    });
+    body.addEventListener("click", function (e) {
+      var b = e.target.closest(".lp-del");
+      if (!b) return;
+      var i = Number(b.closest("tr").dataset.i);
+      P.rows.splice(i, 1);
+      renderBody();
+    });
+
+    // ---- 下載:檔名、存放位置、流水號同「系統選取」;下載完成後記成已下載並從清單移除 ----
+    document.getElementById("lp-dl").addEventListener("click", function () {
+      var rows = P.rows.map(function (r) {
+        var q = P.qty[r.key] !== undefined ? P.qty[r.key] : r.defQty;
+        return { key: r.key, projCode: r.projCode, projName: r.projName, orderNo: r.orderNo, assy: r.assy, code: r.code, name: r.name,
+                 spec: r.spec, qty: q === "" ? "" : Number(q), note: P.note[r.key] || "", date: todayYmd() };
+      }).filter(function (r) { return r.qty !== 0; });
+      if (!rows.length) { window.alert("沒有要下載的項目(數量為 0 的列不會下載)"); return; }
+      confirmLabelDownload(rows, LABEL_FILE_SYSTEM, function () {
+        var keys = rows.map(function (r) { return r.key; }), gone = {};
+        keys.forEach(function (k) { gone[k] = 1; });
+        P.rows = P.rows.filter(function (r) { return !gone[r.key]; });
+        if (alive()) renderBody();
+        api("label_dl_mark", { keys: keys }).then(function (res) {
+          if (!res.ok) throw new Error(res.error || "");
+        }).catch(function (err) {
+          window.alert("標籤已下載,但「已下載」紀錄沒有存成功(" + ((err && err.message) || err) + "),下次查詢可能會再列出這些項目。");
+        });
+      });
+    });
+  }
+
   function renderLabel(app, sub) {
     if (sub === "select") { renderLabelSelect(app); return; }
     if (sub === "manual") { renderLabelManual(app); return; }
+    if (sub === "pending") { renderLabelPending(app); return; }
     if (sub) { location.hash = "#/label"; return; }
 
     app.innerHTML =
@@ -3722,6 +3941,8 @@
           '<span class="erp-tile-title">系統選取</span><span class="erp-tile-note">從在線製令的物料勾選要印的標籤</span></a>' +
         '<a class="erp-tile" href="#/label/manual"><span class="erp-tile-icon">' + LABEL_ICONS.manual + '</span>' +
           '<span class="erp-tile-title">手動設置</span><span class="erp-tile-note">自行輸入標籤內容</span></a>' +
+        '<a class="erp-tile" href="#/label/pending"><span class="erp-tile-icon">' + LABEL_ICONS.pending + '</span>' +
+          '<span class="erp-tile-title">待列印清單</span><span class="erp-tile-note">今天 / 指定期間已核准進貨的物料,下載過的自動剔除</span></a>' +
       '</div>' +
       '<section class="sign-card lbl-dir-card">' +
         '<h2 class="sign-h">Excel 下載位置</h2>' +

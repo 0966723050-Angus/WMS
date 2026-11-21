@@ -408,7 +408,47 @@ def build_sql(kind, cond):
     return sql, params
 
 
+def _label_receipts(cond):
+    """待列印標籤清單(網頁 標籤 → 待列印清單):期間內已確認的進貨單身。
+    cond.prod = 起日、cond.proj = 迄日(yyyyMMdd)。以進貨日期為準;另外把期間內才確認、但進貨日期在起日前 7 天內的也算進來
+    (先建單隔天才確認)。不分頁,最多 3000 列。回傳格式同其他查詢(cols / rows),比對在線製令與剔除已下載由網頁處理。"""
+    a = re.sub(r"\D", "", str((cond or {}).get("prod") or ""))
+    b = re.sub(r"\D", "", str((cond or {}).get("proj") or "")) or a
+    if len(a) != 8 or len(b) != 8:
+        raise ValueError("日期格式不正確")
+    if a > b:
+        a, b = b, a
+    early = (datetime.datetime.strptime(a, "%Y%m%d") - datetime.timedelta(days=7)).strftime("%Y%m%d")
+    sql = """SELECT TOP 3001 TH001, TH002, TH003, TH004, TH005, TH006, TH007, TH015, TH008, TH042, TG003, TG005, MA002
+             FROM PURTH WITH (NOLOCK)
+             JOIN PURTG WITH (NOLOCK) ON TG001 = TH001 AND TG002 = TH002
+             LEFT JOIN PURMA WITH (NOLOCK) ON MA001 = TG005
+             WHERE TG013 = 'Y' AND ((TG003 BETWEEN ? AND ?) OR (PURTG.MODI_DATE BETWEEN ? AND ? AND TG003 >= ?))
+             ORDER BY TG003, TH001, TH002, TH003"""
+    if ERP_SQL_DIR not in sys.path:
+        sys.path.insert(0, ERP_SQL_DIR)
+    import erp_sql
+    cn = erp_sql.connect()
+    try:
+        cur = cn.cursor()
+        cur.execute(sql, [a, b, a, b, early])
+        raw = cur.fetchall()
+    finally:
+        cn.close()
+    rows = []
+    for r in raw[:3000]:
+        t = lambda v: ("" if v is None else str(v).strip())
+        qty = r.TH015 if r.TH015 not in (None, 0) else r.TH007
+        rows.append([t(r.TH001) + "-" + t(r.TH002) + "-" + t(r.TH003), t(r.TH001) + "-" + t(r.TH002), t(r.TH003), t(r.TH004),
+                     t(r.TH005), t(r.TH006), _qty(qty), t(r.TH008), t(r.TH042), t(r.TG003), _vendor(t(r.TG005), t(r.MA002))])
+    return {"cols": ["key", "進貨單", "序號", "品號", "品名", "規格", "驗收數量", "單位", "專案代號", "進貨日期", "廠商"],
+            "rows": rows, "dcols": [], "details": [None] * len(rows),
+            "msg": "超過 3000 筆,只列出前 3000 筆,請縮小日期區間。" if len(raw) > 3000 else ""}
+
+
 def run_query(kind, cond):
+    if kind == "lbr":
+        return _label_receipts(cond)
     sql, params = build_sql(kind, cond)
     assert sql.startswith("SELECT "), "只允許 SELECT"
     if ERP_SQL_DIR not in sys.path:
