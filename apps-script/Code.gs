@@ -94,9 +94,9 @@ function makeSession_(email) {
 // cost 庫存單位成本(有此權限才在 auth / me 回傳 COST_KEY,網頁才能解開 cost.enc)
 // 帳號記錄裡沒有 perms 的舊帳號 = 只有「儲位編輯」(維持原本能做的事)。主管理者(ADMIN_EMAIL)永遠全部權限。
 
-var PERM_KEYS = ['admin', 'edit', 'receive', 'ret', 'erp_receipt', 'erp_return', 'erp_issue', 'erp_sign', 'erp_wms', 'erp_mo', 'erp_po', 'erp_sales', 'erp_co', 'erp_inv', 'cost', 'label'];
-// 沒設定過的項目用預設值:儲位編輯、收料、標籤原本所有人都能用,所以舊帳號維持有這幾項
-var PERM_DEFAULTS = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_issue: false, erp_sign: false, erp_wms: false, erp_mo: false, erp_po: false, erp_sales: false, erp_co: false, erp_inv: false, cost: false, label: true };
+var PERM_KEYS = ['admin', 'edit', 'receive', 'ret', 'erp_receipt', 'erp_return', 'erp_issue', 'erp_sign', 'erp_wms', 'erp_mo', 'erp_po', 'erp_sales', 'erp_co', 'erp_inv', 'cost', 'label', 'scan'];
+// 沒設定過的項目用預設值:儲位編輯、收料、標籤、掃描原本所有人都能用,所以舊帳號維持有這幾項
+var PERM_DEFAULTS = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_issue: false, erp_sign: false, erp_wms: false, erp_mo: false, erp_po: false, erp_sales: false, erp_co: false, erp_inv: false, cost: false, label: true, scan: true };
 
 // 單位成本金鑰:只給有 cost 權限的人
 function costKeyFor_(perms) {

@@ -147,9 +147,10 @@
     { key: "erp_co", label: "ERP:客戶訂單查詢" },
     { key: "erp_inv", label: "ERP:庫存異動查詢" },
     { key: "cost", label: "庫存單位成本" },
-    { key: "label", label: "標籤" }
+    { key: "label", label: "標籤" },
+    { key: "scan", label: "掃描收料(手機)" }
   ];
-  var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_sign: false, erp_wms: false, erp_mo: false, erp_po: false, erp_sales: false, erp_co: false, erp_inv: false, cost: false, label: true };
+  var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_sign: false, erp_wms: false, erp_mo: false, erp_po: false, erp_sales: false, erp_co: false, erp_inv: false, cost: false, label: true, scan: true };
 
   function can(perm) { return !!(session && session.perms && session.perms[perm]); }
 
@@ -243,7 +244,7 @@
     var labelBtn = document.getElementById("label-btn");
     if (labelBtn) labelBtn.hidden = !can("label");
     var scanBtn = document.getElementById("scan-btn");
-    if (scanBtn) scanBtn.hidden = !(session && can("receive") && isMobileDevice());
+    if (scanBtn) scanBtn.hidden = !(session && can("scan") && can("receive") && isMobileDevice());   // 掃描另有權限 scan,送出收料仍需 receive
     if (!info) return;
     if (!session) { info.innerHTML = ""; return; }
     info.innerHTML = '已登入:' + esc(session.name || session.email) + ' (' + esc(session.email) + ') · <a href="#" id="logout-link">登出</a>';
@@ -3101,6 +3102,7 @@
 
   function openScanner() {
     if (scanner || !session) return;
+    if (!can("scan")) { window.alert("您沒有「掃描收料」的權限,請洽管理者開通。"); return; }
     if (!can("receive")) { showToast("你的帳號沒有收料權限"); return; }
     var root = el(
       '<div class="scan-overlay" role="dialog" aria-label="掃描 QR code 收料">' +
