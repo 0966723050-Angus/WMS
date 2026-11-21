@@ -3950,12 +3950,12 @@
       '<div class="breadcrumb"><a href="#/">首頁</a> / 標籤</div>' +
       '<h1 class="page-title">標籤</h1>' +
       '<div class="erp-grid">' +
+        '<a class="erp-tile" href="#/label/pending"><span class="erp-tile-icon">' + LABEL_ICONS.pending + '</span>' +
+          '<span class="erp-tile-title">自動選取</span><span class="erp-tile-note">今天 / 指定期間已核准進貨的物料,這裡下載過的自動剔除</span></a>' +
         '<a class="erp-tile" href="#/label/select"><span class="erp-tile-icon">' + LABEL_ICONS.select + '</span>' +
           '<span class="erp-tile-title">半自動選取</span><span class="erp-tile-note">從在線製令的物料勾選要印的標籤</span></a>' +
         '<a class="erp-tile" href="#/label/manual"><span class="erp-tile-icon">' + LABEL_ICONS.manual + '</span>' +
           '<span class="erp-tile-title">手動設置</span><span class="erp-tile-note">自行輸入標籤內容</span></a>' +
-        '<a class="erp-tile" href="#/label/pending"><span class="erp-tile-icon">' + LABEL_ICONS.pending + '</span>' +
-          '<span class="erp-tile-title">自動選取</span><span class="erp-tile-note">今天 / 指定期間已核准進貨的物料,這裡下載過的自動剔除</span></a>' +
       '</div>' +
       '<section class="sign-card lbl-dir-card">' +
         '<h2 class="sign-h">Excel 下載位置</h2>' +
