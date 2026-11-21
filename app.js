@@ -146,9 +146,10 @@
     { key: "erp_sales", label: "ERP:銷貨單查詢" },
     { key: "erp_co", label: "ERP:客戶訂單查詢" },
     { key: "erp_inv", label: "ERP:庫存異動查詢" },
-    { key: "cost", label: "庫存單位成本" }
+    { key: "cost", label: "庫存單位成本" },
+    { key: "label", label: "標籤" }
   ];
-  var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_sign: false, erp_wms: false, erp_mo: false, erp_po: false, erp_sales: false, erp_co: false, erp_inv: false, cost: false };
+  var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_sign: false, erp_wms: false, erp_mo: false, erp_po: false, erp_sales: false, erp_co: false, erp_inv: false, cost: false, label: true };
 
   function can(perm) { return !!(session && session.perms && session.perms[perm]); }
 
@@ -239,6 +240,8 @@
     var erpBtn = document.getElementById("erp-btn");
     if (adminBtn) adminBtn.hidden = !can("admin");
     if (erpBtn) erpBtn.hidden = !canSeeErp();
+    var labelBtn = document.getElementById("label-btn");
+    if (labelBtn) labelBtn.hidden = !can("label");
     var scanBtn = document.getElementById("scan-btn");
     if (scanBtn) scanBtn.hidden = !(session && can("receive") && isMobileDevice());
     if (!info) return;
@@ -3941,6 +3944,11 @@
   }
 
   function renderLabel(app, sub) {
+    if (!can("label")) {   // 沒有「標籤」權限:整個標籤頁(自動 / 半自動選取、手動設置)都不能用
+      app.innerHTML = '<div class="breadcrumb"><a href="#/">首頁</a> / 標籤</div><h1 class="page-title">標籤</h1>' +
+        '<div class="empty-state">您沒有「標籤」的權限,請洽管理者開通。</div>';
+      return;
+    }
     if (sub === "select") { renderLabelSelect(app); return; }
     if (sub === "manual") { renderLabelManual(app); return; }
     if (sub === "pending") { renderLabelPending(app); return; }
