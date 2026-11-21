@@ -148,9 +148,10 @@
     { key: "erp_inv", label: "ERP:庫存異動查詢" },
     { key: "cost", label: "庫存單位成本" },
     { key: "label", label: "標籤" },
-    { key: "scan", label: "掃描收料(手機)" }
+    { key: "scan", label: "掃描收料(手機)" },
+    { key: "sign_progs", label: "待簽核:編輯表單清單" }
   ];
-  var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_sign: false, erp_wms: false, erp_mo: false, erp_po: false, erp_sales: false, erp_co: false, erp_inv: false, cost: false, label: true, scan: true };
+  var PERM_DEFAULT_NEW = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_sign: false, erp_wms: false, erp_mo: false, erp_po: false, erp_sales: false, erp_co: false, erp_inv: false, cost: false, label: true, scan: true, sign_progs: false };
 
   function can(perm) { return !!(session && session.perms && session.perms[perm]); }
 
@@ -1223,7 +1224,7 @@
   // 表單名稱 / 程式代碼對照:網頁上編輯過的清單(存在伺服器,所有人共用)優先,沒編輯過就用對照表 Excel 的預設清單
   var signProgs = null;
   function signFormList() { return signProgs || (state.data && state.data.signForms) || []; }
-  function canEditProgs() { return can("admin") || can("erp_sign"); }
+  function canEditProgs() { return can("sign_progs"); }   // 權限「待簽核:編輯表單清單」
   function signCodeOfName(name) {
     var f = signFormList().filter(function (x) { return x.name === name; })[0];
     return f ? f.code : "";

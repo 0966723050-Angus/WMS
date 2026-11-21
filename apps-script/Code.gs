@@ -94,9 +94,9 @@ function makeSession_(email) {
 // cost 庫存單位成本(有此權限才在 auth / me 回傳 COST_KEY,網頁才能解開 cost.enc)
 // 帳號記錄裡沒有 perms 的舊帳號 = 只有「儲位編輯」(維持原本能做的事)。主管理者(ADMIN_EMAIL)永遠全部權限。
 
-var PERM_KEYS = ['admin', 'edit', 'receive', 'ret', 'erp_receipt', 'erp_return', 'erp_issue', 'erp_sign', 'erp_wms', 'erp_mo', 'erp_po', 'erp_sales', 'erp_co', 'erp_inv', 'cost', 'label', 'scan'];
+var PERM_KEYS = ['admin', 'edit', 'receive', 'ret', 'erp_receipt', 'erp_return', 'erp_issue', 'erp_sign', 'erp_wms', 'erp_mo', 'erp_po', 'erp_sales', 'erp_co', 'erp_inv', 'cost', 'label', 'scan', 'sign_progs'];
 // 沒設定過的項目用預設值:儲位編輯、收料、標籤、掃描原本所有人都能用,所以舊帳號維持有這幾項
-var PERM_DEFAULTS = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_issue: false, erp_sign: false, erp_wms: false, erp_mo: false, erp_po: false, erp_sales: false, erp_co: false, erp_inv: false, cost: false, label: true, scan: true };
+var PERM_DEFAULTS = { admin: false, edit: true, receive: true, ret: false, erp_receipt: false, erp_return: false, erp_issue: false, erp_sign: false, erp_wms: false, erp_mo: false, erp_po: false, erp_sales: false, erp_co: false, erp_inv: false, cost: false, label: true, scan: true, sign_progs: false };
 
 // 單位成本金鑰:只給有 cost 權限的人
 function costKeyFor_(perms) {
@@ -108,6 +108,8 @@ function normPerms_(p) {
   PERM_KEYS.forEach(function (k) {
     out[k] = (p && typeof p[k] === 'boolean') ? p[k] : PERM_DEFAULTS[k];
   });
+  // 「編輯表單清單」原本是有 erp_sign(或名單管理)的人才能用:還沒設定過這項的舊帳號沿用原本的資格
+  if (!(p && typeof p.sign_progs === 'boolean')) out.sign_progs = !!(out.erp_sign || out.admin);
   return out;
 }
 
@@ -1261,7 +1263,7 @@ function doPost(e) {
       if (action === 'sign_request' && !me.perms.erp_sign) return denied_('待簽核表單確認');
       if (action === 'signprogs_get') return json_({ ok: true, progs: getSignProgs_() });
       if (action === 'signprogs_save' || action === 'signprogs_reset') {
-        if (!me.perms.admin && !me.perms.erp_sign) return denied_('編輯表單清單');
+        if (!me.perms.sign_progs) return denied_('編輯表單清單');
         if (action === 'signprogs_reset') { props_().deleteProperty(SIGN_PROGS_KEY); return json_({ ok: true, progs: null }); }
         return json_(saveSignProgs_(body));
       }
