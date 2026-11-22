@@ -730,7 +730,7 @@ function signAck_(ts, msg) {
 
 // ---------- ERP 查詢(製令 / 製令變更 / 採購單 / 採購變更):網頁送出條件 → 電腦端在 ERP 查詢 → 清單回傳網頁 ----------
 var ERPQ_PERM = { moq: 'erp_mo', mochg: 'erp_mo', miq: 'erp_mo', mrq: 'erp_mo', mfq: 'erp_mo',
-                  poq: 'erp_po', pochg: 'erp_po', prq: 'erp_po', rcq: 'erp_po', rtq: 'erp_po', lbr: 'label',
+                  poq: 'erp_po', pochg: 'erp_po', prq: 'erp_po', rcq: 'erp_po', rtq: 'erp_po', lbr: 'label', sgv: '*',
                   slq: 'erp_sales', srq: 'erp_sales', coq: 'erp_co', cochg: 'erp_co',
                   ivi: 'erp_inv', ivz: 'erp_inv', ivs: 'erp_inv' };
 var ERPQ_PERM_NAME = { label: '標籤', erp_mo: 'ERP:製造命令', erp_po: 'ERP:採購單', erp_sales: 'ERP:銷貨單', erp_co: 'ERP:客戶訂單', erp_inv: 'ERP:庫存異動' };
@@ -762,6 +762,22 @@ function erpqRequest_(body, me) {
   // lbr(標籤待列印清單的進貨物料)所有登入的人都能用,其他依各自的權限
   if (ERPQ_PERM[kind] !== '*' && !me.perms[ERPQ_PERM[kind]]) return { ok: false, error: '您沒有「' + ERPQ_PERM_NAME[ERPQ_PERM[kind]] + '」的權限' };
   var c = body.cond || {}, cond = {};
+  if (kind === 'sgv') {   // 待簽核清單「查看」:一次查多張(程式|單別|單號),每張依程式檢查對應的查詢權限(有「待簽核表單確認」權限也可以)
+    var docs = (Array.isArray(c.docs) ? c.docs : []).slice(0, 20).map(function (d) { return clip_(d, 40).toUpperCase(); })
+      .filter(function (d) { return /^[A-Z0-9]{4,10}\|\d{3,6}\|\d{6,16}$/.test(d); });
+    if (!docs.length) return { ok: false, error: '請先勾選要查看的表單' };
+    var permOf = function (prog) {
+      if (/^PURI/.test(prog)) return 'erp_po';
+      if (/^MOCI/.test(prog)) return 'erp_mo';
+      if (/^COPI0[67]/.test(prog)) return 'erp_co';
+      if (/^COPI/.test(prog)) return 'erp_sales';
+      if (/^INVI/.test(prog)) return 'erp_inv';
+      return '';
+    };
+    var deny = docs.filter(function (d) { var p = permOf(d.split('|')[0]); return !me.perms.erp_sign && (!p || !me.perms[p]); });
+    if (deny.length) return { ok: false, error: '沒有查看權限:' + deny.map(function (d) { return d.replace(/\|/g, ' '); }).join('、') };
+    cond.docs = docs;
+  }
   ['proj', 'prod', 'type', 'no', 'confirm'].forEach(function (k) { var v = clip_(c[k], 40); if (v) cond[k] = v; });
   if (cond.confirm && ['N', 'Y'].indexOf(cond.confirm) < 0) delete cond.confirm;
   // 各條件的比較方式(同 ERP 查詢對話框):= >= <= <> %like% %like like%;沒給就用舊的預設(單別相同、單號開頭相同)
@@ -847,13 +863,25 @@ function erpqResult_(body) {
         return (Array.isArray(row) ? row : []).slice(0, n).map(function (v) { return v === null || v === undefined ? '' : clip_(v, 80); });
       });
     };
+    if (Array.isArray(body.docs)) {   // 待簽核清單「查看」:每張單各自的單頭 / 單身
+      var vdocs = body.docs.slice(0, 40).map(function (d) {
+        var cc = clipCols(d.cols), dc = clipCols(d.dcols);
+        return { doc: clip_(d.doc, 40), prog: clip_(d.prog, 12), title: clip_(d.title, 20), error: clip_(d.error || '', 120),
+                 cols: cc, row: clipRows([d.row || []], cc.length)[0] || [], dcols: dc, lines: clipRows((d.lines || []).slice(0, 300), dc.length) };
+      });
+      body.cols = []; body.rows = []; body.dcols = []; body.details = [];
+      body.__docs = vdocs;
+    }
     var cols = clipCols(body.cols), dcols = clipCols(body.dcols);
     var rows = clipRows(body.rows, cols.length);
     var details = rows.map(function (_, i) {   // 單身:與 rows 一一對應,null = 沒有附單身
       var d = Array.isArray(body.details) ? body.details[i] : null;
       return Array.isArray(d) ? clipRows(d, dcols.length) : null;
     });
-    var pack = function () { return JSON.stringify(dcols.length ? { cols: cols, rows: rows, dcols: dcols, details: details } : { cols: cols, rows: rows }); };
+    var pack = function () {
+      if (body.__docs) return JSON.stringify({ cols: [], rows: [], docs: body.__docs });
+      return JSON.stringify(dcols.length ? { cols: cols, rows: rows, dcols: dcols, details: details } : { cols: cols, rows: rows });
+    };
     var total = rows.length, txt = pack();
     while (txt.length > ERPQ_MAX_CHARS && rows.length > 1) {
       var keep = Math.floor(rows.length * 0.8);

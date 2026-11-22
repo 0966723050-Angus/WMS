@@ -446,9 +446,52 @@ def _label_receipts(cond):
             "msg": "超過 3000 筆,只列出前 3000 筆,請縮小日期區間。" if len(raw) > 3000 else ""}
 
 
+# 待簽核清單的「查看」:程式代碼 → 查詢種類(庫存異動 INVI05 依單別分)
+SIGN_VIEW_KIND = {"PURI07": "poq", "PURI08": "pochg", "PURI05": "prq", "PURI09": "rcq", "PURI11": "rtq",
+                  "MOCI02": "moq", "MOCI12": "mochg", "MOCI03": "miq", "MOCI04": "mrq", "MOCI05": "mfq",
+                  "COPI06": "coq", "COPI07": "cochg", "COPI08": "slq", "COPI09": "srq"}
+SIGN_VIEW_INV = {"1101": "ivi", "1102": "ivz", "1199": "ivs"}
+SIGN_VIEW_TITLE = {"poq": "採購單", "pochg": "採購變更單", "prq": "請購單", "rcq": "進貨單", "rtq": "退貨單", "moq": "製令",
+                   "mochg": "製令變更單", "miq": "製令領料單", "mrq": "製令退料單", "mfq": "生產入庫單", "coq": "客戶訂單",
+                   "cochg": "訂單變更單", "slq": "銷貨單", "srq": "銷退單", "ivi": "庫存領料單", "ivz": "零元入庫單", "ivs": "報廢單"}
+
+
+def _sign_view(cond):
+    """cond.docs = ["程式|單別|單號", ...](最多 20 張)→ 每張單的單頭(cols/row)與單身(dcols/lines);變更單每個版次各一筆。"""
+    docs = [str(d) for d in ((cond or {}).get("docs") or [])][:20]
+    out = []
+    for d in docs:
+        parts = [x.strip() for x in d.split("|")]
+        if len(parts) != 3:
+            continue
+        prog, dt, dn = parts[0].upper(), parts[1], parts[2]
+        kind = SIGN_VIEW_INV.get(dt) if prog == "INVI05" else SIGN_VIEW_KIND.get(prog)
+        label = "%s-%s" % (dt, dn)
+        if not kind:
+            out.append({"doc": label, "prog": prog, "title": prog, "error": "這種表單(%s)還不支援查看" % prog})
+            continue
+        c = {"no": dn, "op_no": "="}
+        if "type" in KINDS[kind]["cond"]:
+            c.update(type=dt, op_type="=")
+        try:
+            res = run_query(kind, c)
+        except Exception as ex:
+            out.append({"doc": label, "prog": prog, "title": SIGN_VIEW_TITLE.get(kind, prog), "error": "查詢失敗:%s" % str(ex)[:120]})
+            continue
+        if not res["rows"]:
+            out.append({"doc": label, "prog": prog, "title": SIGN_VIEW_TITLE.get(kind, prog), "error": "ERP 查無這張單據"})
+            continue
+        for i, row in enumerate(res["rows"]):
+            out.append({"doc": label, "prog": prog, "title": SIGN_VIEW_TITLE.get(kind, prog), "cols": res["cols"], "row": row,
+                        "dcols": res["dcols"], "lines": res["details"][i] or []})
+    return {"cols": [], "rows": [], "dcols": [], "details": [], "docs": out, "msg": ""}
+
+
 def run_query(kind, cond):
     if kind == "lbr":
         return _label_receipts(cond)
+    if kind == "sgv":
+        return _sign_view(cond)
     sql, params = build_sql(kind, cond)
     assert sql.startswith("SELECT "), "只允許 SELECT"
     if ERP_SQL_DIR not in sys.path:
@@ -538,7 +581,7 @@ def answer(endpoint, key, rq):
     try:
         res = run_query(kind, cond)
         payload.update(ok=True, **res)
-        note = "%d 筆,單身 %d 列" % (len(res["rows"]), sum(len(d or []) for d in res["details"]))
+        note = ("查看 %d 張" % len(res["docs"])) if "docs" in res else "%d 筆,單身 %d 列" % (len(res["rows"]), sum(len(d or []) for d in res["details"]))
     except Exception as ex:
         payload.update(ok=False, msg="資料庫查詢失敗:%s" % str(ex)[:200])
         note = "失敗:%s" % str(ex)[:200]

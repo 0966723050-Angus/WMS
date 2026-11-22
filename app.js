@@ -1300,6 +1300,7 @@
         '<div id="sign-list"><div class="skeleton">載入中…</div></div>' +
         '<div class="sign-foot">' +
           '<button type="button" class="btn btn-secondary btn-sm" id="sign-clear">全部清除</button>' +
+          '<button type="button" class="btn btn-secondary btn-sm sign-view-btn" id="sign-view" disabled title="查詢勾選的表單在 ERP 的內容(單頭與單身)">查看</button>' +
           '<button type="button" class="btn" id="sign-ok" disabled>確認</button>' +
         '</div>' +
         '<p class="sign-note" id="sign-note"></p>' +
@@ -1348,6 +1349,8 @@
       $("sign-ok").disabled = busy || n < 1 || !canConfirm;
       $("sign-ok").title = canConfirm ? "" : "需要「ERP:待簽核表單確認」權限,請聯絡管理者";
       $("sign-ok").textContent = n ? "確認(" + n + " 張)" : "確認";
+      $("sign-view").disabled = n < 1 || viewBusy;
+      $("sign-view").textContent = viewBusy ? "查詢中…" : (n ? "查看(" + n + ")" : "查看");
       $("sign-clear").disabled = !forms.length;
       $("sign-clear").hidden = !can("sign_del");   // 全部清除只限有「刪除項目」權限的人
       $("sign-all").checked = forms.length > 0 && n === forms.length;
@@ -1693,6 +1696,64 @@
         updateButtons();
         if (!s.busy && wasBusy) loadForms(true);   // 簽核剛結束:成功的已從清單移除,失敗的有標示
       }).catch(function () { /* 讀不到狀態不影響使用 */ });
+    }
+
+    // ---- 查看:把勾選的表單送到公司電腦查 ERP,顯示每張的單頭與單身(同 ERP 查詢頁)----
+    var viewBusy = false;
+    $("sign-view").addEventListener("click", function () {
+      var sel = forms.filter(function (f) { return picked[f.id]; });
+      if (!sel.length || viewBusy) return;
+      if (sel.length > 20) { msg("一次最多查看 20 張"); return; }
+      viewBusy = true; updateButtons(); msg("");
+      var docs = sel.map(function (f) { return f.prog + "|" + f.docType + "|" + f.docNo; });
+      api("erpq_request", { kind: "sgv", cond: { docs: docs } }).then(function (res) {
+        if (!res.ok) throw new Error(res.error || "送出失敗");
+        return new Promise(function (resolve, reject) {
+          var tries = 0;
+          (function poll() {
+            api("erpq_get", { id: res.request.id }).then(function (g) {
+              var r = g && g.request;
+              if (r && r.state === "done") resolve(r.result || {});
+              else if (r && r.state === "error") reject(new Error(r.msg || "查詢失敗"));
+              else if (++tries > 100) reject(new Error("公司電腦沒有回應,請稍後再試"));
+              else setTimeout(poll, 3000);
+            }).catch(function () { if (++tries > 100) reject(new Error("連線失敗")); else setTimeout(poll, 5000); });
+          })();
+        });
+      }).then(function (result) {
+        showSignView(result.docs || []);
+      }).catch(function (err) {
+        msg("查看失敗:" + err.message);
+      }).then(function () { viewBusy = false; updateButtons(); });
+    });
+
+    function showSignView(docs) {
+      var body = docs.length ? docs.map(function (d) {
+        var head = '<h3 class="sgv-title">' + esc(d.title || d.prog) + ' <span>' + esc(d.doc) + '</span></h3>';
+        if (d.error) return '<section class="sgv-doc">' + head + '<div class="sgv-err">' + esc(d.error) + '</div></section>';
+        var kv = (d.cols || []).map(function (c, j) {
+          return '<div><span>' + esc(c) + '</span><b>' + esc((d.row || [])[j]) + '</b></div>';
+        }).join("");
+        var lines = d.lines || [];
+        var tbl = lines.length
+          ? '<div class="sgv-lines"><table class="lbl-table erpq-dtable"><thead><tr class="lbl-titles">' +
+              (d.dcols || []).map(function (c) { return '<th>' + esc(c) + '</th>'; }).join("") + '</tr></thead><tbody>' +
+              lines.map(function (ln) {
+                return '<tr>' + (d.dcols || []).map(function (c, j) { return '<td data-k="' + esc(c) + '">' + esc(ln[j]) + '</td>'; }).join("") + '</tr>';
+              }).join("") + '</tbody></table></div>'
+          : '<div class="erpq-dnone">沒有單身資料</div>';
+        return '<section class="sgv-doc">' + head + '<div class="sgv-kv">' + kv + '</div>' +
+          '<div class="sgv-sub">單身 ' + lines.length + ' 項</div>' + tbl + '</section>';
+      }).join("") : '<div class="lbl-empty">沒有資料</div>';
+      var modal = el('<div class="modal-backdrop"><div class="modal modal-wide sgv-modal" role="dialog" aria-modal="true" aria-labelledby="sgv-h">' +
+        '<h2 id="sgv-h">查看表單內容(' + docs.length + ')</h2><div class="sgv-body">' + body + '</div>' +
+        '<div class="modal-actions"><button type="button" class="btn" id="sgv-close">關閉</button></div></div></div>');
+      document.body.appendChild(modal);
+      function close() { document.removeEventListener("keydown", onKey); if (modal.parentNode) modal.parentNode.removeChild(modal); }
+      function onKey(e) { if (e.key === "Escape") close(); }
+      document.addEventListener("keydown", onKey);
+      modal.querySelector("#sgv-close").addEventListener("click", close);
+      modal.addEventListener("click", function (e) { if (e.target === modal) close(); });
     }
 
     $("sign-ok").addEventListener("click", function () {
