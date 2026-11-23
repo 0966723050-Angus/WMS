@@ -1681,8 +1681,10 @@ table.data-table td:nth-child(5), table.data-table td:nth-child(7), table.data-t
 }
 
 /* 待簽核清單「查看」視窗 */
-.sgv-modal { max-width: 1300px; width: calc(100% - 32px); }
-.sgv-body { max-height: 70vh; overflow: auto; }
+/* 查看表單內容:視窗加大(幾乎全螢幕寬),單身表格自動換行,不出現左右捲軸(使用者指定) */
+.modal-backdrop:has(.sgv-modal) { padding: 3vh 12px 12px; }
+.modal.modal-wide.sgv-modal { max-width: 1600px; width: 96vw; }
+.sgv-body { max-height: 80vh; overflow-y: auto; overflow-x: hidden; }
 .sgv-doc { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
 .sgv-title { margin: 0 0 8px; font-size: 16px; color: var(--brand); }
 .sgv-title span { color: var(--text); }
@@ -1691,6 +1693,8 @@ table.data-table td:nth-child(5), table.data-table td:nth-child(7), table.data-t
 .sgv-kv span { color: var(--text-muted); white-space: nowrap; }
 .sgv-kv b { font-weight: 600; word-break: break-all; }
 .sgv-sub { margin: 10px 0 4px; font-size: 13px; font-weight: 700; color: var(--text-muted); }
-.sgv-lines { overflow-x: auto; }
+.sgv-lines { overflow-x: hidden; }
+.sgv-lines .erpq-dtable { width: 100%; min-width: 0; table-layout: auto; }
+.sgv-lines .erpq-dtable th, .sgv-lines .erpq-dtable td { white-space: normal; overflow-wrap: anywhere; padding: 6px 6px; }
 .sgv-err { color: var(--warn-text); font-weight: 700; }
 @media (max-width: 720px) { .sgv-lines { overflow-x: visible; } .sgv-kv { grid-template-columns: 1fr 1fr; } }
