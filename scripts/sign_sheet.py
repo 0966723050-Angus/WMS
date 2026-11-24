@@ -82,6 +82,8 @@ def _set(ws, r, values):
     for c, v in enumerate(values, start=1):
         cell = ws.cell(r, c)
         cell.value = v if v != "" else None
+        if isinstance(v, str) and v != "":
+            cell.data_type = "s"  # 以 = 開頭的文字(網站使用者輸入)也要當一般文字,不能被當成公式
         if c in TEXT_COLS:
             cell.number_format = "@"
         if ref is not None and cell.font.name != ref.font.name:

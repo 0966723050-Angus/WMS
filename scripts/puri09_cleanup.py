@@ -218,6 +218,8 @@ def append_history(wb, entries, kind, when=None):
                   "code": e["code"], "name": e["name"]}
         for k, v in values.items():
             cell = ws.cell(last, cols[k], v)
+            if isinstance(v, str):
+                cell.data_type = "s"   # 以 = 開頭的廠商/品名等也要當一般文字,不能被當成公式(同 apply_edits.set_text)
             cell.number_format = "@"   # 單別/單號/採購單這類數字開頭的文字,一律存成文字
         q = e["qty"]
         ws.cell(last, cols["qty"], int(q) if q == int(q) else q)
