@@ -3790,9 +3790,18 @@
   var labelSaving = false;
   // 先確認資料夾權限(要在按鍵當下詢問),再向伺服器領流水號,最後寫檔:
   // 有設定資料夾就直接寫進去(同名檔案直接覆蓋);沒設定、不支援或沒給權限,就用瀏覽器一般下載
+  // 等待超過 ms 毫秒就當作失敗(瀏覽器權限詢問或網路沒有回應時,不讓下載卡住)
+  function withTimeout(p, ms, msg) {
+    return new Promise(function (resolve, reject) {
+      var t = setTimeout(function () { reject(new Error(msg)); }, ms);
+      Promise.resolve(p).then(function (v) { clearTimeout(t); resolve(v); }, function (e) { clearTimeout(t); reject(e); });
+    });
+  }
+  var labelSavingAt = 0;
   function saveLabelExcel(rows, name, onDone, pre) {
-    if (labelSaving) return Promise.resolve();
-    labelSaving = true;
+    // 上一次下載還在處理:提示而不是默默忽略;超過 60 秒視為卡住,允許重新下載
+    if (labelSaving && Date.now() - labelSavingAt < 60000) { showToast("上一次的標籤下載還在處理中,請稍候"); return Promise.resolve(); }
+    labelSaving = true; labelSavingAt = Date.now();
     var dir = null, note = "", dirName = "";
     var getDir = pre ? Promise.resolve(pre.dir) : getLabelDir();
     return getDir.then(function (d) {
@@ -3802,12 +3811,12 @@
       var perm = pre && pre.perm ? pre.perm
         : Promise.resolve(d.queryPermission ? d.queryPermission(opts) : "granted")
             .then(function (p) { return p === "granted" ? p : d.requestPermission(opts); });
-      return perm.then(function (p) {
+      return withTimeout(perm, 30000, "等待資料夾寫入權限逾時").then(function (p) {
           if (p === "granted") dir = d; else note = "沒有允許網站寫入「" + d.name + "」資料夾(瀏覽器詢問時請按「允許」,可選「每次造訪都允許」)";
         })
         .catch(function (e) { note = "「" + d.name + "」資料夾無法使用(" + ((e && e.message) || e) + "),請到標籤頁重新設定下載位置"; });
     }).then(function () {
-      return api("label_serial", { count: rows.length, mode: "md4" }).catch(function (err) {
+      return withTimeout(api("label_serial", { count: rows.length, mode: "md4" }), 30000, "伺服器 30 秒沒有回應").catch(function (err) {
         throw new Error("無法取得流水號(" + err.message + ")");
       });
     }).then(function (res) {
@@ -3822,10 +3831,10 @@
         saved = Promise.resolve(browserDownload());
       } else {
         var data = XLSX.write(wb, Object.assign({ bookType: "xlsx", type: "array" }, XLSX_OPTS));
-        saved = dir.getFileHandle(name, { create: true })
+        saved = withTimeout(dir.getFileHandle(name, { create: true })
           .then(function (fh) { return fh.createWritable(); })
           .then(function (w) { return w.write(new Blob([data])).then(function () { return w.close(); }); })
-          .then(function () { return "「" + dir.name + "」資料夾"; })
+          .then(function () { return "「" + dir.name + "」資料夾"; }), 30000, "寫入資料夾逾時")
           .catch(function (e) {
             var en = (e && e.name) || "";
             note = (en === "NoModificationAllowedError" || en === "InvalidModificationError" || en === "InvalidStateError")
