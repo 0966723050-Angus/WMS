@@ -688,7 +688,7 @@
     projects.forEach(function (p) {
       var card = el(
         '<div class="project-card">' +
-          '<div class="project-card-head">' +
+          '<div class="project-card-head" role="button" tabindex="0" aria-expanded="false">' +
             '<div class="project-card-main">' +
               '<a class="project-code-link" href="#/project/' + encodeURIComponent(p.code) + '">' + esc(p.code) + '</a>' +
               '<span class="project-name" title="' + esc(p.name) + '">' + esc(p.name) + '</span>' +
@@ -709,7 +709,7 @@
       // prevent the collapse toggle from firing when the code link itself is clicked
       codeLink.addEventListener("click", function (e) { e.stopPropagation(); });
 
-      head.addEventListener("click", function () {
+      function toggleCard() {
         var isOpen = card.classList.contains("open");
         if (!isOpen && !orderList.dataset.filled) {
           orderList.innerHTML = p.orders.map(function (o) {
@@ -730,6 +730,13 @@
           orderList.dataset.filled = "1";
         }
         card.classList.toggle("open");
+        head.setAttribute("aria-expanded", card.classList.contains("open") ? "true" : "false");
+      }
+      head.addEventListener("click", toggleCard);
+      // 鍵盤:焦點在標題列本身(不是裡面的專案代號連結)時,Enter / 空白鍵展開收合
+      head.addEventListener("keydown", function (e) {
+        if (e.target !== head) return;
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleCard(); }
       });
 
       list.appendChild(card);
@@ -2045,7 +2052,8 @@
               rows.map(function (row, i) {
                 var n = details[i] ? details[i].length : null;
                 var tg = hasD ? '<td class="erpq-tg" data-k="單身"><span class="erpq-arrow">' + (openAll ? "▾" : "▸") + '</span> <span class="erpq-tgl">單身 </span>' + (n === null ? "-" : n + " 項") + '</td>' : '';
-                return '<tr class="' + (hasD ? "erpq-hrow" : "erpq-row") + (openAll ? " open" : "") + '" data-i="' + i + '">' +
+                return '<tr class="' + (hasD ? "erpq-hrow" : "erpq-row") + (openAll ? " open" : "") + '" data-i="' + i + '"' +
+                  (hasD ? ' tabindex="0" aria-expanded="' + (openAll ? "true" : "false") + '"' : '') + '>' +
                   '<td class="c-chk erpq-chk"><input type="checkbox" class="erpq-pick" data-i="' + i + '" aria-label="選取" /></td>' + tg +
                   cols.map(function (c, j) { return '<td data-k="' + esc(c) + '">' + esc(row[j]) + '</td>'; }).join("") + '</tr>' +
                   (hasD ? '<tr class="erpq-drow" data-i="' + i + '"' + (openAll ? "" : " hidden") + '><td colspan="' + (cols.length + 2) + '">' +
@@ -2061,6 +2069,7 @@
             if (open && !drow.firstChild.innerHTML) drow.firstChild.innerHTML = detailHtml(+i);   // 第一次展開才產生,結果很多時比較快
             drow.hidden = !open;
             tr.classList.toggle("open", open);
+            tr.setAttribute("aria-expanded", open ? "true" : "false");
             var ar = tr.querySelector(".erpq-arrow");
             if (ar) ar.textContent = open ? "▾" : "▸";
           };
@@ -2068,6 +2077,11 @@
             if (e.target.closest(".erpq-chk")) return;   // 點核取方塊不展開
             var tr = e.target.closest("tr.erpq-hrow");
             if (tr) toggle(tr);
+          });
+          // 鍵盤:焦點在單頭列時,Enter / 空白鍵展開收合單身
+          box.querySelector("tbody").addEventListener("keydown", function (e) {
+            if (!e.target.classList || !e.target.classList.contains("erpq-hrow")) return;
+            if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(e.target); }
           });
           var ex = document.getElementById("erpq-expand");
           if (ex) ex.addEventListener("click", function () {
@@ -2360,9 +2374,17 @@
   }
 
   function showToast(text) {
-    var t = el('<div class="toast">' + esc(text) + '</div>');
-    document.body.appendChild(t);
-    setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 4000);
+    // 放進常駐的 aria-live 區塊,螢幕報讀器才會念出訊息;點一下可提早關閉
+    var region = document.getElementById("toast-region");
+    if (!region) {
+      region = el('<div id="toast-region" role="status" aria-live="polite"></div>');
+      document.body.appendChild(region);
+    }
+    var t = el('<div class="toast" title="點一下關閉">' + esc(text) + '</div>');
+    function close() { if (t.parentNode) t.parentNode.removeChild(t); }
+    t.addEventListener("click", close);
+    region.appendChild(t);
+    setTimeout(close, 4000);
   }
 
   function renderStorage(app) {
