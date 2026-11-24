@@ -3748,13 +3748,25 @@
     document.addEventListener("keydown", onKey);
     modal.querySelector("#lblc-cancel").addEventListener("click", close);
     modal.addEventListener("click", function (e) { if (e.target === modal) close(); });
+    var dirHandle = null, dirLoaded = false;
     getLabelDir().then(function (dir) {
+      dirHandle = dir; dirLoaded = true;
       var d = modal.querySelector("#lblc-dir");
       if (d) d.textContent = dir ? "「" + dir.name + "」資料夾(你的設定)" : "瀏覽器預設的「下載」資料夾(尚未設定下載位置)";
     });
     modal.querySelector("#lblc-ok").addEventListener("click", function () {
       close();
-      saveLabelExcel(rows, name, onDone);   // 在按鍵當下呼叫,瀏覽器才允許詢問資料夾寫入權限
+      // 資料夾寫入權限一定要在按鍵的「當下」同步詢問(瀏覽器重開後權限會變成「詢問」,
+      // 若先做完其他非同步動作才問,瀏覽器會拒絕,檔案就只能改存到「下載」資料夾)
+      var pre = null;
+      if (dirLoaded) {
+        pre = { dir: dirHandle, perm: null };
+        if (dirHandle) {
+          try { pre.perm = dirHandle.requestPermission({ mode: "readwrite" }); }
+          catch (e) { pre.perm = Promise.reject(e); }
+        }
+      }
+      saveLabelExcel(rows, name, onDone, pre);
     });
   }
 
@@ -3778,19 +3790,22 @@
   var labelSaving = false;
   // 先確認資料夾權限(要在按鍵當下詢問),再向伺服器領流水號,最後寫檔:
   // 有設定資料夾就直接寫進去(同名檔案直接覆蓋);沒設定、不支援或沒給權限,就用瀏覽器一般下載
-  function saveLabelExcel(rows, name, onDone) {
+  function saveLabelExcel(rows, name, onDone, pre) {
     if (labelSaving) return Promise.resolve();
     labelSaving = true;
-    var dir = null, note = "";
-    return getLabelDir().then(function (d) {
+    var dir = null, note = "", dirName = "";
+    var getDir = pre ? Promise.resolve(pre.dir) : getLabelDir();
+    return getDir.then(function (d) {
       if (!d) return;
+      dirName = d.name;
       var opts = { mode: "readwrite" };
-      return Promise.resolve(d.queryPermission ? d.queryPermission(opts) : "granted")
-        .then(function (p) { return p === "granted" ? p : d.requestPermission(opts); })
-        .then(function (p) {
-          if (p === "granted") dir = d; else note = "(未允許寫入「" + d.name + "」)";
+      var perm = pre && pre.perm ? pre.perm
+        : Promise.resolve(d.queryPermission ? d.queryPermission(opts) : "granted")
+            .then(function (p) { return p === "granted" ? p : d.requestPermission(opts); });
+      return perm.then(function (p) {
+          if (p === "granted") dir = d; else note = "沒有允許網站寫入「" + d.name + "」資料夾(瀏覽器詢問時請按「允許」,可選「每次造訪都允許」)";
         })
-        .catch(function () { note = "(「" + d.name + "」無法使用,請到標籤頁重新設定下載位置)"; });
+        .catch(function (e) { note = "「" + d.name + "」資料夾無法使用(" + ((e && e.message) || e) + "),請到標籤頁重新設定下載位置"; });
     }).then(function () {
       return api("label_serial", { count: rows.length, mode: "md4" }).catch(function (err) {
         throw new Error("無法取得流水號(" + err.message + ")");
@@ -3804,17 +3819,27 @@
       function browserDownload() { XLSX.writeFile(wb, name, XLSX_OPTS); return "瀏覽器的「下載」資料夾"; }
       var saved;
       if (!dir) {
-        saved = Promise.resolve(browserDownload() + note);
+        saved = Promise.resolve(browserDownload());
       } else {
         var data = XLSX.write(wb, Object.assign({ bookType: "xlsx", type: "array" }, XLSX_OPTS));
         saved = dir.getFileHandle(name, { create: true })
           .then(function (fh) { return fh.createWritable(); })
           .then(function (w) { return w.write(new Blob([data])).then(function () { return w.close(); }); })
           .then(function () { return "「" + dir.name + "」資料夾"; })
-          .catch(function () { return browserDownload() + "(「" + dir.name + "」無法寫入,請到標籤頁重新設定下載位置)"; });
+          .catch(function (e) {
+            var en = (e && e.name) || "";
+            note = (en === "NoModificationAllowedError" || en === "InvalidModificationError" || en === "InvalidStateError")
+              ? "「" + dir.name + "」裡的 " + name + " 正被其他程式開啟(BarTender 或 Excel),無法覆蓋;請關閉該檔案後再下載一次"
+              : "寫入「" + dir.name + "」失敗(" + ((e && e.message) || en || e) + ")";
+            return browserDownload();
+          });
       }
       return saved.then(function (where) {
-        showToast("已下載 " + rows.length + " 筆標籤(流水號 " + range + "):" + name + ",存到" + where);
+        if (note) {   // 沒存到指定資料夾:用對話框明確告知原因(提示訊息一閃而過容易沒看到)
+          window.alert("標籤已下載 " + rows.length + " 筆(流水號 " + range + "),但沒有存到你設定的「" + dirName + "」資料夾,改存到" + where + "。\n\n原因:" + note);
+        } else {
+          showToast("已下載 " + rows.length + " 筆標籤(流水號 " + range + "):" + name + ",存到" + where);
+        }
         if (typeof onDone === "function") onDone();   // 例如半自動選取:下載完成後自動清除勾選
       });
     }).catch(function (err) {
