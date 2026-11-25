@@ -785,7 +785,7 @@ function signAck_(ts, msg) {
 var ERPQ_PERM = { moq: 'erp_mo', mochg: 'erp_mo', miq: 'erp_mo', mrq: 'erp_mo', mfq: 'erp_mo',
                   poq: 'erp_po', pochg: 'erp_po', prq: 'erp_po', rcq: 'erp_po', rtq: 'erp_po', lbr: 'label', sgv: '*',
                   slq: 'erp_sales', srq: 'erp_sales', coq: 'erp_co', cochg: 'erp_co',
-                  ivi: 'erp_inv', ivz: 'erp_inv', ivs: 'erp_inv', ivq: 'erp_inv' };
+                  ivi: 'erp_inv', ivz: 'erp_inv', ivs: 'erp_inv', ivq: 'erp_inv', ivh: 'erp_inv' };
 var ERPQ_PERM_NAME = { label: '標籤', erp_mo: 'ERP:製造命令', erp_po: 'ERP:採購單', erp_sales: 'ERP:銷貨單', erp_co: 'ERP:客戶訂單', erp_inv: 'ERP:庫存異動' };
 var ERPQ_QUEUE_KEY = 'ERPQ_QUEUE';     // [{id, kind, cond, by, ts, state(queued/running/done/error), msg, parts, n}]
 var ERPQ_RES_PREFIX = 'erpqr_';        // 結果分段存放:erpqr_<id>_<段>
@@ -831,8 +831,9 @@ function erpqRequest_(body, me) {
     if (deny.length) return { ok: false, error: '沒有查看權限:' + deny.map(function (d) { return d.replace(/\|/g, ' '); }).join('、') };
     cond.docs = docs;
   }
-  // code / name / spec / qty / wh = 庫存狀態查詢(ivq)的品號 / 品名 / 規格 / 庫存數量 / 主要庫別
-  var CKEYS = ['proj', 'prod', 'type', 'no', 'confirm', 'code', 'name', 'spec', 'qty', 'wh'];
+  // code / name / spec / qty / wh = 庫存狀態查詢(ivq)的品號 / 品名 / 規格 / 庫存數量 / 主要庫別;
+  // 歷史異動(ivh)用 code(品號)、wh(庫別)、dfrom / dto(日期區間)
+  var CKEYS = ['proj', 'prod', 'type', 'no', 'confirm', 'code', 'name', 'spec', 'qty', 'wh', 'dfrom', 'dto'];
   CKEYS.forEach(function (k) { var v = clip_(c[k], 40); if (v) cond[k] = v; });
   if (cond.confirm && ['N', 'Y'].indexOf(cond.confirm) < 0) delete cond.confirm;
   // 各條件的比較方式(同 ERP 查詢對話框):= >= <= <> %like% %like like%;沒給就用舊的預設(單別相同、單號開頭相同)
@@ -842,6 +843,8 @@ function erpqRequest_(body, me) {
     if (cond[k] && OPS.indexOf(o) !== -1) cond['op_' + k] = o;
   });
   if (!Object.keys(cond).length) return { ok: false, error: '請至少輸入一個查詢條件' };
+  // 庫存狀態:有「cost」權限的帳號才附庫存成本、最近進價(旗標由這裡依權限加上,網頁送的 cost 不採用)
+  if ((kind === 'ivq' || kind === 'ivh') && me.perms.cost) cond.cost = '1';
   var q = erpqQueue_();
   var busy = q.filter(function (r) { return r.by === me.email && r.kind === kind && (r.state === 'queued' || r.state === 'running') && Date.now() - r.ts < ERPQ_STALE_MS; });
   if (busy.length) return { ok: false, error: '上一筆查詢還在執行中,請稍候' };

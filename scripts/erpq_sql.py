@@ -5,7 +5,7 @@ puri09_watch.py(每 10 秒)與排程「WMS 儲位編輯寫入」(apply_and_sync.
 
 用法:
   python -I scripts\erpq_sql.py                      取走並處理所有等待中的查詢(沒有就直接結束)
-  python -I scripts\erpq_sql.py --id <id> --kind <moq|mochg|poq|pochg|slq|srq|miq|mrq|mfq|prq|coq|cochg|ivi|ivz|ivs|ivq> --cond "<JSON>"
+  python -I scripts\erpq_sql.py --id <id> --kind <moq|mochg|poq|pochg|slq|srq|miq|mrq|mfq|prq|coq|cochg|ivi|ivz|ivs|ivq|ivh> --cond "<JSON>"
                                                     處理一筆已經被取走的查詢(監看器印出 ERPQ_REQUEST 時用)
   python -I scripts\erpq_sql.py --test <kind> "<JSON>"  只查詢、印出結果,不回傳網站
 連線設定沿用 WMS\WMS一鍵更新\sql_config.json(erp_sql.connect,唯讀連線)。
@@ -191,6 +191,34 @@ def _invta(docno):
     }
 
 
+def _ivq(with_cost):
+    """庫存狀態(INVQ01)。with_cost=True 時多「庫存成本」「最近進價-本國幣別」兩欄(需 cost 權限)。"""
+    return {
+        "from": ("INVMB WITH (NOLOCK) "
+                 "LEFT JOIN CMSMC AS WH WITH (NOLOCK) ON WH.MC001 = MB017 "
+                 "LEFT JOIN PURMA AS VND WITH (NOLOCK) ON VND.MA001 = MB032"),
+        "cond": {"code": ("MB001", "prefix"), "name": ("MB002", "prefix"), "spec": ("MB003", "prefix"),
+                 "qty": ("MB064", "num"), "wh": ("MB017", "eq")},
+        "select": "MB001, MB002, MB003, MB064, MB004, MB065, MB050, MB032, VND.MA002 AS VND_NAME, WH.MC002 AS WH_NAME, MB017",
+        "order": "MB001",
+        "cols": ["品號", "品名", "規格", "庫存數量", "單位"] + (["庫存成本", "最近進價-本國幣別"] if with_cost else []) +
+                ["主要廠商", "主要廠商名稱", "主要庫別名稱", "主要庫別"],
+        "row": lambda r: [r.MB001, r.MB002, r.MB003, _qty(r.MB064), r.MB004] +
+                         ([_money(r.MB065), _money(r.MB050)] if with_cost else []) +
+                         [r.MB032, r.VND_NAME, r.WH_NAME, r.MB017],
+        "key": lambda r: (r.MB001,),
+        "detail": {
+            "from": "INVMC WITH (NOLOCK) LEFT JOIN CMSMC AS WHN WITH (NOLOCK) ON WHN.MC001 = INVMC.MC002",
+            "keycols": ("INVMC.MC001",),
+            "where": "INVMC.MC007 <> 0",
+            "select": "INVMC.MC001 AS PN, INVMC.MC002 AS WH, WHN.MC002 AS WHN, INVMC.MC007 AS QTY",
+            "order": "INVMC.MC001, INVMC.MC002",
+            "cols": ["庫別", "庫別名稱", "庫存數量"],
+            "row": lambda r: [r.WH, r.WHN, _qty(r.QTY)],
+        },
+    }
+
+
 KINDS.update({
     # ---- 2026-11-20 新增:進貨查詢 / 退貨查詢(採購單底下);proj / prod 條件鍵借用為「供應廠商」「進貨(退貨)日期」----
     "rcq": {   # 進貨單 PURTG / PURTH
@@ -351,30 +379,11 @@ KINDS.update({
     "ivz": _invta("1102"),   # 零元入庫單
     "ivs": _invta("1199"),   # 報廢單
     # ---- 2026-11-25 新增:庫存狀態查詢(鼎新 INVQ01)。條件欄位同 ERP「設定查詢條件」:品號 MB001 / 品名 MB002 / 規格 MB003 /
-    # 庫存數量 MB064(數字,只能用 = >= <= <>)/ 主要庫別 MB017。不顯示成本;單身 = 各庫庫存量(INVMC,只列數量不為 0 的庫別)----
-    "ivq": {
-        "from": ("INVMB WITH (NOLOCK) "
-                 "LEFT JOIN CMSMC AS WH WITH (NOLOCK) ON WH.MC001 = MB017 "
-                 "LEFT JOIN INVMA AS CLS WITH (NOLOCK) ON CLS.MA001 = '1' AND CLS.MA002 = MB005 "
-                 "LEFT JOIN PURMA AS VND WITH (NOLOCK) ON VND.MA001 = MB032"),
-        "cond": {"code": ("MB001", "prefix"), "name": ("MB002", "prefix"), "spec": ("MB003", "prefix"),
-                 "qty": ("MB064", "num"), "wh": ("MB017", "eq")},
-        "select": "MB001, MB002, MB003, MB064, MB004, MB017, WH.MC002 AS WH_NAME, MB005, CLS.MA003 AS CLS_NAME, MB034, MB032, VND.MA002 AS VND_NAME",
-        "order": "MB001",
-        "cols": ["品號", "品名", "規格", "庫存數量", "單位", "主要庫別", "主要庫別名稱", "會計分類", "補貨政策", "主要廠商", "主要廠商名稱"],
-        "row": lambda r: [r.MB001, r.MB002, r.MB003, _qty(r.MB064), r.MB004, r.MB017, r.WH_NAME, _vendor(r.MB005, r.CLS_NAME),
-                          r.MB034, r.MB032, r.VND_NAME],
-        "key": lambda r: (r.MB001,),
-        "detail": {
-            "from": "INVMC WITH (NOLOCK) LEFT JOIN CMSMC AS WHN WITH (NOLOCK) ON WHN.MC001 = INVMC.MC002",
-            "keycols": ("INVMC.MC001",),
-            "where": "INVMC.MC007 <> 0",
-            "select": "INVMC.MC001 AS PN, INVMC.MC002 AS WH, WHN.MC002 AS WHN, INVMC.MC007 AS QTY",
-            "order": "INVMC.MC001, INVMC.MC002",
-            "cols": ["庫別", "庫別名稱", "庫存數量"],
-            "row": lambda r: [r.WH, r.WHN, _qty(r.QTY)],
-        },
-    },
+    # 庫存數量 MB064(數字,只能用 = >= <= <>)/ 主要庫別 MB017。顯示欄位同 INVQ01 的「資料瀏覽」;
+    # 庫存成本(MB065)、最近進價-本國幣別(MB050)是成本資料,只有網站帳號有「cost」權限時才附上(由 Apps Script 依帳號權限
+    # 在查詢條件加 cost=1,見 erpqRequest_;kind 仍是 ivq,run_query 內部換成 ivqc)。單身 = 各庫庫存量(INVMC,只列數量不為 0 的庫別)----
+    "ivq": _ivq(False),
+    "ivqc": _ivq(True),
 })
 
 
@@ -480,6 +489,74 @@ def _label_receipts(cond):
             "msg": "超過 3000 筆,只列出前 3000 筆,請縮小日期區間。" if len(raw) > 3000 else ""}
 
 
+def _inv_history(cond):
+    """庫存狀態「歷史異動」(鼎新 INVQ01「查歷史異動」):某品號在 INVLA(庫存交易明細)的所有異動,日期由舊到新。
+    cond:code 品號(完全相同,必填)、wh 庫別、dfrom / dto 日期區間(yyyyMMdd,可帶 - /)、cost(由 Apps Script 依帳號 cost 權限加上,
+    有才附「單位成本」「異動金額」與金額合計)。最多回傳最近 1000 筆;合計用整個條件範圍算,不受筆數限制。"""
+    cond = cond or {}
+    with_cost = bool(cond.get("cost"))
+    code = str(cond.get("code") or "").strip()
+    if not code or len(code) > 40:
+        raise ValueError("缺少品號")
+    where, params = ["LA001 = ?"], [code]
+    wh = str(cond.get("wh") or "").strip()
+    if wh:
+        if len(wh) > 10:
+            raise ValueError("庫別太長")
+        where.append("LA009 = ?")
+        params.append(wh)
+    for key, op in (("dfrom", ">="), ("dto", "<=")):
+        v = re.sub(r"[-/.\s]", "", str(cond.get(key) or ""))
+        if v:
+            if not (len(v) == 8 and v.isdigit()):
+                raise ValueError("日期格式不正確(要 yyyyMMdd,例 20260101)")
+            where.append("LA004 %s ?" % op)   # op 只會是上面固定的兩種
+            params.append(v)
+    w = " AND ".join(where)
+    sql = ("SELECT TOP 1001 LA004, LA005, LA006, LA007, LA008, LA009, WH.MC002 AS WH_NAME, WH.MC003 AS FAC, FB.MB002 AS FAC_NAME, "
+           "LA010, LA011, LA012, LA013, MQ.MQ002 AS DOC_NAME "
+           "FROM INVLA WITH (NOLOCK) "
+           "LEFT JOIN CMSMC AS WH WITH (NOLOCK) ON WH.MC001 = LA009 "
+           "LEFT JOIN CMSMB AS FB WITH (NOLOCK) ON FB.MB001 = WH.MC003 "
+           "LEFT JOIN CMSMQ AS MQ WITH (NOLOCK) ON MQ.MQ001 = LA006 "
+           "WHERE " + w + " ORDER BY LA004 DESC, LA006 DESC, LA007 DESC, LA008 DESC, LA009 DESC")
+    sql_sum = ("SELECT COUNT(*), SUM(LA005 * LA011), SUM(LA005 * LA013), "
+               "SUM(CASE WHEN LA005 = 1 THEN LA013 ELSE 0 END), SUM(CASE WHEN LA005 = -1 THEN LA013 ELSE 0 END) "
+               "FROM INVLA WITH (NOLOCK) WHERE " + w)
+    assert sql.startswith("SELECT ") and sql_sum.startswith("SELECT "), "只允許 SELECT"
+    if ERP_SQL_DIR not in sys.path:
+        sys.path.insert(0, ERP_SQL_DIR)
+    import erp_sql
+    cn = erp_sql.connect()
+    try:
+        cur = cn.cursor()
+        cur.execute(sql, params)
+        raw = cur.fetchall()
+        cur.execute(sql_sum, params)
+        tot = cur.fetchone()
+    finally:
+        cn.close()
+    raw = list(reversed(raw[:1000]))   # 取最近 1000 筆,再排成由舊到新
+    t = lambda v: ("" if v is None else str(v).strip())
+    rows = []
+    for r in raw:
+        row = [t(r.DOC_NAME), _ymd(t(r.LA004)), "%s-%s-%s" % (t(r.LA006), t(r.LA007), t(r.LA008)), "入庫" if r.LA005 == 1 else "出庫",
+               _qty(r.LA011), t(r.LA009), t(r.WH_NAME), t(r.LA010), t(r.FAC), t(r.FAC_NAME)]
+        if with_cost:
+            row += [_money(r.LA012), _money(r.LA013)]
+        rows.append(row)
+    cols = ["單據名稱", "日期", "單別-單號-序號", "入出別", "異動數量", "庫別", "庫別名稱", "備註", "廠別代號", "廠別名稱"]
+    if with_cost:
+        cols += ["單位成本", "異動金額"]
+    n, qty, amt, a_in, a_out = tot[0] or 0, tot[1] or 0, tot[2] or 0, tot[3] or 0, tot[4] or 0
+    msg = "總數量 " + _qty(qty)
+    if with_cost:
+        msg += " · 總金額 %s · 總入庫金額 %s · 總出庫金額 %s" % (_money(amt) or "0", _money(a_in) or "0", _money(a_out) or "0")
+    if n > 1000:
+        msg += " · 共 %d 筆,只列出最近 1000 筆,請縮小日期區間" % n
+    return {"cols": cols, "rows": rows, "dcols": [], "details": [None] * len(rows), "msg": msg}
+
+
 # 待簽核清單的「查看」:程式代碼 → 查詢種類(庫存異動 INVI05 依單別分)
 SIGN_VIEW_KIND = {"PURI07": "poq", "PURI08": "pochg", "PURI05": "prq", "PURI09": "rcq", "PURI11": "rtq",
                   "MOCI02": "moq", "MOCI12": "mochg", "MOCI03": "miq", "MOCI04": "mrq", "MOCI05": "mfq",
@@ -522,10 +599,18 @@ def _sign_view(cond):
 
 
 def run_query(kind, cond):
+    if kind == "ivh":
+        return _inv_history(cond)
     if kind == "lbr":
         return _label_receipts(cond)
     if kind == "sgv":
         return _sign_view(cond)
+    cond = dict(cond or {})
+    with_cost = cond.pop("cost", None)   # 由 Apps Script 依帳號的 cost 權限加上,網頁送的值不會被採用(Code.gs 白名單沒有 cost)
+    if kind == "ivq" and with_cost:
+        kind = "ivqc"   # 附庫存成本、最近進價
+    elif kind == "ivqc":
+        raise ValueError("不支援的查詢種類:%s" % kind)
     sql, params = build_sql(kind, cond)
     assert sql.startswith("SELECT "), "只允許 SELECT"
     if ERP_SQL_DIR not in sys.path:

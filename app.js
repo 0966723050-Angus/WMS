@@ -1862,7 +1862,7 @@
     ivz:   { group: "庫存異動", title: "零元入庫", perm: "erp_inv", confirm: ["N", "Y"], fields: [["no", "單號"]] },
     ivs:   { group: "庫存異動", title: "報廢查詢", perm: "erp_inv", confirm: ["N", "Y"], fields: [["no", "單號"]] },
     // 庫存狀態查詢(ERP INVQ01):條件欄位同 ERP「設定查詢條件」;不是單據,沒有確認碼也不能送簽;庫存數量是數字,只能比大小
-    ivq:   { group: "庫存異動", title: "庫存狀態", perm: "erp_inv", confirm: [], noSign: true, num: { qty: 1 },
+    ivq:   { group: "庫存異動", title: "庫存狀態", perm: "erp_inv", confirm: [], noSign: true, hist: true, num: { qty: 1 },
              defOp: { code: "like%", name: "%like%", spec: "%like%" },
              fields: [["code", "品號"], ["name", "品名"], ["spec", "規格"], ["qty", "庫存數量"], ["wh", "主要庫別"]] }
   };
@@ -1961,6 +1961,85 @@
       });
     });
     update();
+  }
+
+  // 庫存狀態:某品號的歷史異動明細(同 ERP INVQ01「查歷史異動」)。彈出視窗,可加庫別、日期區間再查;
+  // 成本欄位(單位成本、異動金額、金額合計)只有帳號有「cost」權限時公司電腦才會附上(Apps Script 依權限決定)
+  function openIvHistory(code, name, spec) {
+    var modal = el(
+      '<div class="modal-backdrop"><div class="modal modal-wide sgv-modal ivh-modal" role="dialog" aria-modal="true" aria-labelledby="ivh-h">' +
+        '<h2 id="ivh-h">歷史異動</h2>' +
+        '<p class="rcv-intro"><b>' + esc(code) + '</b> ' + esc(name) + (spec ? ' · ' + esc(spec) : '') + '</p>' +
+        '<form class="ivh-form" id="ivh-form" autocomplete="off">' +
+          '<label>庫別<input type="text" id="ivh-wh" maxlength="10" spellcheck="false" /></label>' +
+          '<label>日期(起)<input type="text" id="ivh-from" inputmode="numeric" maxlength="10" placeholder="例 20260101" /></label>' +
+          '<label>日期(迄)<input type="text" id="ivh-to" inputmode="numeric" maxlength="10" placeholder="例 20261231" /></label>' +
+          '<button type="submit" class="btn btn-sm" id="ivh-ok">查詢</button>' +
+        '</form>' +
+        '<div class="erpq-status" id="ivh-status"></div>' +
+        '<div class="sgv-body" id="ivh-result"></div>' +
+        '<div class="modal-actions"><button type="button" class="btn" id="ivh-close">關閉</button></div>' +
+      '</div></div>'
+    );
+    document.body.appendChild(modal);
+    var st = modal.querySelector("#ivh-status"), box = modal.querySelector("#ivh-result"), ok = modal.querySelector("#ivh-ok");
+    var gone = false, runId = 0;
+    function close() { gone = true; document.removeEventListener("keydown", onKey); if (modal.parentNode) modal.parentNode.removeChild(modal); }
+    function onKey(e) { if (e.key === "Escape") close(); }
+    document.addEventListener("keydown", onKey);
+    modal.querySelector("#ivh-close").addEventListener("click", close);
+    modal.addEventListener("click", function (e) { if (e.target === modal) close(); });
+
+    function show(r) {
+      var res = r.result || { cols: [], rows: [] }, cols = res.cols || [], rows = res.rows || [];
+      st.className = "erpq-status ok";
+      st.innerHTML = '<b>共 ' + rows.length + ' 筆異動</b>' + (r.msg ? '<div class="erpq-hint">' + esc(r.msg) + '</div>' : '');
+      var iIO = cols.indexOf("入出別");
+      box.innerHTML = rows.length
+        ? '<div class="sgv-lines"><table class="lbl-table erpq-dtable"><thead><tr class="lbl-titles">' +
+            cols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join("") + '</tr></thead><tbody>' +
+            rows.map(function (row) {
+              return '<tr' + (iIO >= 0 && row[iIO] === "出庫" ? ' class="ivh-out"' : '') + '>' +
+                cols.map(function (c, j) { return '<td data-k="' + esc(c) + '">' + esc(row[j]) + '</td>'; }).join("") + '</tr>';
+            }).join("") + '</tbody></table></div>'
+        : '<div class="lbl-empty">這個條件下沒有異動紀錄</div>';
+    }
+
+    function run() {
+      var cond = { code: code, op_code: "=" };
+      var wh = modal.querySelector("#ivh-wh").value.trim();
+      var f = modal.querySelector("#ivh-from").value.replace(/[-\/.\s]/g, ""), t = modal.querySelector("#ivh-to").value.replace(/[-\/.\s]/g, "");
+      if ((f && !/^\d{8}$/.test(f)) || (t && !/^\d{8}$/.test(t))) { st.className = "erpq-status bad"; st.innerHTML = '<b>日期要輸入 8 位數字,例 20260101</b>'; return; }
+      if (wh) { cond.wh = wh; cond.op_wh = "="; }
+      if (f) cond.dfrom = f;
+      if (t) cond.dto = t;
+      var my = ++runId;
+      ok.disabled = true; ok.textContent = "查詢中…";
+      st.className = "erpq-status busy"; st.innerHTML = '<b>已送出,等待公司電腦查詢 ERP 資料庫…(約 10 秒~1 分鐘)</b>';
+      box.innerHTML = "";
+      function fail(msgText) {
+        if (gone || my !== runId) return;
+        ok.disabled = false; ok.textContent = "查詢";
+        st.className = "erpq-status bad"; st.innerHTML = '<b>' + esc(msgText) + '</b>';
+      }
+      api("erpq_request", { kind: "ivh", cond: cond }).then(function (res) {
+        if (!res.ok) throw new Error(res.error || "送出失敗");
+        var tries = 0;
+        (function poll() {
+          if (gone || my !== runId) return;
+          api("erpq_get", { id: res.request.id }).then(function (g) {
+            var r = g && g.request;
+            if (gone || my !== runId) return;
+            if (r && r.state === "done") { ok.disabled = false; ok.textContent = "查詢"; show(r); }
+            else if (r && r.state === "error") fail("查詢失敗:" + (r.msg || ""));
+            else if (++tries > 100) fail("公司電腦沒有回應,請稍後再試");
+            else setTimeout(poll, 3000);
+          }).catch(function () { if (++tries > 100) fail("連線失敗"); else setTimeout(poll, 5000); });
+        })();
+      }).catch(function (err) { fail("查詢失敗:" + err.message); });
+    }
+    modal.querySelector("#ivh-form").addEventListener("submit", function (e) { e.preventDefault(); run(); });
+    run();   // 一打開就先查全部歷史
   }
 
   function renderErpQuery(app, kind) {
@@ -2088,19 +2167,29 @@
             (canSend ? '<p class="erpq-msg" id="erpq-send-msg"></p>' : '') +
             '<div class="erpq-wrap"><table class="lbl-table erpq-table"><thead><tr class="lbl-titles">' +
               (canSend ? '<th class="c-chk"><input type="checkbox" class="erpq-all" aria-label="全選" title="全選" /></th>' : '') +
-              (hasD ? '<th>' + (canSend ? '單身' : '各庫庫存') + '</th>' : '') + cols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join("") + '</tr></thead><tbody>' +
+              (hasD ? '<th>' + (canSend ? '單身' : '各庫庫存') + '</th>' : '') + (K.hist ? '<th>歷史異動</th>' : '') +
+              cols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join("") + '</tr></thead><tbody>' +
               rows.map(function (row, i) {
                 var n = details[i] ? details[i].length : null;
                 var tg = hasD ? '<td class="erpq-tg" data-k="' + (canSend ? "單身" : "各庫庫存") + '"><span class="erpq-arrow">' + (openAll ? "▾" : "▸") + '</span> <span class="erpq-tgl">' + (canSend ? "單身 " : "各庫庫存 ") + '</span>' + (n === null ? "-" : n + " 項") + '</td>' : '';
                 return '<tr class="' + (hasD ? "erpq-hrow" : "erpq-row") + (openAll ? " open" : "") + '" data-i="' + i + '"' +
                   (hasD ? ' tabindex="0" aria-expanded="' + (openAll ? "true" : "false") + '"' : '') + '>' +
                   (canSend ? '<td class="c-chk erpq-chk"><input type="checkbox" class="erpq-pick" data-i="' + i + '" aria-label="選取" /></td>' : '') + tg +
+                  (K.hist ? '<td class="erpq-act" data-k="歷史異動"><button type="button" class="btn btn-sm btn-secondary erpq-hist" data-i="' + i + '">歷史異動</button></td>' : '') +
                   cols.map(function (c, j) { return '<td data-k="' + esc(c) + '">' + esc(row[j]) + '</td>'; }).join("") + '</tr>' +
-                  (hasD ? '<tr class="erpq-drow" data-i="' + i + '"' + (openAll ? "" : " hidden") + '><td colspan="' + (cols.length + (canSend ? 2 : 1)) + '">' +
+                  (hasD ? '<tr class="erpq-drow" data-i="' + i + '"' + (openAll ? "" : " hidden") + '><td colspan="' + (cols.length + (canSend ? 2 : 1) + (K.hist ? 1 : 0)) + '">' +
                     (openAll ? detailHtml(i) : "") + '</td></tr>' : '');
               }).join("") + '</tbody></table></div>'
           : '<div class="lbl-empty">' + emptyText + '</div>';
         if (rows.length && canSend) setupErpqSend(box, kind, cols, rows);
+        if (rows.length && K.hist) {   // 庫存狀態:每列的「歷史異動」鍵 → 彈出該品號的歷史異動明細
+          box.querySelector("tbody").addEventListener("click", function (e) {
+            var b = e.target.closest(".erpq-hist");
+            if (!b) return;
+            var row = rows[+b.getAttribute("data-i")] || [];
+            openIvHistory(row[0] || "", row[1] || "", row[2] || "");
+          });
+        }
         if (hasD && rows.length) {
           var toggle = function (tr, open) {
             var i = tr.getAttribute("data-i"), drow = box.querySelector('tr.erpq-drow[data-i="' + i + '"]');
@@ -2114,7 +2203,7 @@
             if (ar) ar.textContent = open ? "▾" : "▸";
           };
           box.querySelector("tbody").addEventListener("click", function (e) {
-            if (e.target.closest(".erpq-chk")) return;   // 點核取方塊不展開
+            if (e.target.closest(".erpq-chk") || e.target.closest(".erpq-act")) return;   // 點核取方塊、歷史異動鍵不展開
             var tr = e.target.closest("tr.erpq-hrow");
             if (tr) toggle(tr);
           });
