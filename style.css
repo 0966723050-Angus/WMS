@@ -450,6 +450,39 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); width:
 .status-arrived { background: var(--ok-bg); color: var(--ok-text); }
 .status-pending { background: var(--warn-bg); color: var(--warn-text); }
 .status-neutral { background: var(--surface-alt); color: var(--text-muted); }
+/* 製令狀態:每種狀態一個底色(未生產 灰藍 / 已領料 藍 / 完全領料 青綠 / 生產中 琥珀 / 已完工 綠 / 指定完工 紫) */
+:root {
+  --st-idle-bg: #e4e9f0;     --st-idle-fg: #46526a;
+  --st-issued-bg: #dbeafe;   --st-issued-fg: #1d4ed8;
+  --st-full-bg: #ccfbf1;     --st-full-fg: #0f766e;
+  --st-wip-bg: #fef3c7;      --st-wip-fg: #92400e;
+  --st-done-bg: #dcfce7;     --st-done-fg: #166534;
+  --st-forced-bg: #ede9fe;   --st-forced-fg: #5b21b6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --st-idle-bg: #2a3548;   --st-idle-fg: #b6c2d9;
+    --st-issued-bg: #17304f; --st-issued-fg: #8ab8ff;
+    --st-full-bg: #0f3a36;   --st-full-fg: #5ee0cf;
+    --st-wip-bg: #43320d;    --st-wip-fg: #f5c76b;
+    --st-done-bg: #123625;   --st-done-fg: #6ee7a1;
+    --st-forced-bg: #2e2250; --st-forced-fg: #c4b0ff;
+  }
+}
+:root[data-theme="dark"] {
+  --st-idle-bg: #2a3548;   --st-idle-fg: #b6c2d9;
+  --st-issued-bg: #17304f; --st-issued-fg: #8ab8ff;
+  --st-full-bg: #0f3a36;   --st-full-fg: #5ee0cf;
+  --st-wip-bg: #43320d;    --st-wip-fg: #f5c76b;
+  --st-done-bg: #123625;   --st-done-fg: #6ee7a1;
+  --st-forced-bg: #2e2250; --st-forced-fg: #c4b0ff;
+}
+.status-idle { background: var(--st-idle-bg); color: var(--st-idle-fg); }
+.status-issued { background: var(--st-issued-bg); color: var(--st-issued-fg); }
+.status-fullissue { background: var(--st-full-bg); color: var(--st-full-fg); }
+.status-wip { background: var(--st-wip-bg); color: var(--st-wip-fg); }
+.status-complete { background: var(--st-done-bg); color: var(--st-done-fg); }
+.status-forced { background: var(--st-forced-bg); color: var(--st-forced-fg); }
 
 /* ---------- 專案頁:每張製令一段 ---------- */
 .order-section {

@@ -46,10 +46,13 @@
     return arr.join("\n");
   }
 
+  // 製令狀態各用不同底色(使用者指定);物料的已到料 / 未到料維持綠 / 紅
+  var ORDER_STATUS_CLASS = { "未生產": "status-idle", "已領料": "status-issued", "完全領料": "status-fullissue",
+                             "生產中": "status-wip", "已完工": "status-complete", "指定完工": "status-forced" };
   function statusPillClass(status) {
     if (status === "已到料") return "status-arrived";
     if (status === "未到料") return "status-pending";
-    return "status-neutral";
+    return ORDER_STATUS_CLASS[String(status || "").trim()] || "status-neutral";
   }
 
   // 某製令下物料的到料狀況:已到料項數 / 未到料項數
