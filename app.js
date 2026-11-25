@@ -1460,12 +1460,30 @@
       row.classList.toggle("invalid", !!bad);
       if (bad) { msg(bad); return; }
       msg("");
-      api("signforms_save", { id: f.id, name: v.name, prog: v.prog, docType: v.docType, docNo: v.docNo, vendor: v.vendor }).then(function (res) {
+      // 改了程式代碼 / 單別 / 單號(換成另一張單)就要重新確認那張單的確認碼,不是「未確認」的不存、還原成原本內容
+      var docChanged = v.prog !== f.prog || v.docType !== f.docType || v.docNo !== f.docNo;
+      var gate = docChanged
+        ? (msg("檢查表單確認碼中…(約 10 秒~1 分鐘)"), checkSignable([v.prog + "|" + v.docType + "|" + v.docNo]).then(function (blocked) {
+            var why = blocked[v.docType + "-" + v.docNo];
+            if (why) {
+              window.alert("這張表單不能改成這個單據:\n\n" + (v.name || v.prog) + " " + v.docType + "-" + v.docNo + "\n    " + why +
+                "\n\n只有 ERP 確認碼是「未確認」的單據才能送簽。已還原成原本的內容。");
+              var e = new Error("已還原");
+              e.reverted = true;
+              throw e;
+            }
+            msg("");
+          }))
+        : Promise.resolve();
+      gate.then(function () {
+        return api("signforms_save", { id: f.id, name: v.name, prog: v.prog, docType: v.docType, docNo: v.docNo, vendor: v.vendor });
+      }).then(function (res) {
         if (!res.ok) throw new Error(res.error || "儲存失敗");
         forms[forms.indexOf(f)] = res.form;
         row.classList.remove("failed", "low", "invalid");
         row.querySelector(".sign-meta").innerHTML = metaHtml(res.form);
       }).catch(function (err) {
+        if (err && err.reverted) { msg(""); loadForms(); return; }
         if (!session) return;
         msg(err.message);
         loadForms();   // 存不進去(例如重複)就還原成伺服器上的內容
@@ -1623,14 +1641,25 @@
       var bad = checkFields(v);
       if (bad) { msg(bad); return; }
       $("add-ok").disabled = true;
-      api("signforms_save", v).then(function (res) {
-        if (!res.ok) throw new Error(res.error || "新增失敗");
+      // 加入清單前先到 ERP 確認這張單的確認碼:不是「未確認(N)」的擋下並提醒;查不到狀態一律不加入
+      msg("檢查表單確認碼中…(約 10 秒~1 分鐘)");
+      checkSignable([v.prog + "|" + v.docType + "|" + v.docNo]).then(function (blocked) {
+        var why = blocked[v.docType + "-" + v.docNo];
+        if (why) {
+          msg("");
+          window.alert("這張表單不能加入待簽核清單:\n\n" + (v.name || v.prog) + " " + v.docType + "-" + v.docNo + "\n    " + why +
+            "\n\n只有 ERP 確認碼是「未確認」的單據才能送簽,請先確認單據在 ERP 的狀態。");
+          return;
+        }
         msg("");
-        $("add-dn").value = "";   // 表單名稱 / 單別留著,方便連續輸入同一種表單
-        $("add-vendor").value = "";
-        showToast("已新增");
-        return loadForms();
-      }).catch(function (err) { if (session) msg(err.message); }).then(function () { $("add-ok").disabled = false; });
+        return api("signforms_save", v).then(function (res) {
+          if (!res.ok) throw new Error(res.error || "新增失敗");
+          $("add-dn").value = "";   // 表單名稱 / 單別留著,方便連續輸入同一種表單
+          $("add-vendor").value = "";
+          showToast("已新增");
+          return loadForms();
+        });
+      }).catch(function (err) { if (session) msg("沒有加入:" + err.message); }).then(function () { $("add-ok").disabled = false; });
     });
 
     // ---- 截圖上傳 ----

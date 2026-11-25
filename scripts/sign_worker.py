@@ -71,8 +71,42 @@ def fetch_image(endpoint, key, img):
     return Image.open(io.BytesIO(raw)).convert("RGB")
 
 
-def summary(res):
+def drop_unsignable(forms, log=print):
+    """截圖辨識出的表單,加入待簽核清單前先查 ERP 確認碼:只有「未確認(N)」才放行。
+    已確認(Y)、作廢(V)、確認失敗等不是 N 的表單不加入清單,回傳 (放行的表單, [被擋下的說明文字])。
+    查無單據(可能是辨識錯誤,留著讓人修正)、程式代碼沒有 SQL 對照、或查詢出錯,都先放行(按「簽核」前還會再檢查一次)。"""
+    blocked = []
+    try:
+        import erp_check
+        cn = erp_check.connect()
+    except Exception as ex:
+        log("截圖辨識:無法連線 ERP 檢查確認碼,表單先放行:%s" % ex)
+        return forms, blocked
+    keep = []
+    try:
+        cur = cn.cursor()
+        for f in forms:
+            try:
+                st = erp_check.doc_status(cur, str(f.get("prog") or "").upper(), str(f.get("docType") or ""), str(f.get("docNo") or ""))
+            except Exception as ex:
+                log("截圖辨識:查 %s-%s 確認碼失敗,先放行:%s" % (f.get("docType"), f.get("docNo"), ex))
+                keep.append(f)
+                continue
+            if st.get("known") and st.get("found") and (st.get("confirm") or "").strip() != "N":
+                c = (st.get("confirm") or "").strip()
+                blocked.append("%s-%s(%s)" % (f.get("docType"), f.get("docNo"), {"Y": "已確認", "V": "已作廢"}.get(c, "確認碼 " + (c or "空白"))))
+            else:
+                keep.append(f)
+    finally:
+        cn.close()
+    return keep, blocked
+
+
+def summary(res, blocked=None):
     forms = res["forms"]
+    blocked = blocked or []
+    if not forms and blocked:
+        return "error", "辨識到的 %d 張都不能送簽,沒有加入清單:%s(只有 ERP 確認碼是「未確認」的單據才能送簽)" % (len(blocked), "、".join(blocked))
     if not forms:
         return "error", "沒辨識到表單:" + ";".join(res["warnings"] or ["找不到紅框或單別/單號"])
     names = "、".join(sorted({f["progName"] or f["prog"] for f in forms if (f["progName"] or f["prog"])})) or "?"
@@ -82,6 +116,8 @@ def summary(res):
         msg += ",其中 %d 張把握度不高請核對" % low
     if res["warnings"]:
         msg += ";" + ";".join(res["warnings"])
+    if blocked:
+        msg += ";另有 %d 張不能送簽,沒有加入清單:%s" % (len(blocked), "、".join(blocked))
     return "done", msg
 
 
@@ -101,11 +137,13 @@ def process(endpoint, key, images, log=print):
             forms = res["forms"]
             for f in forms:
                 f.pop("box", None)
+            forms, blocked = drop_unsignable(forms, log)   # 已確認 / 作廢的單不加入待簽核清單
+            res = dict(res, forms=forms)
             if forms:
                 r = sc.push_to(endpoint, key, forms, {"by": img.get("by", ""), "img": iid})
                 if not r.get("ok"):
                     raise RuntimeError("送出表單失敗:%s" % (r.get("error") or r))
-            state, msg = summary(res)
+            state, msg = summary(res, blocked)
             _get(endpoint, key, {"action": "signimg_report", "id": iid, "state": state, "msg": msg, "n": len(forms)})
             log("簽核截圖 %s(%s):%s" % (iid, img.get("by", ""), msg))
         except Exception as ex:

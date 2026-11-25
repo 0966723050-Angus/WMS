@@ -861,7 +861,8 @@ function erpqRequest_(body, me) {
       if (/^INVI/.test(prog)) return 'erp_inv';
       return '';
     };
-    var deny = docs.filter(function (d) { var p = permOf(d.split('|')[0]); return !me.perms.erp_sign && (!p || !me.perms[p]); });
+    // sgc 只回「確認碼是不是 N」,待簽核頁所有登入同仁(包含只能手動新增 / 上傳截圖的人)新增表單前都要能檢查,不另外檢查查詢權限;sgv 才看內容
+    var deny = kind === 'sgc' ? [] : docs.filter(function (d) { var p = permOf(d.split('|')[0]); return !me.perms.erp_sign && (!p || !me.perms[p]); });
     if (deny.length) return { ok: false, error: '沒有查看權限:' + deny.map(function (d) { return d.replace(/\|/g, ' '); }).join('、') };
     cond.docs = docs;
   }
