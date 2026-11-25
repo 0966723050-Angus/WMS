@@ -1860,7 +1860,11 @@
              fields: [["type", "訂單單別"], ["no", "訂單單號"]] },
     ivi:   { group: "庫存異動", title: "庫存領料", perm: "erp_inv", confirm: ["N", "Y"], fields: [["no", "單號"]] },
     ivz:   { group: "庫存異動", title: "零元入庫", perm: "erp_inv", confirm: ["N", "Y"], fields: [["no", "單號"]] },
-    ivs:   { group: "庫存異動", title: "報廢查詢", perm: "erp_inv", confirm: ["N", "Y"], fields: [["no", "單號"]] }
+    ivs:   { group: "庫存異動", title: "報廢查詢", perm: "erp_inv", confirm: ["N", "Y"], fields: [["no", "單號"]] },
+    // 庫存狀態查詢(ERP INVQ01):條件欄位同 ERP「設定查詢條件」;不是單據,沒有確認碼也不能送簽;庫存數量是數字,只能比大小
+    ivq:   { group: "庫存異動", title: "庫存狀態", perm: "erp_inv", confirm: [], noSign: true, num: { qty: 1 },
+             defOp: { code: "like%", name: "%like%", spec: "%like%" },
+             fields: [["code", "品號"], ["name", "品名"], ["spec", "規格"], ["qty", "庫存數量"], ["wh", "主要庫別"]] }
   };
   // 送簽:查詢種類 → 待簽核清單的程式代碼(表單名稱優先用表單清單裡的名稱)
   var ERPQ_SIGN = { moq: { prog: "MOCI02", name: "製令" }, mochg: { prog: "MOCI12", name: "製令變更" },
@@ -1875,11 +1879,14 @@
 
   // 每個條件的比較方式(同 ERP「設定查詢條件」):預設 =
   var ERPQ_OPS = ["=", ">=", "<=", "<>", "%like%", "%like", "like%"];
-  function erpqOpSelect(k, cur) {
+  var ERPQ_NUM_OPS = ["=", ">=", "<=", "<>"];   // 數字欄位(例:庫存數量)只能比大小
+  function erpqOpSelect(k, cur, ops) {
     return '<select class="erpq-op" data-k="op_' + k + '" aria-label="比較方式">' +
-      ERPQ_OPS.map(function (o) { return '<option value="' + esc(o) + '"' + ((cur || "=") === o ? " selected" : "") + '>' + esc(o) + '</option>'; }).join("") +
+      (ops || ERPQ_OPS).map(function (o) { return '<option value="' + esc(o) + '"' + ((cur || "=") === o ? " selected" : "") + '>' + esc(o) + '</option>'; }).join("") +
       '</select>';
   }
+  // 各欄位的預設比較方式:一般是 =;庫存狀態的品號 / 品名 / 規格預設用 like%、%like%(只打一部分也找得到)
+  function erpqDefOp(kind, k) { var K = ERPQ_KINDS[kind]; return (K && K.defOp && K.defOp[k]) || "="; }
   function erpqCondText(kind, cond) {
     var K = ERPQ_KINDS[kind], parts = [];
     var op = function (k) { var o = cond && cond["op_" + k]; return o ? " " + o + " " : "="; };
@@ -1983,14 +1990,18 @@
             var extra = (kind === "moq" && f[0] === "proj") ? ' list="erpq-dl-proj"' : (kind === "moq" && f[0] === "prod") ? ' list="erpq-dl-prod"' :
               f[0] === "type" ? ' inputmode="numeric" maxlength="6"' : f[0] === "no" ? ' inputmode="numeric" maxlength="14"' :
               ((kind === "rcq" || kind === "rtq") && f[0] === "prod") ? ' inputmode="numeric" maxlength="10" placeholder="例 20261120"' :
-              ((kind === "rcq" || kind === "rtq") && f[0] === "proj") ? ' placeholder="代號或簡稱"' : "";
-            return '<div class="erpq-f"><span>' + esc(f[1]) + '</span><div class="erpq-in">' + erpqOpSelect(f[0], C["op_" + f[0]]) +
+              ((kind === "rcq" || kind === "rtq") && f[0] === "proj") ? ' placeholder="代號或簡稱"' :
+              (K.num && K.num[f[0]]) ? ' inputmode="decimal"' : "";
+            return '<div class="erpq-f"><span>' + esc(f[1]) + '</span><div class="erpq-in">' +
+              erpqOpSelect(f[0], C["op_" + f[0]] || erpqDefOp(kind, f[0]), (K.num && K.num[f[0]]) ? ERPQ_NUM_OPS : null) +
               '<input type="text" data-k="' + f[0] + '" value="' + esc(C[f[0]] || "") + '"' + extra + ' spellcheck="false" aria-label="' + esc(f[1]) + '" /></div></div>';
           }).join("") +
-          '<div class="erpq-f"><span>確認碼</span><div class="erpq-in">' + erpqOpSelect("confirm", C.op_confirm) +
-            '<select data-k="confirm" aria-label="確認碼"><option value=""></option>' +
-            K.confirm.map(function (v) { return '<option value="' + v + '"' + (C.confirm === v ? " selected" : "") + '>' + ERPQ_CONFIRM[v] + '</option>'; }).join("") +
-          '</select></div></div>' +
+          (K.confirm.length
+            ? '<div class="erpq-f"><span>確認碼</span><div class="erpq-in">' + erpqOpSelect("confirm", C.op_confirm) +
+              '<select data-k="confirm" aria-label="確認碼"><option value=""></option>' +
+              K.confirm.map(function (v) { return '<option value="' + v + '"' + (C.confirm === v ? " selected" : "") + '>' + ERPQ_CONFIRM[v] + '</option>'; }).join("") +
+              '</select></div></div>'
+            : '') +
           '<div class="erpq-btns">' +
             '<button type="button" class="btn btn-sm btn-secondary" id="erpq-clear">清除</button>' +
             '<button type="submit" class="btn btn-sm" id="erpq-ok">確認</button>' +
@@ -2013,7 +2024,10 @@
     document.getElementById("erpq-clear").addEventListener("click", function () {
       Object.keys(C).forEach(function (k) { delete C[k]; });
       var els = form.querySelectorAll("[data-k]");
-      for (var i = 0; i < els.length; i++) els[i].value = els[i].classList.contains("erpq-op") ? "=" : "";   // 比較方式恢復成 =
+      for (var i = 0; i < els.length; i++) {   // 比較方式恢復成預設(一般是 =)
+        var ek = els[i].getAttribute("data-k") || "";
+        els[i].value = els[i].classList.contains("erpq-op") ? erpqDefOp(kind, ek.replace(/^op_/, "")) : "";
+      }
       msg("");
       clearTimeout(timer);   // 查詢結果一起清掉
       showRequest(null);
@@ -2052,8 +2066,8 @@
         var dcols = res.dcols || [], details = res.details || [], hasD = dcols.length > 0;
         var detailHtml = function (i) {
           var d = details[i];
-          if (!d) return '<div class="erpq-dnone">這張單沒有附單身(結果太多,請加條件縮小範圍)</div>';
-          if (!d.length) return '<div class="erpq-dnone">沒有單身資料</div>';
+          if (!d) return '<div class="erpq-dnone">' + (K.noSign ? "沒有附各庫庫存" : "這張單沒有附單身") + '(結果太多,請加條件縮小範圍)</div>';
+          if (!d.length) return '<div class="erpq-dnone">' + (K.noSign ? "各庫庫存都是 0" : "沒有單身資料") + '</div>';
           return '<table class="lbl-table erpq-dtable"><thead><tr class="lbl-titles">' +
             dcols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join("") + '</tr></thead><tbody>' +
             d.map(function (line) {
@@ -2061,30 +2075,32 @@
             }).join("") + '</tbody></table>';
         };
         var openAll = rows.length === 1;   // 只有一張單就直接展開
+        var canSend = !K.noSign;   // 庫存狀態這類不是單據的查詢:沒有勾選與送簽
+        var emptyText = canSend ? "ERP 查無符合條件的單據" : "ERP 查無符合條件的資料";
         box.innerHTML = rows.length
           ? '<div class="erpq-tools">' +
-              '<label class="erpq-all-m"><input type="checkbox" class="erpq-all" /> 全選</label>' +
+              (canSend ? '<label class="erpq-all-m"><input type="checkbox" class="erpq-all" /> 全選</label>' : '<span></span>') +
               '<span class="erpq-tools-r">' +
                 (hasD && rows.length > 1 ? '<button type="button" class="btn btn-sm btn-secondary" id="erpq-expand">全部展開</button>' : '') +
-                '<button type="button" class="btn btn-sm" id="erpq-send" disabled title="把勾選的單據加入「待簽核表單」清單">送簽</button>' +
+                (canSend ? '<button type="button" class="btn btn-sm" id="erpq-send" disabled title="把勾選的單據加入「待簽核表單」清單">送簽</button>' : '') +
               '</span>' +
             '</div>' +
-            '<p class="erpq-msg" id="erpq-send-msg"></p>' +
+            (canSend ? '<p class="erpq-msg" id="erpq-send-msg"></p>' : '') +
             '<div class="erpq-wrap"><table class="lbl-table erpq-table"><thead><tr class="lbl-titles">' +
-              '<th class="c-chk"><input type="checkbox" class="erpq-all" aria-label="全選" title="全選" /></th>' +
-              (hasD ? '<th>單身</th>' : '') + cols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join("") + '</tr></thead><tbody>' +
+              (canSend ? '<th class="c-chk"><input type="checkbox" class="erpq-all" aria-label="全選" title="全選" /></th>' : '') +
+              (hasD ? '<th>' + (canSend ? '單身' : '各庫庫存') + '</th>' : '') + cols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join("") + '</tr></thead><tbody>' +
               rows.map(function (row, i) {
                 var n = details[i] ? details[i].length : null;
-                var tg = hasD ? '<td class="erpq-tg" data-k="單身"><span class="erpq-arrow">' + (openAll ? "▾" : "▸") + '</span> <span class="erpq-tgl">單身 </span>' + (n === null ? "-" : n + " 項") + '</td>' : '';
+                var tg = hasD ? '<td class="erpq-tg" data-k="' + (canSend ? "單身" : "各庫庫存") + '"><span class="erpq-arrow">' + (openAll ? "▾" : "▸") + '</span> <span class="erpq-tgl">' + (canSend ? "單身 " : "各庫庫存 ") + '</span>' + (n === null ? "-" : n + " 項") + '</td>' : '';
                 return '<tr class="' + (hasD ? "erpq-hrow" : "erpq-row") + (openAll ? " open" : "") + '" data-i="' + i + '"' +
                   (hasD ? ' tabindex="0" aria-expanded="' + (openAll ? "true" : "false") + '"' : '') + '>' +
-                  '<td class="c-chk erpq-chk"><input type="checkbox" class="erpq-pick" data-i="' + i + '" aria-label="選取" /></td>' + tg +
+                  (canSend ? '<td class="c-chk erpq-chk"><input type="checkbox" class="erpq-pick" data-i="' + i + '" aria-label="選取" /></td>' : '') + tg +
                   cols.map(function (c, j) { return '<td data-k="' + esc(c) + '">' + esc(row[j]) + '</td>'; }).join("") + '</tr>' +
-                  (hasD ? '<tr class="erpq-drow" data-i="' + i + '"' + (openAll ? "" : " hidden") + '><td colspan="' + (cols.length + 2) + '">' +
+                  (hasD ? '<tr class="erpq-drow" data-i="' + i + '"' + (openAll ? "" : " hidden") + '><td colspan="' + (cols.length + (canSend ? 2 : 1)) + '">' +
                     (openAll ? detailHtml(i) : "") + '</td></tr>' : '');
               }).join("") + '</tbody></table></div>'
-          : '<div class="lbl-empty">ERP 查無符合條件的單據</div>';
-        if (rows.length) setupErpqSend(box, kind, cols, rows);
+          : '<div class="lbl-empty">' + emptyText + '</div>';
+        if (rows.length && canSend) setupErpqSend(box, kind, cols, rows);
         if (hasD && rows.length) {
           var toggle = function (tr, open) {
             var i = tr.getAttribute("data-i"), drow = box.querySelector('tr.erpq-drow[data-i="' + i + '"]');
@@ -2138,7 +2154,9 @@
       e.preventDefault();
       if (busy) return;
       var cond = {};
-      K.fields.forEach(function (f) { if (C[f[0]]) { cond[f[0]] = C[f[0]]; cond["op_" + f[0]] = C["op_" + f[0]] || "="; } });
+      K.fields.forEach(function (f) { if (C[f[0]]) { cond[f[0]] = C[f[0]]; cond["op_" + f[0]] = C["op_" + f[0]] || erpqDefOp(kind, f[0]); } });
+      var badNum = K.num && Object.keys(K.num).filter(function (k) { return cond[k] && isNaN(Number(String(cond[k]).replace(/,/g, ""))); })[0];
+      if (badNum) { msg("庫存數量要輸入數字", true); return; }
       if (C.confirm) { cond.confirm = C.confirm; cond.op_confirm = C.op_confirm || "="; }
       if (!Object.keys(cond).length) { msg("請至少輸入一個查詢條件", true); return; }
       msg("");
@@ -2302,7 +2320,7 @@
             : '') +
           (can("erp_inv")
             ? '<div class="erp-tile erp-tile-group"><span class="erp-tile-icon">' + ERP_ICONS.inv + '</span><span class="erp-tile-title">庫存異動</span>' +
-              '<div class="erp-tile-actions"><a class="btn btn-sm" href="#/erp/ivi">庫存領料</a><a class="btn btn-sm" href="#/erp/ivz">零元入庫</a><a class="btn btn-sm" href="#/erp/ivs">報廢查詢</a></div></div>'
+              '<div class="erp-tile-actions"><a class="btn btn-sm" href="#/erp/ivi">庫存領料</a><a class="btn btn-sm" href="#/erp/ivz">零元入庫</a><a class="btn btn-sm" href="#/erp/ivs">報廢查詢</a><a class="btn btn-sm" href="#/erp/ivq">庫存狀態</a></div></div>'
             : '') +
           '<a class="erp-tile" href="#/erp/vendor">' +
             '<span class="erp-tile-icon">' + ERP_ICONS.vendor + '</span><span class="erp-tile-title">廠商清單</span>' +

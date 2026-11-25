@@ -5,7 +5,7 @@ puri09_watch.py(每 10 秒)與排程「WMS 儲位編輯寫入」(apply_and_sync.
 
 用法:
   python -I scripts\erpq_sql.py                      取走並處理所有等待中的查詢(沒有就直接結束)
-  python -I scripts\erpq_sql.py --id <id> --kind <moq|mochg|poq|pochg|slq|srq|miq|mrq|mfq|prq|coq|cochg|ivi|ivz|ivs> --cond "<JSON>"
+  python -I scripts\erpq_sql.py --id <id> --kind <moq|mochg|poq|pochg|slq|srq|miq|mrq|mfq|prq|coq|cochg|ivi|ivz|ivs|ivq> --cond "<JSON>"
                                                     處理一筆已經被取走的查詢(監看器印出 ERPQ_REQUEST 時用)
   python -I scripts\erpq_sql.py --test <kind> "<JSON>"  只查詢、印出結果,不回傳網站
 連線設定沿用 WMS\WMS一鍵更新\sql_config.json(erp_sql.connect,唯讀連線)。
@@ -350,6 +350,31 @@ KINDS.update({
     "ivi": _invta("1101"),   # 庫存領料單
     "ivz": _invta("1102"),   # 零元入庫單
     "ivs": _invta("1199"),   # 報廢單
+    # ---- 2026-11-25 新增:庫存狀態查詢(鼎新 INVQ01)。條件欄位同 ERP「設定查詢條件」:品號 MB001 / 品名 MB002 / 規格 MB003 /
+    # 庫存數量 MB064(數字,只能用 = >= <= <>)/ 主要庫別 MB017。不顯示成本;單身 = 各庫庫存量(INVMC,只列數量不為 0 的庫別)----
+    "ivq": {
+        "from": ("INVMB WITH (NOLOCK) "
+                 "LEFT JOIN CMSMC AS WH WITH (NOLOCK) ON WH.MC001 = MB017 "
+                 "LEFT JOIN INVMA AS CLS WITH (NOLOCK) ON CLS.MA001 = '1' AND CLS.MA002 = MB005 "
+                 "LEFT JOIN PURMA AS VND WITH (NOLOCK) ON VND.MA001 = MB032"),
+        "cond": {"code": ("MB001", "prefix"), "name": ("MB002", "prefix"), "spec": ("MB003", "prefix"),
+                 "qty": ("MB064", "num"), "wh": ("MB017", "eq")},
+        "select": "MB001, MB002, MB003, MB064, MB004, MB017, WH.MC002 AS WH_NAME, MB005, CLS.MA003 AS CLS_NAME, MB034, MB032, VND.MA002 AS VND_NAME",
+        "order": "MB001",
+        "cols": ["品號", "品名", "規格", "庫存數量", "單位", "主要庫別", "主要庫別名稱", "會計分類", "補貨政策", "主要廠商", "主要廠商名稱"],
+        "row": lambda r: [r.MB001, r.MB002, r.MB003, _qty(r.MB064), r.MB004, r.MB017, r.WH_NAME, _vendor(r.MB005, r.CLS_NAME),
+                          r.MB034, r.MB032, r.VND_NAME],
+        "key": lambda r: (r.MB001,),
+        "detail": {
+            "from": "INVMC WITH (NOLOCK) LEFT JOIN CMSMC AS WHN WITH (NOLOCK) ON WHN.MC001 = INVMC.MC002",
+            "keycols": ("INVMC.MC001",),
+            "where": "INVMC.MC007 <> 0",
+            "select": "INVMC.MC001 AS PN, INVMC.MC002 AS WH, WHN.MC002 AS WHN, INVMC.MC007 AS QTY",
+            "order": "INVMC.MC001, INVMC.MC002",
+            "cols": ["庫別", "庫別名稱", "庫存數量"],
+            "row": lambda r: [r.WH, r.WHN, _qty(r.QTY)],
+        },
+    },
 })
 
 
@@ -377,6 +402,8 @@ def build_sql(kind, cond):
         if op and op not in OPS:
             raise ValueError("不支援的比較方式:%s" % op)
         if key == "confirm":
+            if "confirm" not in K:
+                raise ValueError("這種查詢沒有確認碼條件")
             if val not in ("Y", "N"):
                 raise ValueError("確認碼只能是 Y 或 N")
             col, default = K["confirm"], "="
@@ -384,9 +411,16 @@ def build_sql(kind, cond):
             if len(val) > 40:
                 raise ValueError("條件太長:%s" % key)
             col, how = K["cond"][key]
-            default = "=" if how in ("eq", "date", "vendor") else "like%"   # 舊版網頁沒送比較方式時:單別相同、單號開頭相同
+            default = "=" if how in ("eq", "date", "vendor", "num") else "like%"   # 舊版網頁沒送比較方式時:單別相同、單號開頭相同
             if how == "date":   # 日期欄是 yyyyMMdd:2026-11-20、2026/11/20 都轉成 20261120
                 val = re.sub(r"[-/.\s]", "", val)
+            elif how == "num":   # 數字欄(例:庫存數量):只能比大小,值轉成數字再帶入
+                if op and op not in ("=", ">=", "<=", "<>"):
+                    raise ValueError("數字條件只能用 = >= <= <>")
+                try:
+                    val = float(val.replace(",", ""))
+                except ValueError:
+                    raise ValueError("條件要輸入數字:%s" % key)
         else:
             raise ValueError("不支援的條件欄位:%s" % key)
         op = op or default
@@ -537,7 +571,10 @@ def _load_details(cur, D, keys, batch=150):
     one = "(" + " AND ".join("%s = ?" % c for c in D["keycols"]) + ")"
     for i in range(0, len(uniq), batch):
         part = uniq[i:i + batch]
-        sql = "SELECT %s FROM %s WHERE %s ORDER BY %s" % (D["select"], D["from"], " OR ".join([one] * len(part)), D["order"])
+        keyw = "(" + " OR ".join([one] * len(part)) + ")"
+        if D.get("where"):   # 固定條件(程式內寫死的常數,例如只列庫存不為 0 的庫別)
+            keyw += " AND (%s)" % D["where"]
+        sql = "SELECT %s FROM %s WHERE %s ORDER BY %s" % (D["select"], D["from"], keyw, D["order"])
         assert sql.startswith("SELECT "), "只允許 SELECT"
         cur.execute(sql, [v for k in part for v in k])
         for r in cur.fetchall():
