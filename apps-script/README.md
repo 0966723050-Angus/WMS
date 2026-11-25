@@ -22,7 +22,9 @@
 2. 「專案設定」→「指令碼屬性」,確認/新增:
    - `GOOGLE_CLIENT_ID`:上一步的用戶端 ID
    - `ADMIN_EMAIL`:管理者帳號(`0966723050@atk.com.tw`)
-   - `SYNC_KEY`:沿用原本的(不用改)
+   - `SYNC_KEY`:64 字元隨機值,和本機 `scripts\edit_config.json` 的 `syncKey` 相同。
+     產生方式:`python -c "import secrets;print(secrets.token_hex(32))"`。
+     至少要 32 字元,否則送錯金鑰 10 次後連正確金鑰也會被鎖 10 分鐘。
    - 舊的 `PIN` 已不再使用,可以刪除
    - `DATA_KEY`、`SESSION_SECRET` 不用手動設定(前者由 `setup_auth.py` 上傳,後者自動產生)
 3. 「部署」→「管理部署作業」→ 編輯(鉛筆)→ 版本選「**新版本**」→ 部署。網址不變。

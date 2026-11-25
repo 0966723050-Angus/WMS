@@ -40,18 +40,31 @@ function isEmail_(v) { return v.length <= 48 && /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+
 
 // ---------- 本機同步金鑰(含失敗次數限制) ----------
 
+// SYNC_KEY 須為 32 字元以上的隨機值(目前為 64 字元 hex,產生方式見 README)。
+// 金鑰夠長時無法線上猜中,所以先比對金鑰:正確的金鑰一律放行,不受別人的錯誤請求影響;
+// 失敗次數只用來擋錯誤金鑰。金鑰太短時退回舊行為(鎖定期間連正確金鑰也擋),避免短金鑰被暴力猜測。
+var MIN_SYNC_KEY_LEN = 32;
+
+function digestHex_(s) {
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(s), Utilities.Charset.UTF_8)
+    .map(function (b) { return ('0' + (b & 0xff).toString(16)).slice(-2); }).join('');
+}
+
 function checkSyncKey_(given) {
   var p = props_();
   var now = Date.now();
+  var secret = p.getProperty('SYNC_KEY');
+  var strong = !!secret && String(secret).length >= MIN_SYNC_KEY_LEN;
+  // 比對雜湊值而不是原字串,比對時間不會透露金鑰內容
+  var match = !!secret && given !== undefined && given !== null && digestHex_(given) === digestHex_(secret);
+  if (match && strong) return null;
+
   var fails = JSON.parse(p.getProperty('FAILS') || '[]').filter(function (t) { return now - t < FAIL_WINDOW_MS; });
   if (fails.length >= MAX_FAILS) return '錯誤次數過多,請 10 分鐘後再試';
-  var secret = p.getProperty('SYNC_KEY');
-  if (!secret || String(given) !== String(secret)) {
-    fails.push(now);
-    p.setProperty('FAILS', JSON.stringify(fails));
-    return '同步金鑰錯誤';
-  }
-  return null;
+  if (match) return null;
+  fails.push(now);
+  p.setProperty('FAILS', JSON.stringify(fails.slice(-MAX_FAILS)));
+  return '同步金鑰錯誤';
 }
 
 // ---------- Google ID token 與 session ----------
