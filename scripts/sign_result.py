@@ -46,7 +46,8 @@ COL = {h: i for i, h in enumerate(ss.HEADERS, start=1)}   # 欄位名稱 -> 欄�
 
 
 def out(obj, code=0):
-    print(json.dumps(obj, ensure_ascii=False))
+    import agent_safe   # 輸出給 Claude skill 看:過濾使用者輸入的文字(Claude Security F4)
+    agent_safe.emit(obj)
     return code
 
 

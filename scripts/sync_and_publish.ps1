@@ -18,6 +18,14 @@ function Log($msg) {
 
 try {
     Set-Location $repo -ErrorAction Stop
+    if (Test-Path "scripts\auth_config.json") {
+        # Confirm the current data key with the relay before publishing (it rotates when a user is revoked).
+        # If it cannot be confirmed, do not publish, so new data is never encrypted with a revoked key.
+        $out = & python -I scripts\setup_auth.py --sync 2>&1
+        $code = $LASTEXITCODE
+        foreach ($l in $out) { Log "$l" }
+        if ($code -ne 0 -and $code -ne 10) { throw "cannot confirm current data key from relay, skip publishing (setup_auth exit $code)" }
+    }
     $out = & python scripts\build_data.py 2>&1
     $code = $LASTEXITCODE
     foreach ($l in $out) { Log "$l" }

@@ -198,6 +198,28 @@
       });
   }
 
+  // 金鑰更換後(有人被停用、刪除或拿掉成本權限,伺服器會自動換金鑰),網站上的檔案要等下一次發布才換成新金鑰;
+  // 這段期間先用新金鑰,解不開再用上一把(伺服器只給仍在名單內的人)
+  function decryptAny(buf, keys) {
+    keys = keys.filter(Boolean);
+    var i = 0;
+    function next(err) {
+      if (i >= keys.length) return Promise.reject(err || Object.assign(new Error("no key"), { name: "OperationError" }));
+      return decryptData(buf, keys[i++]).catch(next);
+    }
+    return next();
+  }
+
+  // 把伺服器回傳的金鑰存進 session;回傳資料金鑰 / 成本金鑰是否有變
+  function takeKeys(res) {
+    var dataChanged = false, costChanged = (res.costKey || "") !== (session.costKey || "");
+    if (res.key && res.key !== session.key) { session.key = res.key; dataChanged = true; }
+    if (res.key) session.keyPrev = res.keyPrev || "";
+    session.costKey = res.costKey || "";   // 單位成本金鑰:權限被拿掉時伺服器回空字串
+    session.costKeyPrev = res.costKeyPrev || "";
+    return { data: dataChanged, cost: costChanged };
+  }
+
   // 呼叫 Apps Script;服務偶爾回傳 HTML 而不是 JSON,自動重試一次
   function api(action, payload) {
     var body = JSON.stringify(Object.assign({ action: action, session: session && session.session }, payload || {}));
@@ -305,7 +327,7 @@
     api("auth", { idToken: resp.credential })
       .then(function (res) {
         if (!res.ok) throw new Error(res.error || "登入失敗");
-        setSession(withPerms({ email: res.email, name: res.name, isAdmin: !!res.isAdmin, perms: res.perms, key: res.key, costKey: res.costKey || "", session: res.session, exp: res.exp }));
+        setSession(withPerms({ email: res.email, name: res.name, isAdmin: !!res.isAdmin, perms: res.perms, key: res.key, keyPrev: res.keyPrev || "", costKey: res.costKey || "", costKeyPrev: res.costKeyPrev || "", session: res.session, exp: res.exp }));
         startApp();
       })
       .catch(function (err) { msgEl.textContent = err.message; });
@@ -326,15 +348,17 @@
     api("me").then(function (res) {
       if (!res || !res.ok || !res.perms || !session) return;
       var changed = JSON.stringify(res.perms) !== JSON.stringify(session.perms);
-      var costKeyChanged = (res.costKey || "") !== (session.costKey || "");
+      var keys = takeKeys(res);
+      var costKeyChanged = keys.cost;
       session.perms = res.perms;
-      session.costKey = res.costKey || "";   // 單位成本金鑰:權限被拿掉時伺服器回空字串
       session.isAdmin = !!res.isAdmin;
       if (res.name) session.name = res.name;
       if (res.session && res.exp) { session.session = res.session; session.exp = res.exp; }   // 伺服器順延登入有效期
       setSession(session);
       updateUserUi();
-      if (costKeyChanged && state.data) {
+      if (keys.data && state.data) {
+        loadData().then(render).catch(handleLoadError);   // 資料金鑰已更換:用新金鑰重新載入
+      } else if (costKeyChanged && state.data) {
         loadCosts().then(render);
       } else if (changed && state.data) {
         render();
@@ -394,7 +418,7 @@
       '</div>' +
       '<p class="result-count" id="adm-count"></p>' +
       '<div id="adm-list" class="admin-list"><div class="skeleton">載入中…</div></div>' +
-      '<p class="admin-note">停用或刪除帳號後,該帳號立即不能再使用編輯與管理功能,下次登入就無法取得資料(已登入的裝置最長 24 小時後失效)。若要立即失效,請在電腦執行 <code>python scripts\\setup_auth.py --rotate</code> 更換資料金鑰。</p>';
+      '<p class="admin-note">停用或刪除帳號、或拿掉「庫存單位成本」權限後,該帳號立即不能再使用編輯與管理功能;系統也會自動更換資料金鑰並在約 1 分鐘內重新發布,之後的資料他就解不開了(他以前看過的資料無法收回)。若是直接在 Apps Script 的指令碼屬性改名單,請在電腦執行 <code>python scripts\\setup_auth.py --rotate</code> 手動更換金鑰。</p>';
 
     var msg = document.getElementById("adm-msg");
 
@@ -4560,7 +4584,18 @@
         return res.arrayBuffer().then(function (buf) { return { buf: buf, tag: tag }; });
       })
       .then(function (r) {
-        return decryptData(r.buf, session.key).then(function (data) { return { data: data, tag: r.tag }; });
+        return decryptAny(r.buf, [session.key, session.keyPrev])
+          .catch(function (err) {
+            // 兩把都解不開:金鑰可能剛換過,先向伺服器取最新金鑰再試一次;仍不行才要求重新登入
+            if (!err || err.name !== "OperationError") throw err;
+            return api("me").then(function (res) {
+              if (!res || !res.ok || !res.key) throw err;
+              takeKeys(res);
+              setSession(session);
+              return decryptAny(r.buf, [session.key, session.keyPrev]);
+            }, function () { throw err; });
+          })
+          .then(function (data) { return { data: data, tag: r.tag }; });
       })
       .then(function (r) {
         var data = r.data;
@@ -4586,7 +4621,7 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.arrayBuffer();
       })
-      .then(function (buf) { return decryptData(buf, session.costKey); })
+      .then(function (buf) { return decryptAny(buf, [session.costKey, session.costKeyPrev]); })
       .then(function (costs) { state.costs = costs || {}; })
       .catch(function () { state.costs = null; });
   }

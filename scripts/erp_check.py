@@ -52,7 +52,10 @@ PROGS = {
 
 
 def out(obj, code=0):
-    print(json.dumps(obj, ensure_ascii=False, default=str))
+    if HERE not in sys.path:
+        sys.path.insert(0, HERE)   # `python -I` 不會自動加入本資料夾
+    import agent_safe   # 輸出給 Claude skill 看:過濾使用者輸入的文字(Claude Security F4)
+    agent_safe.emit(obj, default=str)
     return code
 
 

@@ -9,7 +9,9 @@
  *   GOOGLE_CLIENT_ID  Google Cloud 建立的 OAuth 用戶端 ID(網頁應用程式)
  *   ADMIN_EMAIL       唯一的管理者帳號(可進入設定頁管理名單)
  *   SYNC_KEY          本機排程使用的金鑰
- *   DATA_KEY          資料解密金鑰(由本機 setup_auth.py 產生並上傳,不必手動設定)
+ *   DATA_KEY          資料解密金鑰(停用/刪除帳號時自動更換;本機 setup_auth.py 取回使用,不必手動設定)
+ *   COST_KEY          單位成本解密金鑰(停用/刪除帳號或拿掉 cost 權限時自動更換)
+ *   DATA_KEY_PREV / COST_KEY_PREV / KEYS_AT  更換金鑰時自動維護
  *   SESSION_SECRET    工作階段簽章用,第一次使用時自動產生
  * 授權名單存在以 u_ 開頭的屬性,由管理者在網站設定頁新增/編輯/刪除。
  */
@@ -114,6 +116,38 @@ var PERM_DEFAULTS = { admin: false, edit: true, receive: true, ret: false, erp_r
 // 單位成本金鑰:只給有 cost 權限的人
 function costKeyFor_(perms) {
   return (perms && perms.cost) ? (props_().getProperty('COST_KEY') || '') : '';
+}
+function costKeyPrevFor_(perms) {
+  return (perms && perms.cost) ? (props_().getProperty('COST_KEY_PREV') || '') : '';
+}
+
+// ---------- 資料金鑰更換(Claude Security F2 / F6 / F7) ----------
+// 停用、刪除帳號或拿掉 cost 權限時,當下就換掉 DATA_KEY / COST_KEY,之後只把新金鑰給仍在名單內的人。
+// 本機排程每分鐘用 get_keys 取回目前金鑰,有變就用新金鑰重新加密發布 data.enc / cost.enc。
+// 網站上的檔案換新之前,仍在名單內的人用上一把金鑰(*_PREV)解開舊檔;被撤銷的人拿不到新金鑰。
+function newKey_() {
+  var seed = [Utilities.getUuid(), Utilities.getUuid(), Utilities.getUuid(), Date.now()].join('|');
+  return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, seed, Utilities.Charset.UTF_8));
+}
+
+function rotateKeys_(data, cost) {
+  var p = props_();
+  if (data) {
+    var od = p.getProperty('DATA_KEY');
+    if (od) p.setProperty('DATA_KEY_PREV', od);
+    p.setProperty('DATA_KEY', newKey_());
+  }
+  if (cost) {
+    var oc = p.getProperty('COST_KEY');
+    if (oc) p.setProperty('COST_KEY_PREV', oc);
+    p.setProperty('COST_KEY', newKey_());
+  }
+  if (data || cost) p.setProperty('KEYS_AT', String(Date.now()));
+}
+
+function keysView_() {
+  var p = props_();
+  return { ok: true, dataKey: p.getProperty('DATA_KEY') || '', costKey: p.getProperty('COST_KEY') || '', at: p.getProperty('KEYS_AT') || '' };
 }
 
 function normPerms_(p) {
@@ -220,6 +254,7 @@ function adminAction_(body, user) {
 
   if (body.action === 'admin_delete') {
     p.deleteProperty(USER_PREFIX + email0);
+    if (old.enabled !== false) rotateKeys_(true, true);   // 已停用的帳號停用時就換過了
     return { ok: true, users: listUsers_() };
   }
 
@@ -232,6 +267,11 @@ function adminAction_(body, user) {
     if (newEmail !== email0) p.deleteProperty(USER_PREFIX + email0);
     putUser_(newEmail, body.name === undefined ? old.name : body.name, enabled, old.addedAt,
       body.perms === undefined ? old.perms : body.perms);
+    var wasOn = old.enabled !== false;
+    var hadCost = wasOn && (isPrimaryAdmin_(email0) || normPerms_(old.perms).cost);
+    var nowCost = enabled && (isPrimaryAdmin_(newEmail) || normPerms_(JSON.parse(p.getProperty(USER_PREFIX + newEmail)).perms).cost);
+    if (wasOn && !enabled) rotateKeys_(true, true);
+    else if (hadCost && !nowCost) rotateKeys_(false, true);
     return { ok: true, users: listUsers_() };
   }
   return { ok: false, error: '不支援的動作' };
@@ -1198,7 +1238,7 @@ function doPost(e) {
       var key = props_().getProperty('DATA_KEY');
       if (!key) return json_({ ok: false, error: '系統尚未完成設定(缺少資料金鑰),請聯絡管理者' });
       var s = makeSession_(user.email);
-      return json_({ ok: true, email: user.email, name: user.name || info.name, isAdmin: user.isAdmin, perms: user.perms, key: key, costKey: costKeyFor_(user.perms), session: s.token, exp: s.exp });
+      return json_({ ok: true, email: user.email, name: user.name || info.name, isAdmin: user.isAdmin, perms: user.perms, key: key, keyPrev: props_().getProperty('DATA_KEY_PREV') || '', costKey: costKeyFor_(user.perms), costKeyPrev: costKeyPrevFor_(user.perms), session: s.token, exp: s.exp });
     }
 
     // 電腦端回報「收料」工作表內容(用同步金鑰,不是登入工作階段)
@@ -1225,7 +1265,7 @@ function doPost(e) {
     // 目前的權限(管理者可能在登入後才調整,前端開啟時會用這個更新)
     if (action === 'me') {
       var ns = makeSession_(me.email);   // 每次開啟網頁順延有效期,沒登出就不必重新登入
-      return json_({ ok: true, email: me.email, name: me.name, isAdmin: me.isAdmin, perms: me.perms, costKey: costKeyFor_(me.perms), session: ns.token, exp: ns.exp });
+      return json_({ ok: true, email: me.email, name: me.name, isAdmin: me.isAdmin, perms: me.perms, key: props_().getProperty('DATA_KEY') || '', keyPrev: props_().getProperty('DATA_KEY_PREV') || '', costKey: costKeyFor_(me.perms), costKeyPrev: costKeyPrevFor_(me.perms), session: ns.token, exp: ns.exp });
     }
 
     // 標籤「自動選取」:哪些「料號|製令單號」已在自動選取頁下載過 Excel(全公司共用,保留 180 天)
@@ -1367,7 +1407,7 @@ function doGet(e) {
   var lock = LockService.getScriptLock();
   lock.waitLock(15000);
   try {
-    if (p.action === 'pull' || p.action === 'ack' || p.action === 'set_data_key' || p.action === 'set_cost_key' || p.action === 'wms_report' ||
+    if (p.action === 'pull' || p.action === 'ack' || p.action === 'set_data_key' || p.action === 'set_cost_key' || p.action === 'get_keys' || p.action === 'rotate_keys' || p.action === 'wms_report' ||
         p.action === 'puri09_claim' || p.action === 'puri09_report' || p.action === 'ret_claim' || p.action === 'ret_report' ||
         p.action === 'sign_claim' || p.action === 'sign_report' || p.action === 'sign_ack' || p.action === 'sign_notify_ack' || p.action === 'signimg_get' || p.action === 'signimg_report' || p.action === 'erpq_claim') {
       var err = checkSyncKey_(p.key);
@@ -1409,6 +1449,9 @@ function doGet(e) {
         if (st === 'running') props_().deleteProperty(WMS_REQ_KEY);
         return json_({ ok: true });
       }
+
+      if (p.action === 'get_keys') return json_(keysView_());
+      if (p.action === 'rotate_keys') { rotateKeys_(true, true); return json_(keysView_()); }
 
       if (p.action === 'set_data_key') {
         if (!/^[A-Za-z0-9+\/]{43}=$/.test(String(p.dataKey || ''))) return json_({ ok: false, error: '金鑰格式不正確' });

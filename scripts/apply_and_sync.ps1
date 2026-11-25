@@ -30,7 +30,13 @@ if ($busy) {
 
 try {
     python -I scripts\apply_edits.py | Out-Null
-    if ($LASTEXITCODE -eq 10) {
+    $publish = ($LASTEXITCODE -eq 10)
+    if (-not $publish -and (Test-Path (Join-Path $repo "scripts\auth_config.json"))) {
+        # 管理者停用/刪除帳號或拿掉成本權限時,伺服器會換資料金鑰;取回新金鑰後立刻重新加密發布(Claude Security F2/F6/F7)
+        python -I scripts\setup_auth.py --sync | Out-Null
+        if ($LASTEXITCODE -eq 10) { Log "資料金鑰已更換,重新加密發布"; $publish = $true }
+    }
+    if ($publish) {
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "scripts\sync_and_publish.ps1")
     }
 } catch {
