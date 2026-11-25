@@ -2153,8 +2153,9 @@
               return '<tr>' + dcols.map(function (c, j) { return '<td data-k="' + esc(c) + '">' + esc(line[j]) + '</td>'; }).join("") + '</tr>';
             }).join("") + '</tbody></table>';
         };
-        var openAll = rows.length === 1;   // 只有一張單就直接展開
         var canSend = !K.noSign;   // 庫存狀態這類不是單據的查詢:沒有勾選與送簽
+        var stockBtn = hasD && !canSend;   // 庫存狀態:左邊「各庫庫存」是一顆鍵,按了才顯示各庫庫存量
+        var openAll = rows.length === 1 && !stockBtn;   // 只有一張單就直接展開(庫存狀態不自動展開)
         var emptyText = canSend ? "ERP 查無符合條件的單據" : "ERP 查無符合條件的資料";
         box.innerHTML = rows.length
           ? '<div class="erpq-tools">' +
@@ -2171,7 +2172,9 @@
               cols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join("") + '</tr></thead><tbody>' +
               rows.map(function (row, i) {
                 var n = details[i] ? details[i].length : null;
-                var tg = hasD ? '<td class="erpq-tg" data-k="' + (canSend ? "單身" : "各庫庫存") + '"><span class="erpq-arrow">' + (openAll ? "▾" : "▸") + '</span> <span class="erpq-tgl">' + (canSend ? "單身 " : "各庫庫存 ") + '</span>' + (n === null ? "-" : n + " 項") + '</td>' : '';
+                var tg = stockBtn
+                  ? '<td class="erpq-act" data-k="各庫庫存"><button type="button" class="btn btn-sm btn-secondary erpq-stock" data-i="' + i + '" aria-expanded="false">各庫庫存</button></td>'
+                  : hasD ? '<td class="erpq-tg" data-k="單身"><span class="erpq-arrow">' + (openAll ? "▾" : "▸") + '</span> <span class="erpq-tgl">單身 </span>' + (n === null ? "-" : n + " 項") + '</td>' : '';
                 return '<tr class="' + (hasD ? "erpq-hrow" : "erpq-row") + (openAll ? " open" : "") + '" data-i="' + i + '"' +
                   (hasD ? ' tabindex="0" aria-expanded="' + (openAll ? "true" : "false") + '"' : '') + '>' +
                   (canSend ? '<td class="c-chk erpq-chk"><input type="checkbox" class="erpq-pick" data-i="' + i + '" aria-label="選取" /></td>' : '') + tg +
@@ -2201,9 +2204,14 @@
             tr.setAttribute("aria-expanded", open ? "true" : "false");
             var ar = tr.querySelector(".erpq-arrow");
             if (ar) ar.textContent = open ? "▾" : "▸";
+            var sbtn = tr.querySelector(".erpq-stock");
+            if (sbtn) { sbtn.setAttribute("aria-expanded", open ? "true" : "false"); sbtn.classList.toggle("on", open); }
           };
           box.querySelector("tbody").addEventListener("click", function (e) {
-            if (e.target.closest(".erpq-chk") || e.target.closest(".erpq-act")) return;   // 點核取方塊、歷史異動鍵不展開
+            var sb = e.target.closest(".erpq-stock");   // 庫存狀態:「各庫庫存」鍵展開 / 收合該列的各庫庫存量
+            if (sb) { toggle(sb.closest("tr.erpq-hrow")); return; }
+            if (stockBtn) return;   // 庫存狀態:只有按鍵會展開,點列的其他地方不動作
+            if (e.target.closest(".erpq-chk") || e.target.closest(".erpq-act")) return;   // 點核取方塊、按鍵不展開
             var tr = e.target.closest("tr.erpq-hrow");
             if (tr) toggle(tr);
           });

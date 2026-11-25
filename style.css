@@ -1724,5 +1724,10 @@ table.data-table td:nth-child(5), table.data-table td:nth-child(7), table.data-t
 .ivh-modal .erpq-status { margin: 4px 0 6px; }
 .ivh-out > td[data-k="入出別"], .ivh-out > td[data-k="異動數量"] { color: var(--warn-text); }
 .erpq-table td.erpq-act { white-space: nowrap; }
+/* 庫存狀態:只有「各庫庫存」鍵會展開,列本身不當成可點擊;展開中的鍵反白 */
+.erpq-table tr.erpq-hrow:has(.erpq-stock) { cursor: default; }
+.erpq-table tr.erpq-hrow:has(.erpq-stock):hover td { background: transparent; }
+.erpq-table tr.erpq-hrow.open:has(.erpq-stock) td { font-weight: inherit; }
+.erpq-stock.on { background: var(--brand); border-color: var(--brand); color: #fff; }
 @media (max-width: 720px) { .ivh-form input { width: 100%; font-size: 16px; } .ivh-form label { flex: 1 1 42%; } }
 @media (max-width: 720px) { .sgv-lines { overflow-x: visible; } .sgv-kv { grid-template-columns: 1fr 1fr; } }
