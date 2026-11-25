@@ -2166,7 +2166,7 @@
               '</span>' +
             '</div>' +
             (canSend ? '<p class="erpq-msg" id="erpq-send-msg"></p>' : '') +
-            '<div class="erpq-wrap"><table class="lbl-table erpq-table"><thead><tr class="lbl-titles">' +
+            '<div class="erpq-wrap"><table class="lbl-table erpq-table' + (kind === "ivq" ? ' erpq-ivq' : '') + '"><thead><tr class="lbl-titles">' +
               (canSend ? '<th class="c-chk"><input type="checkbox" class="erpq-all" aria-label="全選" title="全選" /></th>' : '') +
               (hasD ? '<th>' + (canSend ? '單身' : '各庫庫存') + '</th>' : '') + (K.hist ? '<th>歷史異動</th>' : '') +
               cols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join("") + '</tr></thead><tbody>' +
