@@ -783,7 +783,7 @@ function signAck_(ts, msg) {
 
 // ---------- ERP 查詢(製令 / 製令變更 / 採購單 / 採購變更):網頁送出條件 → 電腦端在 ERP 查詢 → 清單回傳網頁 ----------
 var ERPQ_PERM = { moq: 'erp_mo', mochg: 'erp_mo', miq: 'erp_mo', mrq: 'erp_mo', mfq: 'erp_mo',
-                  poq: 'erp_po', pochg: 'erp_po', prq: 'erp_po', rcq: 'erp_po', rtq: 'erp_po', lbr: 'label', sgv: '*',
+                  poq: 'erp_po', pochg: 'erp_po', prq: 'erp_po', rcq: 'erp_po', rtq: 'erp_po', lbr: 'label', sgv: '*', sgc: '*',
                   slq: 'erp_sales', srq: 'erp_sales', coq: 'erp_co', cochg: 'erp_co',
                   ivi: 'erp_inv', ivz: 'erp_inv', ivs: 'erp_inv', ivq: 'erp_inv', ivh: 'erp_inv' };
 var ERPQ_PERM_NAME = { label: '標籤', erp_mo: 'ERP:製造命令', erp_po: 'ERP:採購單', erp_sales: 'ERP:銷貨單', erp_co: 'ERP:客戶訂單', erp_inv: 'ERP:庫存異動' };
@@ -815,7 +815,8 @@ function erpqRequest_(body, me) {
   // lbr(標籤待列印清單的進貨物料)所有登入的人都能用,其他依各自的權限
   if (ERPQ_PERM[kind] !== '*' && !me.perms[ERPQ_PERM[kind]]) return { ok: false, error: '您沒有「' + ERPQ_PERM_NAME[ERPQ_PERM[kind]] + '」的權限' };
   var c = body.cond || {}, cond = {};
-  if (kind === 'sgv') {   // 待簽核清單「查看」:一次查多張(程式|單別|單號),每張依程式檢查對應的查詢權限(有「待簽核表單確認」權限也可以)
+  // sgv = 待簽核清單「查看」;sgc = 送簽前檢查確認碼(只回每張單的確認碼,公司電腦端 erpq_sql._sign_check)
+  if (kind === 'sgv' || kind === 'sgc') {   // 一次查多張(程式|單別|單號),每張依程式檢查對應的查詢權限(有「待簽核表單確認」權限也可以)
     var docs = (Array.isArray(c.docs) ? c.docs : []).slice(0, 20).map(function (d) { return clip_(d, 40).toUpperCase(); })
       .filter(function (d) { return /^[A-Z0-9]{4,10}\|\d{3,6}\|\d{6,16}$/.test(d); });
     if (!docs.length) return { ok: false, error: '請先勾選要查看的表單' };

@@ -598,6 +598,55 @@ def _sign_view(cond):
     return {"cols": [], "rows": [], "dcols": [], "details": [], "docs": out, "msg": ""}
 
 
+def _sign_check(cond):
+    """送簽前檢查(網頁「確認」送簽、ERP 查詢頁「送簽」之前):cond.docs = ["程式|單別|單號", ...](最多 20 張)→ 每張單在 ERP 的確認碼。
+    只有確認碼是 N(未確認)才可以送簽;已確認(Y)、作廢(V)、確認失敗(U)、查無單據都回 error(原因),網頁據此阻擋並提醒送簽者。
+    程式代碼沒有 SQL 對照(例如 MOCI06/07)無法檢查,不擋(照原流程)。變更單看最後一個版次。"""
+    docs = [str(d) for d in ((cond or {}).get("docs") or [])][:20]
+    if HERE not in sys.path:
+        sys.path.insert(0, HERE)   # python -I 不會自動加入本資料夾
+    import erp_check
+    if ERP_SQL_DIR not in sys.path:
+        sys.path.insert(0, ERP_SQL_DIR)
+    import erp_sql
+    out = []
+    cn = erp_sql.connect()
+    try:
+        cur = cn.cursor()
+        for d in docs:
+            parts = [x.strip() for x in d.split("|")]
+            if len(parts) != 3:
+                continue
+            prog, dt, dn = parts[0].upper(), parts[1], parts[2]
+            item = {"doc": "%s-%s" % (dt, dn), "prog": prog, "title": (erp_check.PROGS.get(prog) or ("", "", "", "", "", prog))[5],
+                    "cols": ["確認碼"], "row": [""], "dcols": [], "lines": []}
+            try:
+                st = erp_check.doc_status(cur, prog, dt, dn)
+            except Exception as ex:
+                item["error"] = "查詢失敗:%s" % str(ex)[:100]
+                out.append(item)
+                continue
+            if not st.get("known"):
+                item["row"] = ["未對照,無法檢查"]
+            elif not st.get("found"):
+                item["error"] = "ERP 查無這張單據,請確認單別、單號"
+            else:
+                c = (st.get("confirm") or "").strip()
+                item["row"] = [CONFIRM.get(c, c or "空白")]
+                if c == "N":
+                    pass
+                elif c == "Y":
+                    item["error"] = "ERP 已是確認狀態(Y:已確認),不需要再送簽"
+                elif c == "V":
+                    item["error"] = "單據已作廢(V),不能送簽"
+                else:
+                    item["error"] = "確認碼是「%s」,不是未確認(N),不能送簽" % (c or "空白")
+            out.append(item)
+    finally:
+        cn.close()
+    return {"cols": [], "rows": [], "dcols": [], "details": [], "docs": out, "msg": ""}
+
+
 def run_query(kind, cond):
     if kind == "ivh":
         return _inv_history(cond)
@@ -605,6 +654,8 @@ def run_query(kind, cond):
         return _label_receipts(cond)
     if kind == "sgv":
         return _sign_view(cond)
+    if kind == "sgc":
+        return _sign_check(cond)
     cond = dict(cond or {})
     with_cost = cond.pop("cost", None)   # 由 Apps Script 依帳號的 cost 權限加上,網頁送的值不會被採用(Code.gs 白名單沒有 cost)
     if kind == "ivq" and with_cost:

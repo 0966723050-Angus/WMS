@@ -1339,7 +1339,7 @@
       '</section>';
 
     function $(id) { return document.getElementById(id); }
-    var forms = [], imgs = [], picked = {}, pendingBlob = null, previewUrl = "", busy = false, lastSig = "";
+    var forms = [], imgs = [], picked = {}, pendingBlob = null, previewUrl = "", busy = false, lastSig = "", checking = false;
     var tickTimer = null;
     // 每次進入這一頁都換一個編號:舊的頁面實例(之前離開又回來留下的更新迴圈)看到編號不同就立刻停止。
     // 以前只檢查畫面上有沒有 #sign-list,結果舊實例會用自己「沒勾選」的狀態把新頁面的清單重畫,
@@ -1377,7 +1377,7 @@
 
     function updateButtons() {
       var n = forms.filter(function (f) { return picked[f.id]; }).length;
-      $("sign-ok").disabled = busy || n < 1 || !canConfirm;
+      $("sign-ok").disabled = busy || checking || n < 1 || !canConfirm;
       $("sign-ok").title = canConfirm ? "" : "需要「ERP:待簽核表單確認」權限,請聯絡管理者";
       $("sign-ok").textContent = n ? "確認(" + n + " 張)" : "確認";
       $("sign-view").disabled = n < 1 || viewBusy;
@@ -1793,14 +1793,35 @@
       var lines = sel.slice(0, 12).map(function (f) { return (f.name || f.prog) + " " + f.docType + "-" + f.docNo + (f.vendor ? " · " + f.vendor : ""); }).join("\n");
       if (!window.confirm("確定要把勾選的 " + sel.length + " 張表單送去簽核嗎?\n\n" + lines + (sel.length > 12 ? "\n…" : "") +
         "\n\n按確認後會寫入 WMS.xlsx「待簽核清單」,並從這個清單移除。")) return;
-      $("sign-ok").disabled = true;
-      msg("送出中…");
-      api("sign_request", { ids: sel.map(function (f) { return f.id; }) }).then(function (res) {
-        if (!res.ok) throw new Error(res.error || "送出失敗");
-        msg("");
-        showToast("已送出,稍後寫入待簽核清單");
-        return loadStatus();
-      }).catch(function (err) { if (session) { msg(err.message); updateButtons(); } });
+      // 送簽前先到 ERP 確認每張單的確認碼:只有「未確認(N)」的才能送簽,已確認 / 作廢 / 查無的擋下並提醒送簽者
+      checking = true; updateButtons();
+      msg("送簽前檢查表單的確認碼中…(約 10 秒~1 分鐘)");
+      checkSignable(sel.map(function (f) { return f.prog + "|" + f.docType + "|" + f.docNo; })).then(function (blocked) {
+        var bad = sel.filter(function (f) { return blocked[f.docType + "-" + f.docNo]; });
+        var good = sel.filter(function (f) { return !blocked[f.docType + "-" + f.docNo]; });
+        if (bad.length) {
+          bad.forEach(function (f) { delete picked[f.id]; });
+          Array.prototype.forEach.call(document.querySelectorAll("#sign-list .sign-row:not(.sign-headrow)"), function (row) {
+            var ff = forms[parseInt(row.getAttribute("data-i"), 10)], c = row.querySelector(".sign-pick");
+            if (ff && c) c.checked = !!picked[ff.id];
+          });
+          window.alert("有 " + bad.length + " 張表單不能送簽,已取消勾選:\n\n" +
+            bad.slice(0, 12).map(function (f) { return (f.name || f.prog) + " " + f.docType + "-" + f.docNo + "\n    " + blocked[f.docType + "-" + f.docNo]; }).join("\n") +
+            (bad.length > 12 ? "\n…" : "") +
+            "\n\n只有 ERP 確認碼是「未確認」的單據才能送簽,請先確認單據在 ERP 的狀態。" +
+            (good.length ? "\n\n其餘 " + good.length + " 張照常送簽。" : ""));
+        }
+        if (!good.length) { msg("沒有可以送簽的表單"); return; }
+        msg("送出中…");
+        return api("sign_request", { ids: good.map(function (f) { return f.id; }) }).then(function (res) {
+          if (!res.ok) throw new Error(res.error || "送出失敗");
+          msg("");
+          showToast("已送出,稍後寫入待簽核清單");
+          return loadStatus();
+        });
+      }).catch(function (err) {
+        if (session) msg("無法確認表單狀態,沒有送簽:" + err.message);   // 查不到狀態一律不送(寧可擋下,避免送出不該送的單)
+      }).then(function () { checking = false; if (alive()) updateButtons(); });
     });
 
 
@@ -1828,6 +1849,33 @@
   // ---------- ERP 查詢:製造命令(製令查詢 / 變更查詢)、採購單(採單查詢 / 變更查詢) ----------
   // 按「確認」把條件送到中繼 → 公司電腦取走後直接用 SQL 查鼎新 ERP 資料庫(scripts/erpq_sql.py)→ 清單回傳,這一頁每 4 秒更新一次狀態。
   var ERPQ_CONFIRM = { N: "未確認", Y: "已確認" };
+
+  // 送出一筆查詢給公司電腦,等結果回來(最多約 3 分鐘);成功回傳結果物件,失敗 / 逾時丟出 Error
+  function erpqRunOnce(kind, cond) {
+    return api("erpq_request", { kind: kind, cond: cond }).then(function (res) {
+      if (!res.ok) throw new Error(res.error || "送出失敗");
+      return new Promise(function (resolve, reject) {
+        var tries = 0;
+        (function poll() {
+          api("erpq_get", { id: res.request.id }).then(function (g) {
+            var r = g && g.request;
+            if (r && r.state === "done") resolve(r.result || {});
+            else if (r && r.state === "error") reject(new Error(r.msg || "查詢失敗"));
+            else if (++tries > 60) reject(new Error("公司電腦沒有回應,請稍後再試"));
+            else setTimeout(poll, 3000);
+          }).catch(function () { if (++tries > 60) reject(new Error("連線失敗")); else setTimeout(poll, 5000); });
+        })();
+      });
+    });
+  }
+  // 送簽前檢查:docs = ["程式|單別|單號", ...];回傳 { 單據: 原因 }(只有被擋下的才有,原因是要給送簽者看的文字)
+  function checkSignable(docs) {
+    return erpqRunOnce("sgc", { docs: docs }).then(function (result) {
+      var blocked = {};
+      (result.docs || []).forEach(function (d) { if (d.error) blocked[d.doc] = d.error; });
+      return blocked;
+    });
+  }
   var ERPQ_KINDS = {
     moq:   { group: "製造命令", title: "製令查詢", perm: "erp_mo", confirm: ["N", "Y"],
              fields: [["proj", "專案代號"], ["prod", "產品品號"], ["type", "製令單別"], ["no", "製令單號"]] },
@@ -1927,6 +1975,24 @@
       var chosen = picks().filter(function (c) { return c.checked; });
       if (!chosen.length) return;
       if (iType < 0 || iNo < 0) { msgEl.textContent = "查詢結果沒有單別/單號欄位,無法送簽"; msgEl.className = "erpq-msg bad"; return; }
+      // 送簽前先看這一列的確認碼:只有「N:未確認」才能送簽,其餘(已確認 / 作廢 / 確認失敗)擋下並提醒;
+      // 這裡用的是查詢當時的狀態,真正送去簽核前(待簽核表單的「確認」)還會再向 ERP 確認一次
+      var iConf = colOf(/^確認碼$/);
+      if (iConf >= 0) {
+        var bad = chosen.filter(function (c) { return String(rows[+c.getAttribute("data-i")][iConf] || "").trim().charAt(0).toUpperCase() !== "N"; });
+        if (bad.length) {
+          var badText = bad.slice(0, 12).map(function (c) {
+            var r = rows[+c.getAttribute("data-i")];
+            return String(r[iType] || "").trim() + "-" + String(r[iNo] || "").trim() + "(" + (String(r[iConf] || "").trim() || "確認碼空白") + ")";
+          }).join("\n");
+          bad.forEach(function (c) { c.checked = false; });
+          update();
+          chosen = chosen.filter(function (c) { return bad.indexOf(c) < 0; });
+          window.alert("有 " + bad.length + " 張單據不能送簽,已取消勾選:\n\n" + badText + (bad.length > 12 ? "\n…" : "") +
+            "\n\n只有確認碼是「未確認」的單據才能送簽(已確認的不需要再簽,作廢的不能簽)。" + (chosen.length ? "\n\n其餘 " + chosen.length + " 張照常送簽。" : ""));
+          if (!chosen.length) return;
+        }
+      }
       var items = chosen.map(function (c) {
         var row = rows[+c.getAttribute("data-i")];
         return { name: name, prog: S.prog, docType: String(row[iType] || "").trim(), docNo: String(row[iNo] || "").trim(),
