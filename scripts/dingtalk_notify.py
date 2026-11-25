@@ -100,6 +100,41 @@ def build_text(items, total=None):
     return "\n\n".join(blocks)
 
 
+def build_done_text(items):
+    """網頁「已完成」鍵:使用者已經把這幾張簽核完成,通知格式同簽核結果(sign_result.build_report 的成功段),每張一段、不放連結:
+    採購單
+    3303-20261111002
+    立懋
+    簽核通過!"""
+    blocks = []
+    for it in items:
+        lines = [(it.get("name") or it.get("prog") or "表單").strip(), "%s-%s" % (it.get("docType", ""), it.get("docNo", ""))]
+        if (it.get("vendor") or "").strip():
+            lines.append(it["vendor"].strip())
+        lines.append("簽核通過！")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def process_done(endpoint, key, cfg, items, call, log=print):
+    """items: pull 回來的 signDone(網頁按「已完成」的表單)。發一則釘釘「簽核通過」通知,成功才呼叫 sign_done_ack 清佇列(失敗下一輪再試)。回傳通知張數。"""
+    if not items:
+        return 0
+    if not (cfg.get("dingtalkWebhook") or "").strip():
+        return 0   # 沒設定機器人就不通知(佇列留著)
+    items = sorted(items, key=lambda x: x.get("ts", 0))
+    ok, why = send_text(cfg, build_done_text(items))
+    if not ok:
+        log("釘釘「已完成」通知失敗(下一輪再試): %s" % why)
+        return 0
+    try:
+        call(endpoint, {"action": "sign_done_ack", "key": key, "ids": ",".join(str(x["id"]) for x in items if x.get("id"))})
+    except Exception as ex:
+        log("警告: 「已完成」通知已送出,但回報清除佇列失敗(下一輪可能重複通知): %s" % ex)
+    log("釘釘「已完成」通知已送出:%d 張" % len(items))
+    return len(items)
+
+
 def process(endpoint, key, cfg, items, total, call, log=print):
     """items: pull 回來的 signNotify。call(endpoint, params) 是 apply_edits 的 GET 呼叫函式。回傳已通知張數。"""
     if not items:

@@ -654,6 +654,39 @@ function signNotifyAck_(idsCsv) {
   return { ok: true, removed: q.length - left.length };
 }
 
+// 「已完成」:網頁勾選的表單已經簽核完成(例如使用者自己在 ERP 簽完),從清單刪除並記進通知佇列(SIGN_DONE);
+// 電腦端排程 pull 時取走,用釘釘發「簽核通過」通知,成功後呼叫 sign_done_ack 清掉(同新增通知 SIGN_NOTIFY 的作法)。
+// 屬性值有 9KB 上限,佇列最多 30 筆;佇列還沒被取走(例如電腦沒開機)累積太多就拒絕,避免刪了表單卻沒通知。
+var SIGN_DONE_KEY = 'SIGN_DONE';
+var MAX_SIGN_DONE = 30;
+function signDone_(body, me) {
+  var ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+  if (!ids.length) return { ok: false, error: '請先勾選要標示已完成的表單' };
+  if (ids.length > MAX_SIGN_DONE) return { ok: false, error: '一次最多 ' + MAX_SIGN_DONE + ' 張' };
+  var q = readJson_(SIGN_DONE_KEY) || [];
+  if (q.length + ids.length > MAX_SIGN_DONE) return { ok: false, error: '還有 ' + q.length + ' 筆已完成通知等著發送到釘釘(公司電腦沒開機或釘釘發送失敗?),請稍後再試' };
+  var now = Date.now(), recs = [], missing = 0;
+  ids.forEach(function (id) {
+    var rec = readJson_(SIGN_PREFIX + id);
+    if (!rec) { missing++; return; }
+    recs.push(rec);
+    q.push({ id: rec.id, ts: now, name: rec.name || '', prog: rec.prog, docType: rec.docType, docNo: rec.docNo, vendor: rec.vendor || '' });
+  });
+  if (recs.length) {
+    props_().setProperty(SIGN_DONE_KEY, JSON.stringify(q));   // 先記通知佇列,成功了才刪表單
+    recs.forEach(function (rec) { props_().deleteProperty(SIGN_PREFIX + rec.id); });
+  }
+  return { ok: true, done: recs.length, missing: missing };
+}
+
+function signDoneAck_(idsCsv) {
+  var ids = String(idsCsv || '').split(',').filter(String);
+  var q = readJson_(SIGN_DONE_KEY) || [];
+  var left = q.filter(function (x) { return ids.indexOf(x.id) === -1; });
+  if (left.length) props_().setProperty(SIGN_DONE_KEY, JSON.stringify(left)); else props_().deleteProperty(SIGN_DONE_KEY);
+  return { ok: true, removed: q.length - left.length };
+}
+
 // ---------- 表單名稱 / 程式代碼對照清單(網頁「手動新增」下拉選單用;可在網頁編輯) ----------
 // 沒編輯過是 null,網頁就用對照表 Excel(隨 data.enc 發布)的預設清單;編輯過就整份存在 SIGN_PROGS,
 // 並隨 pull 帶回給電腦端,辨識程式也用這份校正標題列的程式代碼。編輯權限:管理者或 erp_sign。
@@ -1352,10 +1385,10 @@ function doPost(e) {
       if (!me.perms.erp_receipt) return denied_('進貨單簽核');
       return json_(action === 'puri09_request' ? requestPuri_(me, 'receipt') : puriView_('receipt'));
     }
-    if (action.indexOf('sign') === 0 && ['signprogs_get', 'signprogs_save', 'signprogs_reset', 'signforms_list', 'signforms_save', 'signforms_add', 'signforms_delete', 'sign_status', 'sign_request',
+    if (action.indexOf('sign') === 0 && ['signprogs_get', 'signprogs_save', 'signprogs_reset', 'signforms_list', 'signforms_save', 'signforms_add', 'signforms_delete', 'signforms_done', 'sign_status', 'sign_request',
         'signimg_upload', 'signimg_list'].indexOf(action) !== -1) {
-      // 待簽核表單頁面所有登入同仁都能用(看清單、上傳截圖、編輯、刪除);erp_sign 權限只管「確認」鍵(sign_request)
-      if (action === 'sign_request' && !me.perms.erp_sign) return denied_('待簽核表單確認');
+      // 待簽核表單頁面所有登入同仁都能用(看清單、上傳截圖、編輯、刪除);erp_sign 權限只管「簽核」鍵(sign_request)與「已完成」鍵(signforms_done)
+      if ((action === 'sign_request' || action === 'signforms_done') && !me.perms.erp_sign) return denied_('待簽核表單簽核');
       if (action === 'signprogs_get') return json_({ ok: true, progs: getSignProgs_() });
       if (action === 'signprogs_save' || action === 'signprogs_reset') {
         if (!me.perms.sign_progs) return denied_('編輯表單清單');
@@ -1366,6 +1399,7 @@ function doPost(e) {
       if (action === 'signforms_save') return json_(saveSignForm_(body, me));
       if (action === 'signforms_add') return json_(addSignForms_(body, me));
       if (action === 'signforms_delete') return json_(deleteSignForm_(body, me));
+      if (action === 'signforms_done') return json_(signDone_(body, me));
       if (action === 'sign_status') return json_(puriView_('sign'));
       if (action === 'sign_request') return json_(requestSign_(body, me));
       if (action === 'signimg_upload') return json_(uploadSignImage_(body, me));
@@ -1415,7 +1449,7 @@ function doGet(e) {
   try {
     if (p.action === 'pull' || p.action === 'ack' || p.action === 'set_data_key' || p.action === 'set_cost_key' || p.action === 'get_keys' || p.action === 'rotate_keys' || p.action === 'wms_report' ||
         p.action === 'puri09_claim' || p.action === 'puri09_report' || p.action === 'ret_claim' || p.action === 'ret_report' ||
-        p.action === 'sign_claim' || p.action === 'sign_report' || p.action === 'sign_ack' || p.action === 'sign_notify_ack' || p.action === 'signimg_get' || p.action === 'signimg_report' || p.action === 'erpq_claim') {
+        p.action === 'sign_claim' || p.action === 'sign_report' || p.action === 'sign_ack' || p.action === 'sign_notify_ack' || p.action === 'sign_done_ack' || p.action === 'signimg_get' || p.action === 'signimg_report' || p.action === 'erpq_claim') {
       var err = checkSyncKey_(p.key);
       if (err) return json_({ ok: false, error: err });
 
@@ -1427,6 +1461,7 @@ function doGet(e) {
       if (p.action === 'erpq_claim') return json_(erpqClaim_());
       if (p.action === 'sign_ack') return json_(signAck_(p.ts, p.msg));
       if (p.action === 'sign_notify_ack') return json_(signNotifyAck_(p.ids));
+      if (p.action === 'sign_done_ack') return json_(signDoneAck_(p.ids));
       if (p.action === 'sign_report') {
         var sres = puriReport_(String(p.state || ''), p.msg, 'sign');
         if (sres.ok && (p.done || p.failed)) {   // 逐張結果(done=id 以逗號分隔;failed=id:原因;id:原因)
@@ -1443,7 +1478,7 @@ function doGet(e) {
       if (p.action === 'pull') return json_({
         ok: true, edits: listPending_(), receipts: listReceipts_('receipt'), deletes: listDeletes_('receipt'),
         returns: listReceipts_('ret'), returnDeletes: listDeletes_('ret'), signImages: claimSignImages_(), signFilesPurged: purgeSignFiles_(), signRequest: readJson_(KINDS.sign.reqKey),
-        signProgs: getSignProgs_(), signNotify: readJson_(SIGN_NOTIFY_KEY) || [], signTotal: listSignForms_().length,
+        signProgs: getSignProgs_(), signNotify: readJson_(SIGN_NOTIFY_KEY) || [], signDone: readJson_(SIGN_DONE_KEY) || [], signTotal: listSignForms_().length,
         wms: readJson_(WMS_REQ_KEY), schedules: getSchedules_()
       });
 

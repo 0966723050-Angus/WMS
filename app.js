@@ -139,7 +139,7 @@
     { key: "ret", label: "退料" },
     { key: "erp_receipt", label: "ERP:進貨單簽核" },
     { key: "erp_return", label: "ERP:退貨單簽核" },
-    { key: "erp_sign", label: "ERP:待簽核表單確認" },
+    { key: "erp_sign", label: "ERP:待簽核表單簽核" },
     { key: "erp_wms", label: "ERP:WMS更新" },
     { key: "erp_mo", label: "ERP:製造命令查詢" },
     { key: "erp_po", label: "ERP:採購單查詢" },
@@ -1332,14 +1332,15 @@
         '<div class="sign-foot">' +
           '<button type="button" class="btn btn-secondary btn-sm" id="sign-clear">全部清除</button>' +
           '<button type="button" class="btn btn-secondary btn-sm sign-view-btn" id="sign-view" disabled title="查詢勾選的表單在 ERP 的內容(單頭與單身)">查看</button>' +
-          '<button type="button" class="btn" id="sign-ok" disabled>確認</button>' +
+          '<button type="button" class="btn btn-secondary btn-sm sign-done-btn" id="sign-done" disabled title="勾選的表單已經簽核完成:從清單刪除,並發「簽核通過」通知到釘釘">已完成</button>' +
+          '<button type="button" class="btn" id="sign-ok" disabled>簽核</button>' +
         '</div>' +
         '<p class="sign-note" id="sign-note"></p>' +
         '<p class="modal-msg" id="sign-msg"></p>' +
       '</section>';
 
     function $(id) { return document.getElementById(id); }
-    var forms = [], imgs = [], picked = {}, pendingBlob = null, previewUrl = "", busy = false, lastSig = "", checking = false;
+    var forms = [], imgs = [], picked = {}, pendingBlob = null, previewUrl = "", busy = false, lastSig = "", checking = false, doneBusy = false;
     var tickTimer = null;
     // 每次進入這一頁都換一個編號:舊的頁面實例(之前離開又回來留下的更新迴圈)看到編號不同就立刻停止。
     // 以前只檢查畫面上有沒有 #sign-list,結果舊實例會用自己「沒勾選」的狀態把新頁面的清單重畫,
@@ -1378,8 +1379,11 @@
     function updateButtons() {
       var n = forms.filter(function (f) { return picked[f.id]; }).length;
       $("sign-ok").disabled = busy || checking || n < 1 || !canConfirm;
-      $("sign-ok").title = canConfirm ? "" : "需要「ERP:待簽核表單確認」權限,請聯絡管理者";
-      $("sign-ok").textContent = n ? "確認(" + n + " 張)" : "確認";
+      $("sign-ok").title = canConfirm ? "" : "需要「ERP:待簽核表單簽核」權限,請聯絡管理者";
+      $("sign-ok").textContent = n ? "簽核(" + n + " 張)" : "簽核";
+      $("sign-done").disabled = checking || doneBusy || n < 1 || !canConfirm;
+      $("sign-done").title = canConfirm ? "勾選的表單已經簽核完成:從清單刪除,並發「簽核通過」通知到釘釘" : "需要「ERP:待簽核表單簽核」權限,請聯絡管理者";
+      $("sign-done").textContent = doneBusy ? "處理中…" : (n ? "已完成(" + n + ")" : "已完成");
       $("sign-view").disabled = n < 1 || viewBusy;
       $("sign-view").textContent = viewBusy ? "查詢中…" : (n ? "查看(" + n + ")" : "查看");
       $("sign-clear").disabled = !forms.length;
@@ -1792,7 +1796,7 @@
       if (!sel.length) return;
       var lines = sel.slice(0, 12).map(function (f) { return (f.name || f.prog) + " " + f.docType + "-" + f.docNo + (f.vendor ? " · " + f.vendor : ""); }).join("\n");
       if (!window.confirm("確定要把勾選的 " + sel.length + " 張表單送去簽核嗎?\n\n" + lines + (sel.length > 12 ? "\n…" : "") +
-        "\n\n按確認後會寫入 WMS.xlsx「待簽核清單」,並從這個清單移除。")) return;
+        "\n\n按確定後會寫入 WMS.xlsx「待簽核清單」,並從這個清單移除。")) return;
       // 送簽前先到 ERP 確認每張單的確認碼:只有「未確認(N)」的才能送簽,已確認 / 作廢 / 查無的擋下並提醒送簽者
       checking = true; updateButtons();
       msg("送簽前檢查表單的確認碼中…(約 10 秒~1 分鐘)");
@@ -1825,6 +1829,26 @@
     });
 
 
+    // ---- 已完成:勾選的表單已經簽核完成(例如自己在 ERP 簽完):從清單刪除,並發「簽核通過」通知到釘釘 ----
+    $("sign-done").addEventListener("click", function () {
+      var sel = forms.filter(function (f) { return picked[f.id]; });
+      if (!sel.length || doneBusy || checking) return;
+      if (sel.length > 30) { msg("一次最多標示 30 張已完成"); return; }
+      var lines = sel.slice(0, 12).map(function (f) { return (f.name || f.prog) + " " + f.docType + "-" + f.docNo + (f.vendor ? " · " + f.vendor : ""); }).join("\n");
+      if (!window.confirm("確定這 " + sel.length + " 張表單已經簽核完成嗎?\n\n" + lines + (sel.length > 12 ? "\n…" : "") +
+        "\n\n按確定後會從待簽核清單刪除,並發送「簽核通過」通知到釘釘。")) return;
+      doneBusy = true; updateButtons(); msg("處理中…");
+      api("signforms_done", { ids: sel.map(function (f) { return f.id; }) }).then(function (res) {
+        if (!res.ok) throw new Error(res.error || "處理失敗");
+        sel.forEach(function (f) { delete picked[f.id]; });
+        msg(res.missing ? "有 " + res.missing + " 張已經不在清單中(可能被別人處理了)" : "");
+        showToast("已完成 " + res.done + " 張,稍後發送釘釘通知");
+        return loadForms();
+      }).catch(function (err) {
+        if (session) msg(err.message);
+      }).then(function () { doneBusy = false; if (alive()) updateButtons(); });
+    });
+
     // 背景自動更新:每 10 秒更新一次(辨識完成的表單、簽核結果會自動出現,不用按重新整理)。
     // 任何一次連線失敗都不會讓它停掉;離開這一頁就停止。回到分頁時馬上更新一次。
     function tick() {
@@ -1839,7 +1863,7 @@
     }
     document.addEventListener("visibilitychange", onVisible);
 
-    if (!canConfirm) msg("您沒有「確認」的權限(其他功能都可以使用),需要送出簽核請管理者開通「ERP:待簽核表單確認」。");
+    if (!canConfirm) msg("您沒有「簽核」的權限(其他功能都可以使用),需要送出簽核或標示已完成請管理者開通「ERP:待簽核表單簽核」。");
     loadForms();
     loadImgs();
     loadStatus();

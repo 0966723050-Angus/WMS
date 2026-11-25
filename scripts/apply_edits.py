@@ -474,6 +474,12 @@ def main():
         dingtalk_notify.process(endpoint, sync_key, cfg, res.get("signNotify") or [], res.get("signTotal"), call, log)
     except Exception as ex:
         log("警告: 釘釘通知處理失敗: %s" % ex)
+    # 網頁「待簽核表單」按「已完成」的表單:發釘釘「簽核通過」通知(表單已在 Apps Script 端從清單刪除)
+    try:
+        import dingtalk_notify
+        dingtalk_notify.process_done(endpoint, sync_key, cfg, res.get("signDone") or [], call, log)
+    except Exception as ex:
+        log("警告: 「已完成」釘釘通知處理失敗: %s" % ex)
     # 「收料」「退料」工作表內容有變動(例如使用者自己編輯/清除)就回報給網站,供「進貨單簽核」「退貨單簽核」清單使用;沒變動不重送
     try:
         import receipt_snapshot
