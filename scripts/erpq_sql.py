@@ -472,10 +472,22 @@ def _label_receipts(cond):
         sys.path.insert(0, ERP_SQL_DIR)
     import erp_sql
     cn = erp_sql.connect()
+    stock = {}
     try:
         cur = cn.cursor()
         cur.execute(sql, [a, b, a, b, early])
         raw = cur.fetchall()
+        # 各料號目前庫存(2026-11-26 使用者要求:多張製令需求合計超過進貨數量時,要看庫存夠不夠)。
+        # 範圍同網站「庫存」頁(INVR17):庫別 1 開頭的 INVMC 加總;已確認的進貨已經算在裡面
+        codes = sorted({(r.TH004 or "").strip() for r in raw[:3000] if (r.TH004 or "").strip()})
+        for i in range(0, len(codes), 500):
+            part = codes[i:i + 500]
+            q = ("SELECT MC001, SUM(MC007) FROM INVMC WITH (NOLOCK) WHERE MC002 LIKE '1%%' AND MC001 IN (%s) GROUP BY MC001"
+                 % ",".join("?" * len(part)))
+            assert q.startswith("SELECT "), "只允許 SELECT"
+            cur.execute(q, part)
+            for code, s in cur.fetchall():
+                stock[(code or "").strip()] = s
     finally:
         cn.close()
     rows = []
@@ -483,8 +495,9 @@ def _label_receipts(cond):
         t = lambda v: ("" if v is None else str(v).strip())
         qty = r.TH015 if r.TH015 not in (None, 0) else r.TH007
         rows.append([t(r.TH001) + "-" + t(r.TH002) + "-" + t(r.TH003), t(r.TH001) + "-" + t(r.TH002), t(r.TH003), t(r.TH004),
-                     t(r.TH005), t(r.TH006), _qty(qty), t(r.TH008), t(r.TH042), t(r.TG003), _vendor(t(r.TG005), t(r.MA002))])
-    return {"cols": ["key", "進貨單", "序號", "品號", "品名", "規格", "驗收數量", "單位", "專案代號", "進貨日期", "廠商"],
+                     t(r.TH005), t(r.TH006), _qty(qty), t(r.TH008), t(r.TH042), t(r.TG003), _vendor(t(r.TG005), t(r.MA002)),
+                     _qty(stock.get(t(r.TH004), 0))])
+    return {"cols": ["key", "進貨單", "序號", "品號", "品名", "規格", "驗收數量", "單位", "專案代號", "進貨日期", "廠商", "庫存"],
             "rows": rows, "dcols": [], "details": [None] * len(rows),
             "msg": "超過 3000 筆,只列出前 3000 筆,請縮小日期區間。" if len(raw) > 3000 else ""}
 

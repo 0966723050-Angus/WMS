@@ -1725,6 +1725,11 @@ table.data-table td:nth-child(5), table.data-table td:nth-child(7), table.data-t
 .lp-del svg { width: 14px; height: 14px; }
 .lp-table .c-qty input { width: 80px; }
 .lp-table .c-note input { width: 120px; }
+/* 自動選取:需求超過進貨+庫存而依庫存分配的列,數量框紅框、下面紅字寫原需求 */
+.lp-table input.lp-qty-short { border-color: var(--warn-text); color: var(--warn-text); font-weight: 700; }
+.lp-short { display: block; margin-top: 2px; font-size: 11.5px; font-weight: 700; color: var(--warn-text); white-space: nowrap; }
+.lp-table td.c-stock { color: var(--text-muted); }
+.lbl-confirm-table td.c-del, .lbl-confirm-table th.c-del { width: 44px; text-align: center; }
 .lp-table .c-spec, .lp-table .c-name, .lp-table .c-projName { text-align: left; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .lp-cal-grid button.in { background: #5a3416; } }
 @media (max-width: 720px) {

@@ -3976,22 +3976,19 @@
   }
 
   // 下載前先列出要下載的標籤,顯示檔名與存放位置(依每個人自己的設定),按「確認」才領流水號並下載
+  // onDone(實際下載的列):預覽裡可以刪掉不要的列,呼叫端要用這份清單(而不是原本傳進來的)記錄已下載 / 清除勾選
   function confirmLabelDownload(rows, name, onDone) {
     if (!rows.length) return;
+    var cur = rows.slice();   // 預覽裡刪除只影響這次下載
     var cols = [["projCode", "專案代號"], ["orderNo", "製令單號"], ["assy", "Ass'y"], ["code", "料號"], ["name", "品名"], ["spec", "規格"], ["qty", "數量"], ["note", "備註"]];
     var modal = el(
       '<div class="modal-backdrop">' +
         '<div class="modal modal-wide lbl-confirm" role="dialog" aria-modal="true" aria-labelledby="lblc-title">' +
           '<h2 id="lblc-title">確認下載標籤</h2>' +
-          '<p class="rcv-intro">共 <b>' + rows.length + '</b> 筆 · 檔名 <b>' + esc(name) + '</b> · 存到 <b id="lblc-dir">讀取中…</b></p>' +
+          '<p class="rcv-intro">共 <b id="lblc-n">' + cur.length + '</b> 筆 · 檔名 <b>' + esc(name) + '</b> · 存到 <b id="lblc-dir">讀取中…</b></p>' +
           '<div class="lbl-confirm-list"><table class="lbl-table lbl-confirm-table"><thead><tr class="lbl-titles"><th>#</th>' +
-            cols.map(function (c) { return '<th class="c-' + c[0] + '">' + esc(c[1]) + '</th>'; }).join("") + '</tr></thead><tbody>' +
-            rows.map(function (r, i) {
-              return '<tr><td class="c-chk" data-k="#">' + (i + 1) + '</td>' + cols.map(function (c) {
-                return '<td class="c-' + c[0] + '" data-k="' + esc(c[1]) + '">' + esc(r[c[0]]) + '</td>';
-              }).join("") + '</tr>';
-            }).join("") +
-          '</tbody></table></div>' +
+            cols.map(function (c) { return '<th class="c-' + c[0] + '">' + esc(c[1]) + '</th>'; }).join("") + '<th class="c-del">刪除</th></tr></thead>' +
+            '<tbody id="lblc-body"></tbody></table></div>' +
           '<p class="modal-msg">按「確認」後會取得流水號(月日 4 碼 + 當天流水號 4 碼,全公司接續編號)並下載 Excel。</p>' +
           '<div class="modal-actions">' +
             '<button type="button" class="btn btn-secondary" id="lblc-cancel">取消</button>' +
@@ -4001,6 +3998,24 @@
       '</div>'
     );
     document.body.appendChild(modal);
+    function renderPreview() {
+      modal.querySelector("#lblc-body").innerHTML = cur.length ? cur.map(function (r, i) {
+        return '<tr><td class="c-chk" data-k="#">' + (i + 1) + '</td>' + cols.map(function (c) {
+          return '<td class="c-' + c[0] + '" data-k="' + esc(c[1]) + '">' + esc(r[c[0]]) + '</td>';
+        }).join("") +
+        '<td class="c-del" data-k="刪除"><button type="button" class="lp-del lblc-del" data-i="' + i + '" title="這次不下載這一列" aria-label="刪除">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></td></tr>';
+      }).join("") : '<tr><td colspan="' + (cols.length + 2) + '" class="lbl-empty">已全部刪除,沒有要下載的標籤</td></tr>';
+      modal.querySelector("#lblc-n").textContent = cur.length;
+      modal.querySelector("#lblc-ok").disabled = !cur.length;
+    }
+    renderPreview();
+    modal.querySelector("#lblc-body").addEventListener("click", function (e) {
+      var b = e.target.closest(".lblc-del");
+      if (!b) return;
+      cur.splice(Number(b.getAttribute("data-i")), 1);
+      renderPreview();
+    });
     function close() {
       document.removeEventListener("keydown", onKey);
       if (modal.parentNode) modal.parentNode.removeChild(modal);
@@ -4016,6 +4031,7 @@
       if (d) d.textContent = dir ? "「" + dir.name + "」資料夾(你的設定)" : "瀏覽器預設的「下載」資料夾(尚未設定下載位置)";
     });
     modal.querySelector("#lblc-ok").addEventListener("click", function () {
+      if (!cur.length) return;
       close();
       // 資料夾寫入權限一定要在按鍵的「當下」同步詢問(瀏覽器重開後權限會變成「詢問」,
       // 若先做完其他非同步動作才問,瀏覽器會拒絕,檔案就只能改存到「下載」資料夾)
@@ -4027,7 +4043,8 @@
           catch (e) { pre.perm = Promise.reject(e); }
         }
       }
-      saveLabelExcel(rows, name, onDone, pre);
+      var final = cur.slice();
+      saveLabelExcel(final, name, typeof onDone === "function" ? function () { onDone(final); } : null, pre);
     });
   }
 
@@ -4133,12 +4150,16 @@
     var get = function (row, c) { return idx[c] === undefined ? "" : (row[idx[c]] || ""); };
     var byCode = {};
     labelSourceRows().forEach(function (r) { (byCode[r.code] = byCode[r.code] || []).push(r); });
-    var out = [], seen = {}, skipped = 0;
+    var out = [], seen = {}, skipped = 0, rcv = {}, stock = {};
     (res.rows || []).forEach(function (row) {
       var code = get(row, "品號"), proj = get(row, "專案代號"), cands = byCode[code] || [];
       var ms = proj ? cands.filter(function (r) { return r.projCode === proj; }) : cands;
       if (!ms.length) { skipped++; return; }
       var doc = get(row, "進貨單");
+      var rc = rcv[code] || (rcv[code] = { qty: 0, keys: {} });   // 這個料號這段期間的進貨驗收數量(每筆進貨單身算一次)
+      if (!rc.keys[get(row, "key")]) { rc.keys[get(row, "key")] = 1; rc.qty += Number(get(row, "驗收數量")) || 0; }
+      var st = get(row, "庫存");
+      if (st !== "" && stock[code] === undefined) stock[code] = Number(st);
       ms.forEach(function (m) {
         var k = labelDlKey(code, m.orderNo), ex = seen[k];
         if (ex) {
@@ -4157,7 +4178,26 @@
       });
     });
     out.forEach(function (r) { r.defQty = Math.round(r.defQty * 10000) / 10000; delete r._src; delete r._docs; });   // 加總後去掉浮點誤差
-    return { rows: out, skipped: skipped };
+    // 多張製令的需求合計超過進貨數量時,看庫存夠不夠(使用者指定 2026-11-26:例如進貨 100、需求 120,庫存原本有 20 就夠)。
+    // 可用量 = max(目前庫存, 進貨數量):ERP 的庫存已含確認過的進貨;若進貨後已被領走、庫存比進貨少,至少還有這次進貨的量。
+    // 夠就照各製令需求;不夠才依製令單號先後分配可用量,標示「需求 / 分配」讓人核對。
+    var short = 0, byPart = {};
+    out.forEach(function (r) { (byPart[r.code] = byPart[r.code] || []).push(r); });
+    Object.keys(byPart).forEach(function (code) {
+      var list = byPart[code], need = 0;
+      list.forEach(function (r) { r.stock = stock[code]; r.rcvQty = rcv[code] ? rcv[code].qty : 0; need += r.defQty; });
+      if (stock[code] === undefined || isNaN(stock[code])) return;   // 舊版查詢沒有庫存欄:不分配
+      var avail = Math.max(stock[code], rcv[code] ? rcv[code].qty : 0);
+      if (need <= avail + 1e-9) return;
+      var left = avail;
+      list.slice().sort(function (x, y) { return String(x.orderNo).localeCompare(String(y.orderNo)); }).forEach(function (r) {
+        var give = Math.max(0, Math.min(r.defQty, left));
+        if (give < r.defQty - 1e-9) { r.needQty = r.defQty; r.short = true; short++; }   // 只有分不到足額的製令才標示
+        r.defQty = Math.round(give * 10000) / 10000;
+        left -= give;
+      });
+    });
+    return { rows: out, skipped: skipped, short: short };
   }
 
   function renderLabelPending(app) {
@@ -4174,13 +4214,13 @@
           '<div class="lp-cal" id="lp-cal" hidden></div></div>' +
         '<button type="button" class="btn btn-sm btn-secondary" id="lp-ok">確認</button>' +
       '</div>' +
-      '<p class="lp-note">列出期間內已確認的進貨單物料,只列在線製令裡有的料號;在這一頁下載過的(同料號 + 製令單號)會自動剔除。同一料號有幾張製令需要就列幾列,數量預設為該製令的需求數量(需領用量),可修改,也可刪除不印的列。</p>' +
+      '<p class="lp-note">列出期間內已確認的進貨單物料,只列在線製令裡有的料號;在這一頁下載過的(同料號 + 製令單號)會自動剔除。同一料號有幾張製令需要就列幾列,數量預設為該製令的需求數量(需領用量);需求合計超過進貨+庫存時依製令先後分配,紅字為原需求。數量可修改,也可刪除不印的列。</p>' +
       '<div class="lbl-countrow"><p class="result-count" id="lp-count"></p></div>' +
       '<div class="lbl-wrap"><table class="lbl-table lp-table"><thead><tr class="lbl-titles">' +
         '<th class="c-rcvDate">進貨日期</th><th class="c-rcvDoc">進貨單</th><th class="c-vendor">廠商</th>' +
         '<th class="c-projCode">專案代號</th><th class="c-projName">專案名稱</th><th class="c-orderNo">製令單號</th>' +
         '<th class="c-prodCode">產品品號</th><th class="c-assy">Ass\'y</th><th class="c-code">料號</th><th class="c-name">品名</th>' +
-        '<th class="c-spec">規格</th><th class="c-qty">數量</th><th class="c-note">備註</th><th class="c-del">刪除</th>' +
+        '<th class="c-spec">規格</th><th class="c-stock">庫存</th><th class="c-qty">數量</th><th class="c-note">備註</th><th class="c-del">刪除</th>' +
       '</tr></thead><tbody id="lp-body"></tbody></table></div>';
 
     function alive() { return document.getElementById("lp-body"); }
@@ -4201,12 +4241,15 @@
           '<td class="c-code" data-k="料號">' + esc(r.code) + '</td>' +
           '<td class="c-name" data-k="品名">' + esc(r.name) + '</td>' +
           '<td class="c-spec" data-k="規格">' + esc(r.spec).replace(/_/g, "_<wbr>") + '</td>' +
-          '<td class="c-qty" data-k="數量"><input type="number" class="lp-qty" inputmode="decimal" min="0" step="any" value="' + esc(qty) + '" aria-label="數量" /></td>' +
+          '<td class="c-stock" data-k="庫存">' + esc(r.stock === undefined ? "" : r.stock) + '</td>' +
+          '<td class="c-qty" data-k="數量"><input type="number" class="lp-qty' + (r.short ? ' lp-qty-short' : '') + '" inputmode="decimal" min="0" step="any" value="' + esc(qty) + '" aria-label="數量"' +
+            (r.short ? ' title="這張製令需求 ' + esc(r.needQty) + ',進貨 ' + esc(r.rcvQty) + '、庫存 ' + esc(r.stock) + ' 不夠所有製令,依製令先後分配到 ' + esc(r.defQty) + '"' : '') + ' />' +
+            (r.short ? '<span class="lp-short">需求 ' + esc(r.needQty) + '</span>' : '') + '</td>' +
           '<td class="c-note" data-k="備註"><input type="text" class="lp-note-in" maxlength="60" value="' + esc(P.note[r.key] || "") + '" aria-label="備註" /></td>' +
           '<td class="c-del" data-k="刪除"><button type="button" class="lp-del" title="從清單刪除這一列(不會記成已下載)" aria-label="刪除">' +
             '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></td>' +
         '</tr>';
-      }).join("") : '<tr><td colspan="14" class="lbl-empty">' + (P.busy ? "查詢中…" : P.asked ? "這段期間沒有要列印的進貨物料" : "請按「今天」,或選擇日期區間後按「確認」") + '</td></tr>';
+      }).join("") : '<tr><td colspan="15" class="lbl-empty">' + (P.busy ? "查詢中…" : P.asked ? "這段期間沒有要列印的進貨物料" : "請按「今天」,或選擇日期區間後按「確認」") + '</td></tr>';
       var c = document.getElementById("lp-count");
       if (c) c.textContent = (P.busy ? "查詢中(公司電腦查 ERP,約 10~30 秒)…" : (P.asked ? "共 " + P.rows.length + " 筆" : "")) + (P.info ? " · " + P.info : "");
       var dl = document.getElementById("lp-dl");
@@ -4246,7 +4289,8 @@
           (ck.done || []).forEach(function (k) { done[k] = 1; });
           P.rows = built.rows.filter(function (r) { return !done[labelDlKey(r.code, r.orderNo)]; });
           var nDone = built.rows.length - P.rows.length;
-          P.info = [nDone ? "已下載過 " + nDone + " 筆已剔除" : "", built.skipped ? "不在在線製令的進貨物料 " + built.skipped + " 筆未列出" : ""].filter(Boolean).join(" · ");
+          P.info = [nDone ? "已下載過 " + nDone + " 筆已剔除" : "", built.skipped ? "不在在線製令的進貨物料 " + built.skipped + " 筆未列出" : "",
+                    built.short ? built.short + " 筆需求超過進貨+庫存,已依庫存分配(紅字為原需求)" : ""].filter(Boolean).join(" · ");
         });
       }).catch(function (err) {
         if (err && err.message) window.alert("查詢失敗:" + err.message);
@@ -4336,10 +4380,10 @@
                  spec: r.spec, qty: q === "" ? "" : Number(q), note: P.note[r.key] || "", date: todayYmd() };
       }).filter(function (r) { return r.qty !== 0; });
       if (!rows.length) { window.alert("沒有要下載的項目(數量為 0 的列不會下載)"); return; }
-      confirmLabelDownload(rows, LABEL_FILE_SYSTEM, function () {
-        markLabelDownloaded(rows);   // 料號 + 製令單號 記成已下載,之後查詢不再列出
+      confirmLabelDownload(rows, LABEL_FILE_SYSTEM, function (done) {
+        markLabelDownloaded(done);   // 只記實際下載的(預覽裡刪掉的不算):料號 + 製令單號 記成已下載,之後查詢不再列出
         var gone = {};
-        rows.forEach(function (r) { gone[labelDlKey(r.code, r.orderNo)] = 1; });   // 同料號 + 製令的列一起移除
+        done.forEach(function (r) { gone[labelDlKey(r.code, r.orderNo)] = 1; });   // 同料號 + 製令的列一起移除
         P.rows = P.rows.filter(function (r) { return !gone[labelDlKey(r.code, r.orderNo)]; });
         if (alive()) renderBody();
       });
@@ -4604,14 +4648,14 @@
         var raw = S.qty[r.key] !== undefined ? S.qty[r.key] : r.defQty;
         var num = Number(raw);
         return {
-          projCode: r.projCode, projName: r.projName, orderNo: r.orderNo, assy: r.assy,
+          key: r.key, projCode: r.projCode, projName: r.projName, orderNo: r.orderNo, assy: r.assy,
           code: r.code, name: r.name, spec: r.spec,
           qty: raw === "" ? "" : (isNaN(num) ? raw : num), note: S.note[r.key] || "", date: today
         };
       });
-      if (rows.length) confirmLabelDownload(rows, LABEL_FILE_SYSTEM, function () {
-        // 下載完成:清除這次勾選的項目(連同改過的數量 / 備註),畫面還在這一頁才重畫
-        S.checked = {}; S.qty = {}; S.note = {};
+      if (rows.length) confirmLabelDownload(rows, LABEL_FILE_SYSTEM, function (done) {
+        // 下載完成:清除實際下載的項目的勾選(連同改過的數量 / 備註);預覽裡刪掉的保持勾選。畫面還在這一頁才重畫
+        done.forEach(function (r) { delete S.checked[r.key]; delete S.qty[r.key]; delete S.note[r.key]; });
         if (document.getElementById("lbl-body")) renderBody();
       });
     });
