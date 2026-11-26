@@ -4124,23 +4124,39 @@
   function ymdDash(s) { s = ymdCompact(s); return s.length === 8 ? s.slice(0, 4) + "-" + s.slice(4, 6) + "-" + s.slice(6) : s; }
 
   // 進貨單身 → 標籤列:同專案代號的在線製令有這個料號才列出(進貨沒有專案代號時,任何在線製令有就列出)
+  // 標籤是依「製令的物料」列印(使用者指定 2026-11-26):進貨的料號在幾張在線製令裡有需求,就列幾列(每張製令一列),
+  // 數量預設 = 該製令這個料號的需求數量(需領用量;同一張製令同料號有多行就加總),不是進貨的驗收數量。
+  // 同一料號 + 同一張製令只列一次(同一天有好幾張進貨單也不會重複出標籤),進貨單號合併顯示。
   function pendBuild(res) {
     var cols = res.cols || [], idx = {};
     cols.forEach(function (c, i) { idx[c] = i; });
     var get = function (row, c) { return idx[c] === undefined ? "" : (row[idx[c]] || ""); };
     var byCode = {};
     labelSourceRows().forEach(function (r) { (byCode[r.code] = byCode[r.code] || []).push(r); });
-    var out = [], skipped = 0;
+    var out = [], seen = {}, skipped = 0;
     (res.rows || []).forEach(function (row) {
       var code = get(row, "品號"), proj = get(row, "專案代號"), cands = byCode[code] || [];
-      var m = proj ? cands.filter(function (r) { return r.projCode === proj; })[0] : cands[0];
-      if (!m) { skipped++; return; }
-      out.push({
-        key: get(row, "key"), rcvDate: ymdDash(get(row, "進貨日期")), rcvDoc: get(row, "進貨單"), vendor: get(row, "廠商"),
-        projCode: m.projCode, projName: m.projName, orderNo: m.orderNo, prodCode: m.prodCode, assy: m.assy,
-        code: code, name: get(row, "品名") || m.name, spec: get(row, "規格") || m.spec, defQty: Number(get(row, "驗收數量")) || 0
+      var ms = proj ? cands.filter(function (r) { return r.projCode === proj; }) : cands;
+      if (!ms.length) { skipped++; return; }
+      var doc = get(row, "進貨單");
+      ms.forEach(function (m) {
+        var k = labelDlKey(code, m.orderNo), ex = seen[k];
+        if (ex) {
+          if (!ex._src[m.key]) { ex._src[m.key] = 1; ex.defQty += Number(m.defQty) || 0; }   // 同製令同料號的另一行物料
+          if (doc && ex._docs.indexOf(doc) < 0) { ex._docs.push(doc); ex.rcvDoc = ex._docs.join("、"); }
+          return;
+        }
+        var src = {}; src[m.key] = 1;
+        seen[k] = {
+          key: k, rcvDate: ymdDash(get(row, "進貨日期")), rcvDoc: doc, vendor: get(row, "廠商"),
+          projCode: m.projCode, projName: m.projName, orderNo: m.orderNo, prodCode: m.prodCode, assy: m.assy,
+          code: code, name: get(row, "品名") || m.name, spec: get(row, "規格") || m.spec, defQty: Number(m.defQty) || 0,
+          _src: src, _docs: doc ? [doc] : []
+        };
+        out.push(seen[k]);
       });
     });
+    out.forEach(function (r) { r.defQty = Math.round(r.defQty * 10000) / 10000; delete r._src; delete r._docs; });   // 加總後去掉浮點誤差
     return { rows: out, skipped: skipped };
   }
 
@@ -4158,7 +4174,7 @@
           '<div class="lp-cal" id="lp-cal" hidden></div></div>' +
         '<button type="button" class="btn btn-sm btn-secondary" id="lp-ok">確認</button>' +
       '</div>' +
-      '<p class="lp-note">列出期間內已確認的進貨單物料,只列在線製令裡有的料號;在這一頁下載過的(同料號 + 製令單號)會自動剔除。數量預設為驗收數量,可修改,也可刪除不印的列。</p>' +
+      '<p class="lp-note">列出期間內已確認的進貨單物料,只列在線製令裡有的料號;在這一頁下載過的(同料號 + 製令單號)會自動剔除。同一料號有幾張製令需要就列幾列,數量預設為該製令的需求數量(需領用量),可修改,也可刪除不印的列。</p>' +
       '<div class="lbl-countrow"><p class="result-count" id="lp-count"></p></div>' +
       '<div class="lbl-wrap"><table class="lbl-table lp-table"><thead><tr class="lbl-titles">' +
         '<th class="c-rcvDate">進貨日期</th><th class="c-rcvDoc">進貨單</th><th class="c-vendor">廠商</th>' +
