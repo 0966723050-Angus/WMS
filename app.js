@@ -4213,6 +4213,7 @@
           'value="' + esc(P.from ? (P.from === P.to ? P.from : P.from + " ~ " + P.to) : "") + '" aria-label="日期區間" />' +
           '<div class="lp-cal" id="lp-cal" hidden></div></div>' +
         '<button type="button" class="btn btn-sm btn-secondary" id="lp-ok">確認</button>' +
+        '<button type="button" class="btn btn-sm btn-secondary" id="lp-clear" title="清除日期區間與查詢結果(改過的數量、備註一起清掉)">清除</button>' +
       '</div>' +
       '<p class="lp-note">列出期間內已確認的進貨單物料,只列在線製令裡有的料號;在這一頁下載過的(同料號 + 製令單號)會自動剔除。同一料號有幾張製令需要就列幾列,數量預設為該製令的需求數量(需領用量);需求合計超過進貨+庫存時依製令先後分配,紅字為原需求。數量可修改,也可刪除不印的列。</p>' +
       '<div class="lbl-countrow"><p class="result-count" id="lp-count"></p></div>' +
@@ -4254,7 +4255,7 @@
       if (c) c.textContent = (P.busy ? "查詢中(公司電腦查 ERP,約 10~30 秒)…" : (P.asked ? "共 " + P.rows.length + " 筆" : "")) + (P.info ? " · " + P.info : "");
       var dl = document.getElementById("lp-dl");
       if (dl) { dl.textContent = "下載 Excel" + (P.rows.length ? "(" + P.rows.length + ")" : ""); dl.disabled = !P.rows.length || P.busy; }
-      ["lp-today", "lp-ok"].forEach(function (id) { var x = document.getElementById(id); if (x) x.disabled = P.busy; });
+      ["lp-today", "lp-ok", "lp-clear"].forEach(function (id) { var x = document.getElementById(id); if (x) x.disabled = P.busy; });
     }
     renderBody();
 
@@ -4302,6 +4303,15 @@
       closeCal();
       if (!calFrom) { window.alert("請先點日期區間欄位選擇日期"); return; }
       run(calFrom, calTo || calFrom);
+    });
+    // 清除:日期區間、查詢結果、改過的數量 / 備註全部清掉,回到剛進來的樣子(不影響已下載紀錄)
+    document.getElementById("lp-clear").addEventListener("click", function () {
+      if (P.busy) return;
+      closeCal();
+      P.from = ""; P.to = ""; P.rows = []; P.qty = {}; P.note = {}; P.info = ""; P.asked = false;
+      calFrom = ""; calTo = "";
+      rng.value = "";
+      renderBody();
     });
 
     // ---- 日期區間日曆:第一下選起日、第二下選迄日 ----
