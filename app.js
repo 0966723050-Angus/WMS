@@ -3002,8 +3002,17 @@
     return i;
   }
 
+  // 未領用量為 0(已全數領料):收料、退料鍵都反白(停用)(使用者指定 2026-11-27)
+  function fullyIssued(r) {
+    if (r.remainQty === undefined || r.remainQty === null || r.remainQty === "") return false;   // 舊資料沒有這欄:不擋
+    return (Number(r.remainQty) || 0) <= 0;
+  }
+
   function receiveBtnHtml(r) {
     if (!can("receive")) return "";
+    if (fullyIssued(r)) {
+      return '<button type="button" class="recv-btn" disabled title="未領用量為 0(已全數領料),不需收料">收料</button>';
+    }
     // 沒有採購單號、且庫存已經夠用(庫存數量 ≥ 需求數量):不需要收料,收料鍵反白(停用)
     var hasPo = (r.poNos || []).some(function (p) { return String(p || "").trim() !== ""; });
     var noNeed = !hasPo && (Number(r.stockQty) || 0) >= (Number(r.needQty) || 0);
@@ -3115,6 +3124,9 @@
 
   function returnBtnHtml(r) {
     if (!can("ret")) return "";
+    if (fullyIssued(r)) {
+      return '<button type="button" class="ret-btn" disabled title="未領用量為 0(已全數領料),不能退料">退料</button>';
+    }
     // 尚未收料(履歷沒有進貨紀錄)或已全數退料:退料鍵反白(停用)
     if (!returnInfo(r)) {
       return '<button type="button" class="ret-btn" disabled title="尚未收料(進退貨履歷沒有進貨紀錄)或已全數退料,不能退料">退料</button>';
