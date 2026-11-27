@@ -1165,7 +1165,12 @@
       '<h1 class="page-title">自動執行設定<span class="sub">設定 ERP 頁各執行鍵每天自動執行的時間區間與間隔</span></h1>' +
       '<div id="sched-list"><div class="skeleton">載入中…</div></div>' +
       '<p class="admin-note">電腦約每 5 分鐘檢查一次,實際啟動時間可能比設定晚幾分鐘;電腦需開機並保持登入。' +
-      '儲存後,已經過去的時段不會補跑,從下一個時段開始生效。</p>';
+      '儲存後,已經過去的時段不會補跑,從下一個時段開始生效。</p>' +
+      '<h2 class="sign-h notify-h">通知</h2>' +
+      '<div id="notify-list"><div class="skeleton">載入中…</div></div>' +
+      '<p class="admin-note">由公司電腦每分鐘檢查一次,到了設定的時間就查 ERP 並發釘釘(電腦需開機);' +
+      '當時電腦沒開機的話,開機後同一週內會補發一次。儲存設定之前已經過去的時段不會補發。</p>';
+    renderNotifySettings();
 
     var list = document.getElementById("sched-list");
 
@@ -1245,6 +1250,79 @@
       .catch(function (err) {
         list.innerHTML = '<div class="empty-state">讀取設定失敗:' + esc(err.message) + '</div>';
       });
+  }
+
+  // ---------- ERP 設定頁「通知」(2026-11-27):管理者設定通知人員與時間,公司電腦到時間查 ERP 並發釘釘(scripts/notify_jobs.py) ----------
+  var WEEKDAYS = ["週日", "週一", "週二", "週三", "週四", "週五", "週六"];
+  var NOTIFY_DEFS = [
+    { key: "mfin", title: "生產入庫",
+      cond: "製令出現「完全領料」時(在線製令的所有物料未領用量都是 0)",
+      sample: function (name) { return (name || "(通知人員)") + " 以下製令請開立生產入庫\n專案代號：…\n製令單別-單號：…"; } }
+  ];
+  function renderNotifySettings() {
+    var list = document.getElementById("notify-list");
+    if (!list) return;
+    function fmtTime(ts) { return ts ? new Date(ts).toLocaleString("zh-TW", { hour12: false }) : ""; }
+    function draw(res) {
+      var cfgAll = res.notify || {}, statusAll = res.status || {}, users = res.users || [];
+      list.innerHTML = "";
+      NOTIFY_DEFS.forEach(function (def) {
+        var cfg = cfgAll[def.key], cur = cfg || { enabled: false, email: "", weekday: 1, time: "14:00" };
+        var st = statusAll[def.key];
+        var who = users.filter(function (u) { return u.email === cur.email; })[0];
+        var summary = cfg && cfg.enabled && who
+          ? "目前:每" + WEEKDAYS[cur.weekday] + " " + cur.time + " 檢查,通知 " + who.name
+          : "目前:未啟用";
+        var card = el(
+          '<div class="admin-card sched-card notify-card">' +
+            '<h3>' + esc(def.title) + '</h3>' +
+            '<p class="sched-current">' + esc(summary) + '</p>' +
+            '<div class="sched-form">' +
+              '<label class="sched-check"><input type="checkbox" class="n-enabled"' + (cur.enabled ? " checked" : "") + ' /> 啟用這個通知</label>' +
+              '<label>通知人員<select class="n-user"><option value="">(請選擇)</option>' + users.map(function (u) {
+                return '<option value="' + esc(u.email) + '"' + (u.email === cur.email ? " selected" : "") + '>' + esc(u.name) + '</option>';
+              }).join("") + '</select></label>' +
+              '<label>檢查日<select class="n-weekday">' + WEEKDAYS.map(function (w, i) {
+                return '<option value="' + i + '"' + (i === Number(cur.weekday) ? " selected" : "") + '>每' + w + '</option>';
+              }).join("") + '</select></label>' +
+              '<label>時間<input type="time" class="n-time" value="' + esc(cur.time || "14:00") + '" /></label>' +
+            '</div>' +
+            '<dl class="notify-info">' +
+              '<dt>通知條件</dt><dd>' + esc(def.cond) + '</dd>' +
+              '<dt>通知方式</dt><dd>釘釘(WMS 群組機器人)</dd>' +
+              '<dt>通知內容</dt><dd><pre class="notify-sample">' + esc(def.sample(who && who.name)) + '</pre></dd>' +
+              (st ? '<dt>最近一次</dt><dd class="' + (st.ok ? "" : "notify-bad") + '">' + esc(fmtTime(st.ts)) + ' · ' + esc(st.msg || "") + '</dd>' : '') +
+            '</dl>' +
+            '<div class="admin-actions"><button type="button" class="btn n-save">儲存</button></div>' +
+            '<p class="modal-msg n-msg"></p>' +
+          '</div>'
+        );
+        list.appendChild(card);
+        var msg = card.querySelector(".n-msg");
+        card.querySelector(".n-user").addEventListener("change", function () {
+          var u = users.filter(function (x) { return x.email === this.value; }, this)[0];
+          card.querySelector(".notify-sample").textContent = def.sample(u && u.name);
+        });
+        card.querySelector(".n-save").addEventListener("click", function () {
+          var enabled = card.querySelector(".n-enabled").checked, email = card.querySelector(".n-user").value;
+          var time = card.querySelector(".n-time").value, weekday = parseInt(card.querySelector(".n-weekday").value, 10);
+          if (enabled && !email) { msg.textContent = "請選擇通知人員"; return; }
+          if (!time) { msg.textContent = "請輸入時間"; return; }
+          var btn = this; btn.disabled = true; msg.textContent = "儲存中…";
+          api("notify_set", { job: def.key, enabled: enabled, email: email, weekday: weekday, time: time }).then(function (r) {
+            if (!r.ok) throw new Error(r.error || "儲存失敗");
+            showToast("已儲存「" + def.title + "」通知設定");
+            draw(r);
+          }).catch(function (err) { msg.textContent = err.message; btn.disabled = false; });
+        });
+      });
+    }
+    api("notify_get").then(function (res) {
+      if (!res.ok) throw new Error(res.error || "讀取失敗");
+      draw(res);
+    }).catch(function (err) {
+      list.innerHTML = '<div class="empty-state">讀取通知設定失敗:' + esc(err.message) + '</div>';
+    });
   }
 
   // ---------- 待簽核表單 ----------

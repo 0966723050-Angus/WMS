@@ -1177,6 +1177,49 @@ function reportSignImage_(id, state, msg, n) {
 // SCHEDULES:{ <job>: { enabled, start: 'HH:MM', end: 'HH:MM', interval: 分鐘, skipSat, skipSun, updatedAt, by } }
 // 每天 start 起每 interval 分鐘執行一次,到 end 為止;skipSat / skipSun 為 true 時該天不執行。
 
+// ---------- 通知(ERP 設定頁「通知」,2026-11-27):管理者設定通知人員與時間,電腦端(apply_edits → notify_jobs.py)到時間檢查並發釘釘 ----------
+var NOTIFY_KEY = 'NOTIFY_CFG';            // { mfin: {enabled, email, weekday(0=週日…6=週六), time 'HH:MM', updatedAt, by} }
+var NOTIFY_STATUS_KEY = 'NOTIFY_STATUS';  // 電腦端回報的最近一次執行結果 { mfin: {ts, ok, n, msg} }
+var NOTIFY_JOBS = { mfin: '生產入庫' };
+function getNotifyCfg_() { return readJson_(NOTIFY_KEY) || {}; }
+// 帶給電腦端:附上通知人員目前的姓名(名單改名後通知也跟著改)
+function notifyForPull_() {
+  var cfg = getNotifyCfg_(), out = {};
+  Object.keys(cfg).forEach(function (k) {
+    var c = cfg[k] || {};
+    out[k] = { enabled: c.enabled === true, email: c.email || '', name: c.email ? displayName_(c.email) : '',
+               weekday: c.weekday, time: c.time || '', updatedAt: c.updatedAt || 0 };
+  });
+  return out;
+}
+function notifyAction_(body, user) {
+  var cfg = getNotifyCfg_();
+  var users = listUsers_().filter(function (u) { return u.enabled; })
+    .map(function (u) { return { email: u.email, name: u.name || u.email.split('@')[0] }; });
+  var view = function () { return { ok: true, notify: getNotifyCfg_(), status: readJson_(NOTIFY_STATUS_KEY) || {}, jobs: NOTIFY_JOBS, users: users }; };
+  if (body.action === 'notify_get') return view();
+  if (body.action !== 'notify_set') return { ok: false, error: '不支援的動作' };
+  var job = String(body.job || '');
+  if (!NOTIFY_JOBS.hasOwnProperty(job)) return { ok: false, error: '不支援的通知項目' };
+  var email = normEmail_(body.email || ''), weekday = parseInt(body.weekday, 10), time = String(body.time || '');
+  var enabled = body.enabled === true;
+  if (enabled && !users.some(function (u) { return normEmail_(u.email) === email; })) return { ok: false, error: '請從登錄名單選擇通知人員' };
+  if (!(weekday >= 0 && weekday <= 6)) return { ok: false, error: '星期不正確' };
+  if (!isHm_(time)) return { ok: false, error: '時間格式不正確' };
+  cfg[job] = { enabled: enabled, email: email, weekday: weekday, time: time, updatedAt: Date.now(), by: user.email };
+  props_().setProperty(NOTIFY_KEY, JSON.stringify(cfg));
+  return view();
+}
+// 電腦端回報執行結果(sync key)
+function notifyReport_(p) {
+  var job = String(p.job || '');
+  if (!NOTIFY_JOBS.hasOwnProperty(job)) return { ok: false, error: '不支援的通知項目' };
+  var st = readJson_(NOTIFY_STATUS_KEY) || {};
+  st[job] = { ts: Date.now(), ok: String(p.ok) === '1', n: parseInt(p.n, 10) || 0, msg: clip_(p.msg, 200) };
+  props_().setProperty(NOTIFY_STATUS_KEY, JSON.stringify(st));
+  return { ok: true };
+}
+
 var SCHEDULES_KEY = 'SCHEDULES';
 var SCHED_JOBS = { wms: 'WMS更新' };   // 可設定自動執行的執行鍵
 var SCHED_MIN_INTERVAL = 30;
@@ -1426,6 +1469,10 @@ function doPost(e) {
       if (!me.isAdmin) return json_({ ok: false, error: '只有管理者可以使用' });
       return json_(scheduleAction_(body, me));
     }
+    if (action === 'notify_get' || action === 'notify_set') {
+      if (!me.isAdmin) return json_({ ok: false, error: '只有管理者可以使用' });
+      return json_(notifyAction_(body, me));
+    }
     if (action === 'options_get') return json_({ ok: true, options: getOptions_() });
     if (action === 'options_change') {
       if (!me.perms.edit) return denied_('儲位編輯');
@@ -1450,7 +1497,7 @@ function doGet(e) {
   try {
     if (p.action === 'pull' || p.action === 'ack' || p.action === 'set_data_key' || p.action === 'set_cost_key' || p.action === 'get_keys' || p.action === 'rotate_keys' || p.action === 'wms_report' ||
         p.action === 'puri09_claim' || p.action === 'puri09_report' || p.action === 'ret_claim' || p.action === 'ret_report' ||
-        p.action === 'sign_claim' || p.action === 'sign_report' || p.action === 'sign_ack' || p.action === 'sign_notify_ack' || p.action === 'sign_done_ack' || p.action === 'signimg_get' || p.action === 'signimg_report' || p.action === 'erpq_claim') {
+        p.action === 'sign_claim' || p.action === 'sign_report' || p.action === 'sign_ack' || p.action === 'sign_notify_ack' || p.action === 'sign_done_ack' || p.action === 'notify_report' || p.action === 'signimg_get' || p.action === 'signimg_report' || p.action === 'erpq_claim') {
       var err = checkSyncKey_(p.key);
       if (err) return json_({ ok: false, error: err });
 
@@ -1463,6 +1510,7 @@ function doGet(e) {
       if (p.action === 'sign_ack') return json_(signAck_(p.ts, p.msg));
       if (p.action === 'sign_notify_ack') return json_(signNotifyAck_(p.ids));
       if (p.action === 'sign_done_ack') return json_(signDoneAck_(p.ids));
+      if (p.action === 'notify_report') return json_(notifyReport_(p));
       if (p.action === 'sign_report') {
         var sres = puriReport_(String(p.state || ''), p.msg, 'sign');
         if (sres.ok && (p.done || p.failed)) {   // 逐張結果(done=id 以逗號分隔;failed=id:原因;id:原因)
@@ -1480,7 +1528,7 @@ function doGet(e) {
         ok: true, edits: listPending_(), receipts: listReceipts_('receipt'), deletes: listDeletes_('receipt'),
         returns: listReceipts_('ret'), returnDeletes: listDeletes_('ret'), signImages: claimSignImages_(), signFilesPurged: purgeSignFiles_(), signRequest: readJson_(KINDS.sign.reqKey),
         signProgs: getSignProgs_(), signNotify: readJson_(SIGN_NOTIFY_KEY) || [], signDone: readJson_(SIGN_DONE_KEY) || [], signTotal: listSignForms_().length,
-        wms: readJson_(WMS_REQ_KEY), schedules: getSchedules_()
+        wms: readJson_(WMS_REQ_KEY), schedules: getSchedules_(), notify: notifyForPull_()
       });
 
       // 本機回報 WMS 更新狀態;回報 running 代表請求已被取走,一併清除排隊中的請求

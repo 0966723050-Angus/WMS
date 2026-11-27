@@ -480,6 +480,12 @@ def main():
         dingtalk_notify.process_done(endpoint, sync_key, cfg, res.get("signDone") or [], call, log)
     except Exception as ex:
         log("警告: 「已完成」釘釘通知處理失敗: %s" % ex)
+    # ERP 設定頁「通知」(例如每週一 14:00 生產入庫通知):到時段才檢查 ERP 並發釘釘(notify_jobs.py)
+    try:
+        import notify_jobs
+        notify_jobs.run(endpoint, sync_key, cfg, res.get("notify") or {}, call, log)
+    except Exception as ex:
+        log("警告: 通知處理失敗: %s" % ex)
     # 「收料」「退料」工作表內容有變動(例如使用者自己編輯/清除)就回報給網站,供「進貨單簽核」「退貨單簽核」清單使用;沒變動不重送
     try:
         import receipt_snapshot

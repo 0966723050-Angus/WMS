@@ -817,6 +817,14 @@ button.erp-tile:disabled:hover { border-color: var(--border); box-shadow: var(--
 
 /* ERP 自動執行設定 */
 .sched-desc { margin: 0 0 8px; font-size: 13px; color: var(--text-muted); line-height: 1.5; }
+/* ERP 設定頁「通知」 */
+.notify-h { margin: 28px 0 10px; }
+.notify-info { display: grid; grid-template-columns: 80px 1fr; gap: 6px 12px; margin: 14px 0 4px; font-size: 13.5px; }
+.notify-info dt { color: var(--text-muted); font-weight: 600; }
+.notify-info dd { margin: 0; min-width: 0; }
+.notify-sample { margin: 0; padding: 8px 10px; white-space: pre-wrap; font: inherit; font-size: 13px; background: var(--surface-alt); border: 1px solid var(--border); border-radius: 8px; }
+.notify-bad { color: var(--warn-text); font-weight: 700; }
+@media (max-width: 600px) { .notify-info { grid-template-columns: 1fr; gap: 2px; } .notify-info dd { margin-bottom: 6px; } }
 .sched-current {
   margin: 0 0 14px; padding: 9px 12px;
   font-size: 13.5px; font-weight: 700; line-height: 1.5;
